@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 
 // ---- Header ----
@@ -47,6 +48,8 @@ typedef struct CBackend {
                              unsigned char *output, size_t *output_capacity,
                              size_t *output_size);
 
+    int (*compress_stream)(FILE *src, FILE *dst, int level);
+    int (*decompress_stream)(FILE *src, FILE *dst, uint64_t orig_size);
 } CBackend;
 
 

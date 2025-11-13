@@ -72,6 +72,8 @@ static const CBackend bzip2_backend = {
     .max_compressed_size = bzip2_max_compressed_size,
     .compress_buffer = bzip2_compress_buffer,
     .decompress_buffer = bzip2_decompress_buffer,
+    .compress_stream = NULL,
+    .decompress_stream = NULL,
 };
 
 const CBackend *get_bzip2_backend(void) {

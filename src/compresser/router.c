@@ -195,7 +195,7 @@ int compress_file(const char *src_path, const char *dst_path,
 
     const CBackend *backend = NULL;
 
-    if (algo_name) {
+    if (algo_name && algo_name[0] != '\0') {
         backend = find_backend_by_name(algo_name);
         if (!backend) {
             PyErr_SetString(PyExc_ValueError, "Specified compression algorithm not available");
@@ -210,54 +210,108 @@ int compress_file(const char *src_path, const char *dst_path,
         }
     }
 
-    size_t input_size = 0;
-    unsigned char *input_buffer = read_file_to_memory(src_path, &input_size);
-    if (!input_buffer) {
-        return -1; // Error already set
-    }
-
-    size_t header_size = sizeof(CHeader);
-    size_t max_payload = backend->max_compressed_size(input_size);
-    size_t output_capacity = header_size + max_payload;
-
-    unsigned char *output_buffer = (unsigned char *)malloc(output_capacity);
-    if (!output_buffer) {
-        free(input_buffer);
-        PyErr_NoMemory();
+    FILE *src = fopen(src_path, "rb");
+    if (!src) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
         return -1;
     }
+
+    FILE *dst = fopen(dst_path, "wb");
+    if (!dst) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, dst_path);
+        fclose(src);
+        return -1;
+    }
+
+    if (fseek(src, 0, SEEK_END) != 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+        fclose(src);
+        fclose(dst);
+        return -1;
+    }
+    long len = ftell(src);
+    if (len < 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+        fclose(src);
+        fclose(dst);
+        return -1;
+    }
+    uint64_t orig_size = (uint64_t)len;
+    rewind(src);
     
-    CHeader *header = (CHeader *)output_buffer;
-    memcpy(header->magic, C_MAGIC, C_MAGIC_LEN);
-    header->version = 1;
-    header->algo = backend->id;
-    header->level = (uint8_t)((level >= 0 && level <= 254) ? level : 255);
-    header->flags = 0;
-    header->orig_size = (uint64_t)input_size;
+    CHeader header;
+    memcpy(header.magic, C_MAGIC, C_MAGIC_LEN);
+    header.version = 1;
+    header.algo = backend->id;
+    header.level = (uint8_t)((level >= 0 && level <= 254) ? level : 255);
+    header.flags = 0;
+    header.orig_size = orig_size;
 
-    unsigned char *payload = output_buffer + header_size;
-    size_t payload_size = 0;
-
-    if (backend->compress_buffer(input_buffer, input_size,
-                                 payload, &max_payload,
-                                 level, &payload_size) != 0) 
-    {
-        free(input_buffer);
-        free(output_buffer);
-        PyErr_SetString(PyExc_RuntimeError, "Compression failed in backend");
+    if (fwrite(&header, 1, sizeof(header), dst) != sizeof(header) || ferror(dst)) {
+        PyErr_SetString(PyExc_IOError, "Failed to write header to output file");
+        fclose(src);
+        fclose(dst);
         return -1;
     }
 
-    free(input_buffer);
+    int return_code = 0;
 
-    size_t total_size = header_size + payload_size;
-    if (write_memory_to_file(dst_path, output_buffer, total_size) != 0) {
+    if (backend->compress_stream) {
+        return_code = backend->compress_stream(src, dst, level);
+    } else {
+        size_t input_size = (size_t)orig_size;
+        unsigned char *input_buffer = (unsigned char *)malloc(input_size);
+        if (!input_buffer) {
+            PyErr_NoMemory();
+            return_code = -1;
+            goto done;
+        }
+
+        size_t read = fread(input_buffer, 1, input_size, src);
+        if (read != input_size || ferror(src)) {
+            free(input_buffer);
+            PyErr_SetString(PyExc_IOError, "Failed to read input file");
+            return_code = -1;
+            goto done;
+        }
+
+        size_t max_payload = backend->max_compressed_size(input_size);
+        unsigned char *output_buffer = (unsigned char *)malloc(max_payload);
+        if (!output_buffer) {
+            free(input_buffer);
+            PyErr_NoMemory();
+            return_code = -1;
+            goto done;
+        }
+
+        size_t output_size = 0;
+        if (backend->compress_buffer(input_buffer, input_size,
+                                     output_buffer, &max_payload,
+                                     level, &output_size) != 0)
+        {
+            free(input_buffer);
+            free(output_buffer);
+            PyErr_SetString(PyExc_RuntimeError, "Compression failed in backend");
+            return_code = -1;
+            goto done;
+        }
+
+        free(input_buffer);
+
+        if (fwrite(output_buffer, 1, output_size, dst) != output_size || ferror(dst)) {
+            free(output_buffer);
+            PyErr_SetString(PyExc_IOError, "Failed to write compressed data to output file");
+            return_code = -1;
+            goto done;
+        }
+
         free(output_buffer);
-        return -1; // Error already set
     }
 
-    free(output_buffer);
-    return 0; // Success
+done:
+    fclose(src);
+    fclose(dst);
+    return return_code;
 }
 
 int decompress_file(const char *src_path, const char *dst_path,
@@ -265,86 +319,148 @@ int decompress_file(const char *src_path, const char *dst_path,
 {
     init_backends();
 
-    size_t input_size = 0;
-    unsigned char *input_buffer = read_file_to_memory(src_path, &input_size);
-    if (!input_buffer) {
-        return -1; // Error already set
-    }
-
-    if (input_size < sizeof(CHeader)) {
-        free(input_buffer);
-        PyErr_SetString(PyExc_ValueError, "Input file too small to be valid");
+    FILE *src = fopen(src_path, "rb");
+    if (!src) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
         return -1;
     }
 
-    CHeader *header = (CHeader *)input_buffer;
-    if (memcmp(header->magic, C_MAGIC, C_MAGIC_LEN) != 0) {
-        free(input_buffer);
+    FILE *dst = fopen(dst_path, "wb");
+    if (!dst) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, dst_path);
+        fclose(src);
+        return -1;
+    }
+
+    CHeader header;
+    if (fread(&header, 1, sizeof(header), src) != sizeof(header)) {
+        PyErr_SetString(PyExc_IOError, "Failed to read header from input file");
+        fclose(src);
+        fclose(dst);
+        return -1;
+    }
+
+    if (memcmp(header.magic, C_MAGIC, C_MAGIC_LEN) != 0) {
         PyErr_SetString(PyExc_ValueError, "Invalid file magic number");
+        fclose(src);
+        fclose(dst);
         return -1;
     }
 
-    if (header->version != 1) {
-        free(input_buffer);
+    if (header.version != 1) {
         PyErr_SetString(PyExc_ValueError, "Unsupported file version");
+        fclose(src);
+        fclose(dst);
         return -1;
     }
 
     const CBackend *backend = NULL;
 
-    if (algo_name) {
+    if (algo_name && algo_name[0] != '\0') {
         backend = find_backend_by_name(algo_name);
         if (!backend) {
-            free(input_buffer);
-            PyErr_SetString(PyExc_ValueError, "Specified decompression algorithm not available or mismatched");
+            PyErr_SetString(PyExc_ValueError, "Specified compression algorithm not available");
+            fclose(src);
+            fclose(dst);
             return -1;
         }
     } else {
-        backend = find_backend_by_id(header->algo);
+        backend = find_backend_by_id(header.algo);
         if (!backend) {
-            free(input_buffer);
-            PyErr_SetString(PyExc_ValueError, "No available decompression backend found for file");
+            PyErr_SetString(PyExc_ValueError, "Compression algorithm from file not available");
+            fclose(src);
+            fclose(dst);
             return -1;
         }
     }
 
-    size_t orig_size = (size_t)header->orig_size;
+    uint64_t orig_size = header.orig_size;
     if (orig_size == 0) {
-        free(input_buffer);
         PyErr_SetString(PyExc_ValueError, "Invalid original size in header");
+        fclose(src);
+        fclose(dst);
         return -1;
     }
 
-    size_t header_size = sizeof(CHeader);
-    const unsigned char *payload = input_buffer + header_size;
-    size_t payload_size = input_size - header_size;
-    size_t output_capacity = (size_t)orig_size;
+    int return_code = 0;
 
-    unsigned char *output_buffer = (unsigned char *)malloc(output_capacity);
-    if (!output_buffer) {
-        free(input_buffer);
-        PyErr_NoMemory();
-        return -1;
-    }
+    if (backend->decompress_stream) {
+        return_code = backend->decompress_stream(src, dst, orig_size);
+    } else {
+        if (fseek(src, 0, SEEK_END) != 0) {
+            PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+            return_code = -1;
+            goto done;
+        }
+        long end_pos = ftell(src);
+        if (end_pos < 0) {
+            PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+            return_code = -1;
+            goto done;
+        }
+        long payload_start = (long)sizeof(CHeader);
+        long payload_len = end_pos - payload_start;
+        if (payload_len <= 0) {
+            PyErr_SetString(PyExc_ValueError, "No compressed data found in file");
+            return_code = -1;
+            goto done;
+        }
+        if (fseek(src, payload_start, SEEK_SET) != 0) {
+            PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+            return_code = -1;
+            goto done;
+        }
 
-    size_t output_size = 0;
-    if (backend->decompress_buffer(payload, payload_size,
-                                   output_buffer, &orig_size,
-                                   &output_size) != 0 || output_size != output_capacity)
-    {
+        size_t comp_size = (size_t)payload_len;
+        unsigned char *comp_buffer = (unsigned char *)malloc(comp_size);
+        if (!comp_buffer) {
+            PyErr_NoMemory();
+            return_code = -1;
+            goto done;
+        }
+        size_t read = fread(comp_buffer, 1, comp_size, src);
+        if (read != comp_size || ferror(src)) {
+            free(comp_buffer);
+            PyErr_SetString(PyExc_IOError, "Failed to read compressed data from input file");
+            return_code = -1;
+            goto done;
+        }
+
+        size_t output_capacity = (size_t)orig_size;
+        unsigned char *output_buffer = (unsigned char *)malloc(output_capacity);
+        if (!output_buffer) {
+            free(comp_buffer);
+            PyErr_NoMemory();
+            return_code = -1;
+            goto done;
+        }
+
+        size_t output_size = 0;
+        if (backend->decompress_buffer(comp_buffer, comp_size,
+                                       output_buffer, &output_capacity,
+                                       &output_size) != 0 || output_size != output_capacity)
+        {
+            free(comp_buffer);
+            free(output_buffer);
+            PyErr_SetString(PyExc_RuntimeError, "Decompression failed in backend");
+            return_code = -1;
+            goto done;
+        }
+
+        free(comp_buffer);
+
+        if (fwrite(output_buffer, 1, output_size, dst) != output_size || ferror(dst)) {
+            free(output_buffer);
+            PyErr_SetString(PyExc_IOError, "Failed to write decompressed data to output file");
+            return_code = -1;
+            goto done;
+        }
+
         free(output_buffer);
-        free(input_buffer);
-        PyErr_SetString(PyExc_RuntimeError, "Decompression failed in backend");
-        return -1;
     }
 
-    free(input_buffer);
-
-    if (write_memory_to_file(dst_path, output_buffer, output_size) != 0) {
-        free(output_buffer);
-        return -1; // Error already set
-    }
-
-    free(output_buffer);
-    return 0; // Success
+done:
+    fclose(src);
+    fclose(dst);
+    return return_code;
 }

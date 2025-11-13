@@ -83,6 +83,8 @@ static const CBackend lzma_backend = {
     .max_compressed_size = lzma_max_compressed_size,
     .compress_buffer = lzma_compress_buffer,
     .decompress_buffer = lzma_decompress_buffer,
+    .compress_stream = NULL,
+    .decompress_stream = NULL,
 };
 
 const CBackend *get_lzma_backend(void) {
