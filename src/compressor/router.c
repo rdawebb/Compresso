@@ -9,6 +9,12 @@
 const CBackend *get_zlib_backend(void);
 const CBackend *get_bzip2_backend(void);
 const CBackend *get_lzma_backend(void);
+const CBackend *get_zstd_backend(void);
+const CBackend *get_lz4_backend(void);
+const CBackend *get_snappy_backend(void);
+
+// Snappy helper
+size_t snappy_decompressed_size(const unsigned char *input, size_t input_size);
 
 
 // ---- Backend Registry ----
@@ -26,9 +32,15 @@ static size_t num_registered_backends = 0;
 static void
 register_backend(const CBackend *b) 
 {
-    if (!b) return;
-    if (!b->is_available || !b->compress_buffer || !b->decompress_buffer) return;
-    if (!b->is_available()) return;
+    if (!b) {
+        return;
+    }
+    if (!b->is_available || !b->compress_buffer || !b->decompress_buffer) {
+        return;
+    }
+    if (!b->is_available()) {
+        return;
+    }
     if (num_registered_backends < sizeof(registered_backends) / sizeof(registered_backends[0])) {
         registered_backends[num_registered_backends++] = b;
     }    
@@ -45,6 +57,9 @@ init_backends(void)
     register_backend(get_zlib_backend());
     register_backend(get_bzip2_backend());
     register_backend(get_lzma_backend());
+    register_backend(get_zstd_backend());
+    register_backend(get_lz4_backend());
+    register_backend(get_snappy_backend());
 }
 
 
@@ -85,34 +100,54 @@ static const CBackend *
 choose_backend(Strategy strat) 
 {
     init_backends();
-    
-    const CBackend *zlib = NULL;
-    const CBackend *bzip2 = NULL;
-    const CBackend *lzma = NULL;
+
+    const CBackend *zlib    = NULL;
+    const CBackend *bzip2   = NULL;
+    const CBackend *lzma    = NULL;
+    const CBackend *zstd    = NULL;
+    const CBackend *lz4     = NULL;
+    const CBackend *snappy  = NULL;
 
     for (size_t i = 0; i < num_registered_backends; i++) {
         const CBackend *b = registered_backends[i];
-        if (b->id == ALGO_ZLIB) zlib = b;
-        if (b->id == ALGO_BZIP2) bzip2 = b;
-        if (b->id == ALGO_LZMA) lzma = b;
+        switch (b->id) {
+            case ALGO_ZLIB:     zlib    = b; break;
+            case ALGO_BZIP2:    bzip2   = b; break;
+            case ALGO_LZMA:     lzma    = b; break;
+            case ALGO_ZSTD:     zstd    = b; break;
+            case ALGO_LZ4:      lz4     = b; break;
+            case ALGO_SNAPPY:   snappy  = b; break;
+            default: break;
+        }
     }
     
     switch (strat) {
         case STRAT_FAST:
-            if (zlib) return zlib;
-            if (lzma) return lzma;
-            if (bzip2) return bzip2;
+            // speed priority
+            if (lz4)    return lz4;
+            if (snappy) return snappy;
+            if (zstd)   return zstd;
+            if (zlib)   return zlib;
+            if (lzma)   return lzma;
+            if (bzip2)  return bzip2;
             break;
         case STRAT_MAX_RATIO:
-            if (lzma) return lzma;
-            if (bzip2) return bzip2;
-            if (zlib) return zlib;
+            // compression ratio priority
+            if (lzma)   return lzma;
+            if (zstd)   return zstd;
+            if (bzip2)  return bzip2;
+            if (zlib)   return zlib;
+            if (lz4)    return lz4;
+            if (snappy) return snappy;
             break;
         case STRAT_BALANCED:
         default:
-            if (zlib) return zlib;
-            if (lzma) return lzma;
-            if (bzip2) return bzip2;
+            if (zstd)   return zstd;
+            if (zlib)   return zlib;
+            if (lzma)   return lzma;
+            if (bzip2)  return bzip2;
+            if (lz4)    return lz4;
+            if (snappy) return snappy;
             break;
     }
 
@@ -373,7 +408,6 @@ int decompress_file(const char *src_path, const char *dst_path,
             return -1;
         }
     }
-
     uint64_t orig_size = header.orig_size;
     if (orig_size == 0) {
         PyErr_SetString(PyExc_ValueError, "Invalid original size in header");
@@ -426,7 +460,18 @@ int decompress_file(const char *src_path, const char *dst_path,
             goto done;
         }
 
-        size_t output_capacity = (size_t)orig_size;
+        size_t output_capacity;
+        if (backend->id == ALGO_SNAPPY) {
+            output_capacity = snappy_decompressed_size(comp_buffer, comp_size);
+            if (output_capacity == 0) {
+                free(comp_buffer);
+                PyErr_SetString(PyExc_RuntimeError, "Failed to determine decompressed size for Snappy");
+                return_code = -1;
+                goto done;
+            }
+        } else {
+            output_capacity = (size_t)orig_size;
+        }
         unsigned char *output_buffer = (unsigned char *)malloc(output_capacity);
         if (!output_buffer) {
             free(comp_buffer);
@@ -436,10 +481,10 @@ int decompress_file(const char *src_path, const char *dst_path,
         }
 
         size_t output_size = 0;
-        if (backend->decompress_buffer(comp_buffer, comp_size,
-                                       output_buffer, &output_capacity,
-                                       &output_size) != 0 || output_size != output_capacity)
-        {
+        int decomp_result = backend->decompress_buffer(comp_buffer, comp_size,
+                                                      output_buffer, &output_capacity,
+                                                      &output_size);
+        if (decomp_result != 0 || output_size != output_capacity) {
             free(comp_buffer);
             free(output_buffer);
             PyErr_SetString(PyExc_RuntimeError, "Decompression failed in backend");

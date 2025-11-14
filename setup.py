@@ -3,22 +3,22 @@
 from setuptools import setup, Extension, find_packages
 
 setup(
-    name="Compresso",
-    version="0.1.0",
-    author="Rob Webb",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     ext_modules=[
         Extension(
-            "compresser._core",
+            "compressor._core",
             sources=[
-                "src/compresser/_core.c",
-                "src/compresser/router.c",
-                "src/compresser/py_zlib.c",
-                "src/compresser/py_bzip2.c",
-                "src/compresser/py_lzma.c"
+                "src/compressor/_core.c",
+                "src/compressor/router.c",
+                "src/compressor/py_zlib.c",
+                "src/compressor/py_bzip2.c",
+                "src/compressor/py_lzma.c",
+                "src/compressor/py_zstd.c",
+                "src/compressor/py_lz4.c",
+                "src/compressor/py_snappy.c",
             ],
-            libraries=["z", "bz2", "lzma"]
+            libraries=["z", "bz2", "lzma", "zstd", "lz4", "snappy"],
         )
     ],
     python_requires=">=3.11",

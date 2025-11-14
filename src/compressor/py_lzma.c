@@ -20,6 +20,9 @@ lzma_level_to_preset(int level) {
     return (uint32_t)level | LZMA_PRESET_EXTREME;
 }
 
+
+// ---- Buffer Compression/Decompression ----
+
 static int
 lzma_compress_buffer(const unsigned char *input, size_t input_size,
                      unsigned char *output, size_t *output_capacity,
@@ -76,6 +79,9 @@ lzma_decompress_buffer(const unsigned char *input, size_t input_size,
     return 0; // success
 }
 
+
+// ---- Backend Definition ----
+
 static const CBackend lzma_backend = {
     .name = "lzma",
     .id = ALGO_LZMA,
@@ -83,7 +89,7 @@ static const CBackend lzma_backend = {
     .max_compressed_size = lzma_max_compressed_size,
     .compress_buffer = lzma_compress_buffer,
     .decompress_buffer = lzma_decompress_buffer,
-    .compress_stream = NULL,
+    .compress_stream = NULL, // stream functions not implemented
     .decompress_stream = NULL,
 };
 

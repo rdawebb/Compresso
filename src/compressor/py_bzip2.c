@@ -13,6 +13,9 @@ bzip2_max_compressed_size(size_t input_size) {
     return input_size + (input_size / 100) + 600; // per bzip2 documentation
 }
 
+
+// ---- Buffer Compression/Decompression ----
+
 static int
 bzip2_compress_buffer(const unsigned char *input, size_t input_size,
                       unsigned char *output, size_t *output_capacity,
@@ -23,7 +26,7 @@ bzip2_compress_buffer(const unsigned char *input, size_t input_size,
     else if (level > 9) blockSize100k = 9;
     else blockSize100k = level;
 
-    unsigned int dest_len = (unsigned int)output_capacity;
+    unsigned int dest_len = (unsigned int)(*output_capacity);
     int ret;
 
     Py_BEGIN_ALLOW_THREADS
@@ -47,7 +50,7 @@ bzip2_decompress_buffer(const unsigned char *input, size_t input_size,
                         unsigned char *output, size_t *output_capacity,
                         size_t *output_size)
 {
-    unsigned int dest_len = (unsigned int)output_capacity;
+    unsigned int dest_len = (unsigned int)(*output_capacity);
     int ret;
 
     Py_BEGIN_ALLOW_THREADS
@@ -65,6 +68,9 @@ bzip2_decompress_buffer(const unsigned char *input, size_t input_size,
     return 0; // success
 }
 
+
+// ---- Backend Definition ----
+
 static const CBackend bzip2_backend = {
     .name = "bzip2",
     .id = ALGO_BZIP2,
@@ -72,7 +78,7 @@ static const CBackend bzip2_backend = {
     .max_compressed_size = bzip2_max_compressed_size,
     .compress_buffer = bzip2_compress_buffer,
     .decompress_buffer = bzip2_decompress_buffer,
-    .compress_stream = NULL,
+    .compress_stream = NULL, // stream functions not implemented
     .decompress_stream = NULL,
 };
 

@@ -28,6 +28,9 @@ typedef enum {
     ALGO_ZLIB = 1,
     ALGO_BZIP2 = 2,
     ALGO_LZMA = 3,
+    ALGO_ZSTD = 4,
+    ALGO_LZ4 = 5,
+    ALGO_SNAPPY = 6,
 } AlgoID;
 
 
