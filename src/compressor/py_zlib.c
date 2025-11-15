@@ -59,7 +59,7 @@ zlib_decompress_buffer(const unsigned char *input, size_t input_size,
 }
 
 
-// ---- Streaming Compression/Decompression ----
+// ---- Stream Compression/Decompression ----
 
 static int
 zlib_compress_stream(FILE *src, FILE *dst, int level)

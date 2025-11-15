@@ -2,6 +2,14 @@
 #include <Python.h>
 #include "common.h"
 
+// Error Objects
+PyObject *comp_Error;
+PyObject *comp_HeaderError;
+PyObject *comp_BackendError;
+
+
+// ---- Module Methods ----
+
 static PyObject *
 py_compress_file(PyObject *self, PyObject *args, PyObject *kwargs)
 {
@@ -80,6 +88,9 @@ py_decompress_file(PyObject *self, PyObject *args, PyObject *kwargs)
     Py_RETURN_NONE;
 }
 
+
+// ---- Module Definition ----
+
 static PyMethodDef CoreMethods[] = {
     {"compress_file", (PyCFunction)py_compress_file, METH_VARARGS | METH_KEYWORDS,
      "Compress a file using the specified algorithm and strategy."},
@@ -96,8 +107,64 @@ static struct PyModuleDef coremodule = {
     CoreMethods
 };
 
+
+// ---- Module Initialisation ----
+
 PyMODINIT_FUNC
 PyInit__core(void)
 {
-    return PyModule_Create(&coremodule);
+    PyObject *module = PyModule_Create(&coremodule);
+    if (module == NULL) {
+        return NULL;
+    }
+
+    comp_Error = PyErr_NewException("compresso.Error", NULL, NULL);
+    if (!comp_Error) {
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    comp_HeaderError = PyErr_NewException("compresso.HeaderError", comp_Error, NULL);
+    if (!comp_HeaderError) {
+        Py_DECREF(comp_Error);
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    comp_BackendError = PyErr_NewException("compresso.BackendError", comp_Error, NULL);
+    if (!comp_BackendError) {
+        Py_DECREF(comp_HeaderError);
+        Py_DECREF(comp_Error);
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    Py_INCREF(comp_Error);
+    if (PyModule_AddObject(module, "Error", comp_Error) < 0) {
+        Py_DECREF(comp_Error);
+        Py_DECREF(comp_HeaderError);
+        Py_DECREF(comp_BackendError);
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    Py_INCREF(comp_HeaderError);
+    if (PyModule_AddObject(module, "HeaderError", comp_HeaderError) < 0) {
+        Py_DECREF(comp_Error);
+        Py_DECREF(comp_HeaderError);
+        Py_DECREF(comp_BackendError);
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    Py_INCREF(comp_BackendError);
+    if (PyModule_AddObject(module, "BackendError", comp_BackendError) < 0) {
+        Py_DECREF(comp_Error);
+        Py_DECREF(comp_HeaderError);
+        Py_DECREF(comp_BackendError);
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    return module;
 }

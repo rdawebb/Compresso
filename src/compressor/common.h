@@ -1,6 +1,8 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#define PY_SSIZE_T_CLEAN
+#include <Python.h> 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -63,6 +65,13 @@ typedef enum {
     STRAT_FAST = 1,
     STRAT_MAX_RATIO = 2,
 } Strategy;
+
+
+// Exception Objects
+extern PyObject *comp_Error;
+extern PyObject *comp_HeaderError;
+extern PyObject *comp_BackendError;
+
 
 // Helpers
 Strategy strategy_from_string(const char *str);

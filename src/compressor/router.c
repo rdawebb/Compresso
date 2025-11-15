@@ -16,6 +16,26 @@ const CBackend *get_snappy_backend(void);
 // Snappy helper
 size_t snappy_decompressed_size(const unsigned char *input, size_t input_size);
 
+// Error handling helper
+static void
+set_backend_error(const CBackend *backend, const char *operation, const char *detail)
+{
+    const char *name = backend && backend->name ? backend->name : "backend";
+    if (detail && detail[0] != '\0') {
+        PyErr_Format(
+            comp_BackendError,
+            "%s %s failed: %s",
+            name, operation, detail
+        );
+    } else {
+        PyErr_Format(
+            comp_BackendError,
+            "%s %s failed",
+            name, operation
+        );
+    }
+}
+
 
 // ---- Backend Registry ----
 
@@ -240,7 +260,7 @@ int compress_file(const char *src_path, const char *dst_path,
         Strategy strat = strategy_from_string(strategy_name);
         backend = choose_backend(strat);
         if (!backend) {
-            PyErr_SetString(PyExc_RuntimeError, "No available compression backend found");
+            PyErr_SetString(comp_Error, "No available compression backend found");
             return -1;
         }
     }
@@ -283,7 +303,7 @@ int compress_file(const char *src_path, const char *dst_path,
     header.orig_size = orig_size;
 
     if (fwrite(&header, 1, sizeof(header), dst) != sizeof(header) || ferror(dst)) {
-        PyErr_SetString(PyExc_IOError, "Failed to write header to output file");
+        PyErr_SetString(comp_HeaderError, "Failed to write header to output file");
         fclose(src);
         fclose(dst);
         return -1;
@@ -293,6 +313,9 @@ int compress_file(const char *src_path, const char *dst_path,
 
     if (backend->compress_stream) {
         return_code = backend->compress_stream(src, dst, level);
+        if (return_code != 0) {
+            set_backend_error(backend, "compression", "streaming compression");
+        }
     } else {
         size_t input_size = (size_t)orig_size;
         unsigned char *input_buffer = (unsigned char *)malloc(input_size);
@@ -326,7 +349,7 @@ int compress_file(const char *src_path, const char *dst_path,
         {
             free(input_buffer);
             free(output_buffer);
-            PyErr_SetString(PyExc_RuntimeError, "Compression failed in backend");
+            set_backend_error(backend, "compression", "buffer compression");
             return_code = -1;
             goto done;
         }
@@ -369,21 +392,21 @@ int decompress_file(const char *src_path, const char *dst_path,
 
     CHeader header;
     if (fread(&header, 1, sizeof(header), src) != sizeof(header)) {
-        PyErr_SetString(PyExc_IOError, "Failed to read header from input file");
+        PyErr_SetString(comp_HeaderError, "Failed to read header from input file");
         fclose(src);
         fclose(dst);
         return -1;
     }
 
     if (memcmp(header.magic, C_MAGIC, C_MAGIC_LEN) != 0) {
-        PyErr_SetString(PyExc_ValueError, "Invalid file magic number");
+        PyErr_SetString(comp_HeaderError, "Invalid file magic number");
         fclose(src);
         fclose(dst);
         return -1;
     }
 
     if (header.version != 1) {
-        PyErr_SetString(PyExc_ValueError, "Unsupported file version");
+        PyErr_SetString(comp_HeaderError, "Unsupported file version");
         fclose(src);
         fclose(dst);
         return -1;
@@ -402,7 +425,7 @@ int decompress_file(const char *src_path, const char *dst_path,
     } else {
         backend = find_backend_by_id(header.algo);
         if (!backend) {
-            PyErr_SetString(PyExc_ValueError, "Compression algorithm from file not available");
+            PyErr_SetString(comp_HeaderError, "Compression algorithm from file not available");
             fclose(src);
             fclose(dst);
             return -1;
@@ -420,6 +443,9 @@ int decompress_file(const char *src_path, const char *dst_path,
 
     if (backend->decompress_stream) {
         return_code = backend->decompress_stream(src, dst, orig_size);
+        if (return_code != 0) {
+            set_backend_error(backend, "decompression", "streaming decompression");
+        }
     } else {
         if (fseek(src, 0, SEEK_END) != 0) {
             PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
@@ -481,13 +507,12 @@ int decompress_file(const char *src_path, const char *dst_path,
         }
 
         size_t output_size = 0;
-        int decomp_result = backend->decompress_buffer(comp_buffer, comp_size,
-                                                      output_buffer, &output_capacity,
-                                                      &output_size);
-        if (decomp_result != 0 || output_size != output_capacity) {
+        if (backend->decompress_buffer(comp_buffer, comp_size,
+                                        output_buffer, &output_capacity,
+                                        &output_size) != 0 || output_size != output_capacity) {
             free(comp_buffer);
             free(output_buffer);
-            PyErr_SetString(PyExc_RuntimeError, "Decompression failed in backend");
+            set_backend_error(backend, "decompression", "buffer decompression");
             return_code = -1;
             goto done;
         }
