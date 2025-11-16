@@ -11,7 +11,7 @@ from typing import Iterable, List, Optional
 
 from tabulate import tabulate
 
-from compressor import compress_file, decompress_file
+from compresso import compress_file, decompress_file
 
 
 @dataclass

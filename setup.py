@@ -1,4 +1,4 @@
-
+"""Setup script for the Compresso package."""
 
 from setuptools import setup, Extension, find_packages
 
@@ -7,16 +7,16 @@ setup(
     package_dir={"": "src"},
     ext_modules=[
         Extension(
-            "compressor._core",
+            "compresso._core",
             sources=[
-                "src/compressor/_core.c",
-                "src/compressor/router.c",
-                "src/compressor/py_zlib.c",
-                "src/compressor/py_bzip2.c",
-                "src/compressor/py_lzma.c",
-                "src/compressor/py_zstd.c",
-                "src/compressor/py_lz4.c",
-                "src/compressor/py_snappy.c",
+                "src/compresso/csrc/_core.c",
+                "src/compresso/csrc/router.c",
+                "src/compresso/csrc/py_zlib.c",
+                "src/compresso/csrc/py_bzip2.c",
+                "src/compresso/csrc/py_lzma.c",
+                "src/compresso/csrc/py_zstd.c",
+                "src/compresso/csrc/py_lz4.c",
+                "src/compresso/csrc/py_snappy.c",
             ],
             libraries=["z", "bz2", "lzma", "zstd", "lz4", "snappy"],
         )

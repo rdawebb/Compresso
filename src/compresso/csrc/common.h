@@ -79,6 +79,8 @@ Strategy strategy_from_string(const char *str);
 const CBackend *find_backend_by_name(const char *name);
 const CBackend *find_backend_by_id(uint8_t id);
 
+PyObject *get_capabilities(void);
+
 
 // Public API
 int compress_file(const char *src_path, const char *dst_path,

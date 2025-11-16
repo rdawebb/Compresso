@@ -88,6 +88,12 @@ py_decompress_file(PyObject *self, PyObject *args, PyObject *kwargs)
     Py_RETURN_NONE;
 }
 
+static PyObject *
+py_get_capabilities(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    return get_capabilities();
+}
+
 
 // ---- Module Definition ----
 
@@ -96,6 +102,8 @@ static PyMethodDef CoreMethods[] = {
      "Compress a file using the specified algorithm and strategy."},
     {"decompress_file", (PyCFunction)py_decompress_file, METH_VARARGS | METH_KEYWORDS,
      "Decompress a file using the specified algorithm."},
+    {"get_capabilities", (PyCFunction)py_get_capabilities, METH_NOARGS,
+     "Get the capabilities of available compression backends."},
     {NULL, NULL, 0, NULL}  // Sentinel
 };
 
