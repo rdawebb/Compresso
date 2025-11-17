@@ -3,10 +3,17 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "Compresso"
+name = "compresso"
 version = "0.1.0"
-authors = [ { name = "Rob Webb" } ]
+description = "A Python compression library supporting multiple algorithms"
+authors = [{ name = "Rob Webb" }]
 requires-python = ">=3.11"
+dependencies = [
+    "tabulate>=0.9.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[project.scripts]
+compresso-bench = "compresso.cli:main"

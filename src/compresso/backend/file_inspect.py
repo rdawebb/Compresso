@@ -8,25 +8,18 @@ from pathlib import Path
 from typing import Optional
 
 from .capabilities import get_by_id
+from .speeds import get_estimated_speeds
 
 
-COMP_HEADER_STRUCT = struct.Struct("<4sBBBQ") # magic, version, algo, level, flags, original_size
-
-# Estimated decompress speeds (placeholder)
-_EST_MB_S = {
-    "zlib": 200.0,
-    "bzip2": 50.0,
-    "lzma": 30.0,
-    "zstd": 400.0,
-    "lz4": 800.0,
-    "snappy": 600.0,
-}
+COMP_HEADER_STRUCT = struct.Struct(
+    "<4sBBBQ"
+)  # magic, version, algo, level, flags, original_size
 
 
 @dataclass
 class InspectResult:
     """Holds the result of inspecting a compressed file
-    
+
     Attributes:
         path (Path): The path to the compressed file.
         is_compresso (bool): Whether the file is a valid Compresso file.
@@ -43,6 +36,7 @@ class InspectResult:
         can_decompress (bool): Whether the file can be decompressed with the available backends.
         estimated_decomp_s (Optional[float]): Estimated decompression time in seconds.
     """
+
     path: Path
 
     # File recognition
@@ -54,7 +48,7 @@ class InspectResult:
     version: Optional[int]
     algo_id: Optional[int]
     algo_name: Optional[str]
-    level: Optional[int]      # None is 'auto' or 'unspecified'
+    level: Optional[int]  # None is 'auto' or 'unspecified'
     flags: Optional[int]
     orig_size: Optional[int]  # Original uncompressed bytes
 
@@ -65,6 +59,7 @@ class InspectResult:
     # UI helpers
     can_decompress: bool
     estimated_decomp_s: Optional[float]  # in seconds
+
 
 def inspect(path: str | Path) -> InspectResult:
     """Inspect a compressed file and extract metadata
@@ -93,7 +88,7 @@ def inspect(path: str | Path) -> InspectResult:
             can_decompress=False,
             estimated_decomp_s=None,
         )
-    
+
     try:
         with path.open("rb") as f:
             data = f.read(COMP_HEADER_STRUCT.size)
@@ -114,7 +109,7 @@ def inspect(path: str | Path) -> InspectResult:
             can_decompress=False,
             estimated_decomp_s=None,
         )
-    
+
     if len(data) < COMP_HEADER_STRUCT.size:
         return InspectResult(
             path=path,
@@ -132,10 +127,10 @@ def inspect(path: str | Path) -> InspectResult:
             can_decompress=False,
             estimated_decomp_s=None,
         )
-    
+
     magic, version, algo_id, level, flags, orig_size = COMP_HEADER_STRUCT.unpack(data)
 
-    if magic != b'COMP':
+    if magic != b"COMP":
         return InspectResult(
             path=path,
             is_compresso=False,
@@ -152,7 +147,7 @@ def inspect(path: str | Path) -> InspectResult:
             can_decompress=False,
             estimated_decomp_s=None,
         )
-    
+
     if version != 1:
         return InspectResult(
             path=path,
@@ -170,7 +165,7 @@ def inspect(path: str | Path) -> InspectResult:
             can_decompress=False,
             estimated_decomp_s=None,
         )
-    
+
     cap = get_by_id(algo_id)
     backend_available = cap is not None and cap.is_available()
     algo_name = cap.name if cap else None
@@ -184,7 +179,7 @@ def inspect(path: str | Path) -> InspectResult:
     est_time = None
     if can_decompress and orig_size > 0:
         if algo_name is not None:
-            mb_s = _EST_MB_S.get(algo_name, 200.0)
+            mb_s = get_estimated_speeds(algo_name, operation="decompress")
         else:
             mb_s = 200.0
         est_time = orig_size / (mb_s * 1024 * 1024)

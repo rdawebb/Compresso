@@ -11,7 +11,19 @@ from typing import Iterable, List, Optional
 
 from tabulate import tabulate
 
-from compresso import compress_file, decompress_file
+from .._core import compress_file as _c_compress_file, decompress_file as _c_decompress_file
+from .speeds import update_from_benchmarks
+
+# C extension wrappers for compression and decompression
+def compress_file(src_path, dest_path, *, algo=None, strategy="balanced", level=None):
+    """Compress a file using the specified algorithm and strategy."""
+    lvl = -1 if level is None else int(level)
+    return _c_compress_file(src_path, dest_path, algo or "", strategy or "", lvl)
+
+
+def decompress_file(src_path, dest_path, *, algo=None):
+    """Decompress a file using the specified algorithm."""
+    return _c_decompress_file(src_path, dest_path, algo or "")
 
 
 @dataclass
@@ -41,12 +53,12 @@ class BenchmarkResult:
         return self.compressed_size / self.input_size if self.input_size else 0.0
     
     @property
-    def speed_mb_s(self) -> float:
+    def comp_mb_s(self) -> float:
         """Compression speed in MB/s"""
         return (self.input_size / (1024 * 1024)) / self.compress_time if self.compress_time else 0.0
     
     @property
-    def decompress_speed_mb_s(self) -> float:
+    def decomp_mb_s(self) -> float:
         """Decompression speed in MB/s"""
         return (self.input_size / (1024 * 1024)) / self.decompress_time if self.decompress_time else 0.0
 
@@ -69,6 +81,7 @@ def benchmark_file(
     levels: Iterable[int | None] | None = None,
     repeats: int = 1,
     temp_dir: str | Path | None = None,
+    update_cache: bool = False,
 ) -> List[BenchmarkResult]:
     """Benchmark compression and decompression on a single file
     
@@ -163,6 +176,9 @@ def benchmark_file(
                     )
                 )
 
+    if update_cache:
+        update_from_benchmarks(results)
+
     return results
 
 def print_results(results: List[BenchmarkResult]) -> None:
@@ -194,35 +210,10 @@ def print_results(results: List[BenchmarkResult]) -> None:
             r.level if r.level is not None else "auto",
             f"{r.compress_time:.4f}",
             f"{r.decompress_time:.4f}",
-            f"{r.speed_mb_s:.2f}",
-            f"{r.decompress_speed_mb_s:.2f}",
+            f"{r.comp_mb_s:.2f}",
+            f"{r.decomp_mb_s:.2f}",
             f"{r.ratio:.3f}",
         ]
         table_data.append(row)
 
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
-
-
-## Run benchmark if executed as a script
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Run Compresso benchmarks on a file.")
-    parser.add_argument("src", type=str, help="Path to the source file to benchmark")
-    parser.add_argument("--repeats", type=int, default=1, help="Number of times to repeat each benchmark")
-    parser.add_argument("--temp-dir", type=str, default=None, help="Directory for temporary files")
-    parser.add_argument("--algo", type=str, action="append", help="Compression algorithm to use (can specify multiple)")
-    parser.add_argument("--strategy", type=str, action="append", help="Compression strategy to use (can specify multiple)")
-    parser.add_argument("--level", type=int, action="append", help="Compression level to use (can specify multiple)")
-    args = parser.parse_args()
-
-    results = benchmark_file(
-        args.src,
-        algos=args.algo if args.algo else None,
-        strategies=args.strategy if args.strategy else None,
-        levels=args.level if args.level else None,
-        repeats=args.repeats,
-        temp_dir=args.temp_dir,
-    )
-
-    print_results(results)

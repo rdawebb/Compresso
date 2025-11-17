@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #define LZ4_CHUNK 65536 // 64KB
+#define LZ4_OUT_CHUNK (LZ4_CHUNK + LZ4_CHUNK / 255 + 16) // worst-case output size for LZ4 frame
 #include <Python.h>
 #include <lz4frame.h>
 #include "common.h"
@@ -39,11 +40,12 @@ lz4_compress_buffer(const unsigned char *input, size_t input_size,
 
     size_t ret;
     Py_BEGIN_ALLOW_THREADS
-    ret = LZ4_compress_default((const char *)input, (char *)output,
-                               (int)input_size, (int)(*output_capacity));
+    ret = LZ4F_compressFrame(output, *output_capacity,
+                             input, input_size,
+                             &prefs);
     Py_END_ALLOW_THREADS
 
-    if (ret <= 0) {
+    if (LZ4F_isError(ret)) {
         return -1; // compression failed
     }
 
@@ -111,6 +113,7 @@ lz4_decompress_buffer(const unsigned char *input, size_t input_size,
 
 // ---- Stream Compression/Decompression ----
 
+static int
 lz4_compress_stream(FILE *src, FILE *dst, int level)
 {
     LZ4F_compressionContext_t cctx;
@@ -124,13 +127,13 @@ lz4_compress_stream(FILE *src, FILE *dst, int level)
     prefs.compressionLevel = LZ4_level_from_generic(level);
 
     unsigned char input[LZ4_CHUNK];
-    unsigned char output[LZ4_CHUNK];
+    unsigned char output[LZ4_OUT_CHUNK];
 
     int return_code = 0;
 
     Py_BEGIN_ALLOW_THREADS
 
-    size_t header_size = LZ4F_compressBegin(cctx, output, LZ4_CHUNK, &prefs);
+    size_t header_size = LZ4F_compressBegin(cctx, output, LZ4_OUT_CHUNK, &prefs);
     if (LZ4F_isError(header_size)) {
         return_code = -1; // compression error
         goto done_stream;
@@ -148,7 +151,7 @@ lz4_compress_stream(FILE *src, FILE *dst, int level)
         }
 
         if (nread == 0) {
-            size_t end_size = LZ4F_compressEnd(cctx, output, LZ4_CHUNK, NULL);
+            size_t end_size = LZ4F_compressEnd(cctx, output, LZ4_OUT_CHUNK, NULL);
             if (LZ4F_isError(end_size)) {
                 return_code = -1; // compression error
                 break;
@@ -162,7 +165,7 @@ lz4_compress_stream(FILE *src, FILE *dst, int level)
         }
 
         size_t src_size = nread;
-        size_t dst_size = LZ4_CHUNK;
+        size_t dst_size = LZ4_OUT_CHUNK;
 
         size_t bytes = LZ4F_compressUpdate(cctx,
                                       output, dst_size,
@@ -200,7 +203,7 @@ lz4_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size)
     }
 
     unsigned char input[LZ4_CHUNK];
-    unsigned char output[LZ4_CHUNK];
+    unsigned char output[LZ4_OUT_CHUNK];
 
     int return_code = 0;
 
@@ -224,7 +227,7 @@ lz4_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size)
         }
 
         size_t src_size = input_size - input_pos;
-        size_t dst_size = LZ4_CHUNK;
+        size_t dst_size = LZ4_OUT_CHUNK;
 
         ret = LZ4F_decompress(dctx,
                               output, &dst_size,

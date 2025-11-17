@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 
-from compressor import _core
+from compresso import _core
 
 
 @dataclass(frozen=True)
