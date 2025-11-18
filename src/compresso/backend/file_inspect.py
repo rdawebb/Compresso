@@ -10,7 +10,6 @@ from typing import Optional
 from .capabilities import get_by_id
 from .speeds import get_estimated_speeds
 
-
 COMP_HEADER_STRUCT = struct.Struct(
     "<4sBBBQ"
 )  # magic, version, algo, level, flags, original_size

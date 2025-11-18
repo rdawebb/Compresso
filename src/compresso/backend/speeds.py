@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable
 
-
 _DEFAULT_COMP_MB_S = {
     "zlib": 200.0,
     "bzip2": 50.0,

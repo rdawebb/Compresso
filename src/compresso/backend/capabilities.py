@@ -18,15 +18,18 @@ class BackendCapabilities:
         has_buffer (bool): Whether the backend has a buffer.
         has_stream (bool): Whether the backend supports streaming compression/decompression.
     """
+
     name: str
     id: int
     has_buffer: bool
     has_stream: bool
 
+
 ## Cached capabilities
 _cap_list: List[BackendCapabilities] | None = None
 _cap_by_name: Dict[str, BackendCapabilities] | None = None
 _cap_by_id: Dict[int, BackendCapabilities] | None = None
+
 
 def _load_capabilities() -> None:
     """Load capabilities from the compressor module"""
@@ -59,6 +62,7 @@ def _load_capabilities() -> None:
     _cap_by_name = by_name
     _cap_by_id = by_id
 
+
 def list_capabilities() -> List[BackendCapabilities]:
     """List capabilities of all compiled compression backends
 
@@ -68,6 +72,7 @@ def list_capabilities() -> List[BackendCapabilities]:
     if _cap_list is None:
         _load_capabilities()
     return _cap_list  # type: ignore[return-value]
+
 
 def get_by_name(name: str) -> BackendCapabilities | None:
     """Get capability information by algorithm name
@@ -82,6 +87,7 @@ def get_by_name(name: str) -> BackendCapabilities | None:
         _load_capabilities()
     return _cap_by_name.get(name)  # type: ignore[attr-defined]
 
+
 def get_by_id(cid: int) -> BackendCapabilities | None:
     """Get capability information by algorithm ID
 
@@ -94,4 +100,3 @@ def get_by_id(cid: int) -> BackendCapabilities | None:
     if _cap_by_id is None:
         _load_capabilities()
     return _cap_by_id.get(cid)  # type: ignore[attr-defined]
-    

@@ -11,25 +11,26 @@ from typing import Iterable, List, Optional
 
 from tabulate import tabulate
 
-from .._core import compress_file as _c_compress_file, decompress_file as _c_decompress_file
+from .._core import compress_file, decompress_file
 from .speeds import update_from_benchmarks
 
+
 # C extension wrappers for compression and decompression
-def compress_file(src_path, dest_path, *, algo=None, strategy="balanced", level=None):
+def compress(src_path, dest_path, *, algo=None, strategy="balanced", level=None):
     """Compress a file using the specified algorithm and strategy."""
     lvl = -1 if level is None else int(level)
-    return _c_compress_file(src_path, dest_path, algo or "", strategy or "", lvl)
+    return compress_file(src_path, dest_path, algo or "", strategy or "", lvl)
 
 
-def decompress_file(src_path, dest_path, *, algo=None):
+def decompress(src_path, dest_path, *, algo=None):
     """Decompress a file using the specified algorithm."""
-    return _c_decompress_file(src_path, dest_path, algo or "")
+    return decompress_file(src_path, dest_path, algo or "")
 
 
 @dataclass
 class BenchmarkResult:
     """Holds the result of a single benchmark run
-    
+
     Attributes:
         algo: Compression algorithm used
         strategy: Compression strategy used
@@ -39,6 +40,7 @@ class BenchmarkResult:
         input_size: Size of the input file (in bytes)
         compressed_size: Size of the compressed file (in bytes)
     """
+
     algo: str
     strategy: str
     level: Optional[int]
@@ -51,16 +53,25 @@ class BenchmarkResult:
     def ratio(self) -> float:
         """Compression ratio - smaller is better"""
         return self.compressed_size / self.input_size if self.input_size else 0.0
-    
+
     @property
     def comp_mb_s(self) -> float:
         """Compression speed in MB/s"""
-        return (self.input_size / (1024 * 1024)) / self.compress_time if self.compress_time else 0.0
-    
+        return (
+            (self.input_size / (1024 * 1024)) / self.compress_time
+            if self.compress_time
+            else 0.0
+        )
+
     @property
     def decomp_mb_s(self) -> float:
         """Decompression speed in MB/s"""
-        return (self.input_size / (1024 * 1024)) / self.decompress_time if self.decompress_time else 0.0
+        return (
+            (self.input_size / (1024 * 1024)) / self.decompress_time
+            if self.decompress_time
+            else 0.0
+        )
+
 
 def _safe_unlink(path: Path) -> None:
     """Remove a file if it exists
@@ -72,7 +83,8 @@ def _safe_unlink(path: Path) -> None:
         path.unlink()
     except FileNotFoundError:
         pass
-    
+
+
 def benchmark_file(
     src: str | Path,
     *,
@@ -84,7 +96,7 @@ def benchmark_file(
     update_cache: bool = False,
 ) -> List[BenchmarkResult]:
     """Benchmark compression and decompression on a single file
-    
+
     Args:
         src: Path to the source file to benchmark
         algos: List of algorithms to benchmark. If None, all available algorithms are used.
@@ -92,7 +104,7 @@ def benchmark_file(
         levels: List of compression levels to benchmark. If None, default levels are used.
         repeats: Number of times to repeat each benchmark for averaging
         temp_dir: Directory to use for temporary files. If None, system temp directory is used.
-        
+
     Returns:
         List of BenchmarkResult objects with the results
     """
@@ -104,10 +116,10 @@ def benchmark_file(
         temp_dir = Path(os.getenv("TMPDIR", "/tmp"))
 
     if algos is None:
-        algos = ['zlib', 'bzip2', 'lzma', 'zstd', 'lz4', 'snappy']
+        algos = ["zlib", "bzip2", "lzma", "zstd", "lz4", "snappy"]
 
     if strategies is None:
-        strategies = ['fast', 'balanced', 'max_ratio']
+        strategies = ["fast", "balanced", "max_ratio"]
 
     if levels is None:
         levels = [None, 1, 3, 6, 9]
@@ -125,14 +137,20 @@ def benchmark_file(
                 compressed_size: Optional[int] = None
 
                 for _ in range(repeats):
-                    with tempfile.NamedTemporaryFile(suffix=".comp", dir=temp_base, delete=False) as comp_file, \
-                        tempfile.NamedTemporaryFile(suffix=".decomp", dir=temp_base, delete=False) as decomp_file:
+                    with (
+                        tempfile.NamedTemporaryFile(
+                            suffix=".comp", dir=temp_base, delete=False
+                        ) as comp_file,
+                        tempfile.NamedTemporaryFile(
+                            suffix=".decomp", dir=temp_base, delete=False
+                        ) as decomp_file,
+                    ):
                         comp_path = Path(comp_file.name)
                         decomp_path = Path(decomp_file.name)
 
                         # Compression
                         start_time = time.perf_counter()
-                        compress_file(
+                        compress(
                             str(src),
                             str(comp_path),
                             algo=algo,
@@ -146,17 +164,24 @@ def benchmark_file(
                         else:
                             sz = comp_path.stat().st_size
                             if sz != compressed_size:
-                                print(f"Warning: Compressed size changed between runs: {compressed_size} vs {sz}")
+                                print(
+                                    f"Warning: Compressed size changed between runs: {compressed_size} vs {sz}"
+                                )
                                 compressed_size = sz
 
                         # Decompression
                         start_time = time.perf_counter()
-                        decompress_file(str(comp_path), str(decomp_path))
+                        decompress(str(comp_path), str(decomp_path))
                         decomp_times.append(time.perf_counter() - start_time)
 
                         # Verify
-                        if not decomp_path.is_file() or decomp_path.stat().st_size != input_size:
-                            print(f"Warning: Decompressed file size mismatch for {decomp_path}")
+                        if (
+                            not decomp_path.is_file()
+                            or decomp_path.stat().st_size != input_size
+                        ):
+                            print(
+                                f"Warning: Decompressed file size mismatch for {decomp_path}"
+                            )
 
                         _safe_unlink(comp_path)
                         _safe_unlink(decomp_path)
@@ -181,9 +206,10 @@ def benchmark_file(
 
     return results
 
+
 def print_results(results: List[BenchmarkResult]) -> None:
     """Print benchmark results in a tabular format
-    
+
     Args:
         results: List of BenchmarkResult objects to print
     """

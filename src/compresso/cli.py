@@ -47,7 +47,7 @@ def parse_levels(s: str | None) -> list[int | None]:
 
 def main(argv: list[str] | None = None):
     """Entry point for the compresso-benchmark CLI tool.
-    
+
     Args:
         argv: List of command-line arguments (default: sys.argv)
     """
@@ -100,7 +100,9 @@ def main(argv: list[str] | None = None):
         else ["zlib", "bzip2", "lzma", "zstd", "lz4", "snappy"]
     )
     strategies = (
-        parse_csv(args.strategies) if args.strategies else ["fast", "balanced", "max_ratio"]
+        parse_csv(args.strategies)
+        if args.strategies
+        else ["fast", "balanced", "max_ratio"]
     )
     levels = parse_levels(args.level) if args.level else [None, 1, 3, 6, 9]
 
