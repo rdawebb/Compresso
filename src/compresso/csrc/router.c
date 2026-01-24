@@ -39,13 +39,7 @@ set_backend_error(const CBackend *backend, const char *operation, const char *de
 
 // ---- Backend Registry ----
 
-static const CBackend *backends[] = {
-    & (CBackend){0}, // Placeholder for index 0
-};
-
-static const CBackend *backend_list[] = {
-};
-
+static const CBackend *backend_by_id[7] = {NULL};
 static const CBackend *registered_backends[8];
 static size_t num_registered_backends = 0;
 
@@ -63,6 +57,10 @@ register_backend(const CBackend *b)
     }
     if (num_registered_backends < sizeof(registered_backends) / sizeof(registered_backends[0])) {
         registered_backends[num_registered_backends++] = b;
+
+        if (b->id < 7) {
+            backend_by_id[b->id] = b;
+        }
     }    
 }
 
@@ -108,10 +106,8 @@ const CBackend *find_backend_by_name(const char *name)
 const CBackend *find_backend_by_id(uint8_t id) 
 {
     init_backends();
-    for (size_t i = 0; i < num_registered_backends; i++) {
-        if (registered_backends[i]->id == id) {
-            return registered_backends[i];
-        }
+    if (id < 7) {
+        return backend_by_id[id];
     }
     return NULL;
 }
@@ -186,19 +182,61 @@ read_file_to_memory(const char *path, size_t *out_size)
         return NULL;
     }
 
-    if (fseek(f, 0, SEEK_END) != 0) {
+#if defined(_WIN32) || defined(_WIN64)
+
+    if (_fseeki64(f, 0, SEEK_END) != 0) {
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
         fclose(f);
         return NULL;
     }
 
-    long len = ftell(f);
+    __int64 len = _ftelli64(f);
     if (len < 0) {
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
         fclose(f);
         return NULL;
     }
-    rewind(f);
+
+    if (len > (size_t)-1) {
+        PyErr_SetString(PyExc_MemoryError, "File is too large to fit in memory");
+        fclose(f);
+        return NULL;
+    }
+
+    if (_fseeki64(f, 0, SEEK_SET) != 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+        fclose(f);
+        return NULL;
+    }
+
+#else
+
+    if (fseeko(f, 0, SEEK_SET) != 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+        fclose(f);
+        return NULL;
+    }
+
+    off_t len = ftello(f);
+    if (len < 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+        fclose(f);
+        return NULL;
+    }
+
+    if ((uintmax_t)len > SIZE_MAX) {
+        PyErr_SetString(PyExc_MemoryError, "File is too large to fit in memory");
+        fclose(f);
+        return NULL;
+    }
+
+    if (fseeko(f, 0, SEEK_SET) != 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+        fclose(f);
+        return NULL;
+    }
+
+#endif
 
     unsigned char *buffer = (unsigned char *)malloc((size_t)len);
     if (!buffer) {
@@ -208,6 +246,8 @@ read_file_to_memory(const char *path, size_t *out_size)
     }
 
     size_t read = fread(buffer, 1, (size_t)len, f);
+    fclose(f);
+
     if (read != (size_t)len) {
         free(buffer);
         PyErr_SetString(PyExc_IOError, "Failed to read entire file");
@@ -278,29 +318,63 @@ int compress_file(const char *src_path, const char *dst_path,
         return -1;
     }
 
-    if (fseek(src, 0, SEEK_END) != 0) {
+#if defined(_WIN32) || defined(_WIN64)
+
+    if (_fseeki64(src, 0, SEEK_END) != 0) {
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
         fclose(src);
         fclose(dst);
         return -1;
     }
-    long len = ftell(src);
+
+    __int64 len = _ftelli64(src);
     if (len < 0) {
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
         fclose(src);
         fclose(dst);
         return -1;
     }
-    uint64_t orig_size = (uint64_t)len;
-    rewind(src);
-    
+
+    if (_fseeki64(src, 0, SEEK_SET) != 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+        fclose(src);
+        fclose(dst);
+        return -1;
+    }
+
+#else
+
+    if (fseeko(src, 0, SEEK_END) != 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+        fclose(src);
+        fclose(dst);
+        return -1;
+    }
+
+    off_t len = ftello(src);
+    if (len < 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+        fclose(src);
+        fclose(dst);
+        return -1;
+    }
+
+    if (fseeko(src, 0, SEEK_SET) != 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+        fclose(src);
+        fclose(dst);
+        return -1;
+    }
+
+#endif
+
     CHeader header;
     memcpy(header.magic, C_MAGIC, C_MAGIC_LEN);
     header.version = 1;
     header.algo = backend->id;
     header.level = (uint8_t)((level >= 0 && level <= 254) ? level : 255);
     header.flags = 0;
-    header.orig_size = orig_size;
+    header.orig_size = (uint64_t)len;
 
     if (fwrite(&header, 1, sizeof(header), dst) != sizeof(header) || ferror(dst)) {
         PyErr_SetString(comp_HeaderError, "Failed to write header to output file");
@@ -317,7 +391,7 @@ int compress_file(const char *src_path, const char *dst_path,
             set_backend_error(backend, "compression", "streaming compression");
         }
     } else {
-        size_t input_size = (size_t)orig_size;
+        size_t input_size = (size_t)len;
         unsigned char *input_buffer = (unsigned char *)malloc(input_size);
         if (!input_buffer) {
             PyErr_NoMemory();
@@ -447,29 +521,66 @@ int decompress_file(const char *src_path, const char *dst_path,
             set_backend_error(backend, "decompression", "streaming decompression");
         }
     } else {
-        if (fseek(src, 0, SEEK_END) != 0) {
+        
+#if defined(_WIN32) || defined(_WIN64)
+
+        if (_fseeki64(src, 0, SEEK_END) != 0) {
             PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
             return_code = -1;
             goto done;
         }
-        long end_pos = ftell(src);
+
+        __int64 end_pos = _ftelli64(src);
         if (end_pos < 0) {
             PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
             return_code = -1;
             goto done;
         }
-        long payload_start = (long)sizeof(CHeader);
-        long payload_len = end_pos - payload_start;
+
+        __int64 payload_start = (__int64)sizeof(CHeader);
+        __int64 payload_len = end_pos - payload_start;
         if (payload_len <= 0) {
             PyErr_SetString(PyExc_ValueError, "No compressed data found in file");
             return_code = -1;
             goto done;
         }
-        if (fseek(src, payload_start, SEEK_SET) != 0) {
+
+        if (_fseeki64(src, payload_start, SEEK_SET) != 0) {
             PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
             return_code = -1;
             goto done;
         }
+
+#else
+
+        if (fseeko(src, 0, SEEK_END) != 0) {
+            PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+            return_code = -1;
+            goto done;
+        }
+
+        off_t end_pos = ftello(src);
+        if (end_pos < 0) {
+            PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+            return_code = -1;
+            goto done;
+        }
+
+        off_t payload_start = (off_t)sizeof(CHeader);
+        off_t payload_len = end_pos - payload_start;
+        if (payload_len <= 0) {
+            PyErr_SetString(PyExc_ValueError, "No compressed data found in file");
+            return_code = -1;
+            goto done;
+        }
+
+        if (fseeko(src, payload_start, SEEK_SET) != 0) {
+            PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+            return_code = -1;
+            goto done;
+        }
+
+#endif
 
         size_t comp_size = (size_t)payload_len;
         unsigned char *comp_buffer = (unsigned char *)malloc(comp_size);

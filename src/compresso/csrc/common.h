@@ -22,6 +22,11 @@ typedef struct {
     uint64_t orig_size;
 } CHeader;
 
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(CHeader) == 16, 
+"CHeader must be exactly 16 bytes with no padding");
+#endif
+
 
 // ---- Algorithms ----
 

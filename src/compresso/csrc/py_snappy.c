@@ -121,6 +121,11 @@ snappy_compress_stream(FILE *src, FILE *dst, int level)
             break; // end of file
         }
 
+        if (nread > UINT32_MAX) {
+            return_code = -1; // chunk size overflow
+            break;
+        }
+
         size_t comp_len = max_comp_len;
         snappy_status status = snappy_compress(input_buffer, nread,
                                                comp_buffer, &comp_len);

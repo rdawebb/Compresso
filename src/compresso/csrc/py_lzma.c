@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #define LZMA_CHUNK 65536 // 64KB
+#define LZMA_DECOMPRESS_MEMLIMIT (512ULL * 1024 * 1024) // 512MB
 #include <Python.h>
 #include <lzma.h>
 #include "common.h"
@@ -11,7 +12,12 @@ lzma_is_available(void) {
 
 static size_t
 lzma_max_compressed_size(size_t input_size) {
-    return input_size + input_size / 3 + 128 * 1024; // safe upper bound
+    const size_t overhead = 128 * 1024;
+    if (input_size > SIZE_MAX / 4 * 3 - overhead) {
+        return SIZE_MAX;
+    }
+
+    return input_size + input_size / 3 + overhead; // safe upper bound
 }
 
 static uint32_t
@@ -57,7 +63,7 @@ lzma_decompress_buffer(const unsigned char *input, size_t input_size,
                        size_t *output_size)
 {
     lzma_ret ret;
-    uint64_t memlimit = UINT64_MAX;
+    uint64_t memlimit = LZMA_DECOMPRESS_MEMLIMIT;
     uint32_t flags = 0;
     size_t input_pos = 0;
     size_t output_pos = 0;
@@ -73,6 +79,15 @@ lzma_decompress_buffer(const unsigned char *input, size_t input_size,
     Py_END_ALLOW_THREADS
 
     if (ret != LZMA_OK) {
+        if (ret == LZMA_MEMLIMIT_ERROR) {
+            PyErr_Format(comp_BackendError, "LZMA decompression exceeded memory limit: %llu", (unsigned long long)LZMA_DECOMPRESS_MEMLIMIT);
+        } else if (ret == LZMA_FORMAT_ERROR) {
+            PyErr_SetString(comp_BackendError, "LZMA format error: invalid compressed data");
+        } else if (ret == LZMA_DATA_ERROR) {
+            PyErr_SetString(comp_BackendError, "LZMA data error: corrupted compressed data");
+        } else {
+            PyErr_SetString(comp_BackendError, "LZMA decompression failed");
+        }
         return -1; // decompression failed
     }
 
@@ -155,7 +170,7 @@ lzma_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size)
 
     lzma_stream strm = LZMA_STREAM_INIT;
 
-    uint64_t memlimit = UINT64_MAX;
+    uint64_t memlimit = LZMA_DECOMPRESS_MEMLIMIT;
     uint32_t flags = 0;
     lzma_ret ret = lzma_stream_decoder(&strm, memlimit, flags);
     if (ret != LZMA_OK) {
@@ -203,6 +218,9 @@ lzma_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size)
         }
 
         if (ret != LZMA_OK) {
+            if (ret == LZMA_MEMLIMIT_ERROR) {
+                PyErr_Format(comp_BackendError, "LZMA decompression exceeded memory limit: %llu", (unsigned long long)LZMA_DECOMPRESS_MEMLIMIT);
+            }
             return_code = -1; // decompression error
             break;
         }
