@@ -1,11 +1,11 @@
-"""Module for querying compression backend capabilities."""
+"""Module for querying compression backend capabilities"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, List
 
-from compresso import _core
+from src.compresso import _core
 
 
 @dataclass(frozen=True)

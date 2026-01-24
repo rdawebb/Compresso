@@ -1,19 +1,27 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "compresso"
 version = "0.1.0"
-description = "A Python compression library supporting multiple algorithms"
+description = "A fast C-based Python compression tool supporting multiple algorithms"
 authors = [{ name = "Rob Webb" }]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
-    "tabulate>=0.9.0",
+    "tabulate>=0.9.0,<1.0.0",
 ]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[project.optional-dependencies]
+dev = [
+    "prek>=0.3.0,<1.0.0",
+    "pytest>=9.0.0,<10.0.0",
+    "pytest-cov>=7.0.0,<8.0.0",
+    "ruff>=0.14.14,<15.0.0",
+    "rust-just>=1.46.0,<2.0.0",
+    "setuptools>=80.0.0,<81.0.0",
+    "ty>=0.0.13,<0.1.0"
+]
 
 [project.scripts]
-compresso-bench = "compresso.cli:main"
+compresso-bench = "src.compresso.cli:main"

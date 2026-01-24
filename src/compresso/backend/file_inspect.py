@@ -1,4 +1,4 @@
-"""Module for inspecting Compresso compressed files and extracting metadata."""
+"""Module for inspecting Compresso compressed files and extracting metadata"""
 
 from __future__ import annotations
 
@@ -168,7 +168,7 @@ def inspect(path: str | Path) -> InspectResult:
     cap = get_by_id(algo_id)
     backend_available = cap is not None and cap.is_available()
     algo_name = cap.name if cap else None
-    has_streaming = cap.has_streaming if cap else False
+    has_streaming = cap.has_stream if cap else False
 
     can_decompress = backend_available
     reason = None

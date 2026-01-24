@@ -11,7 +11,7 @@ from typing import Iterable, List, Optional
 
 from tabulate import tabulate
 
-from .._core import compress_file, decompress_file
+from .._core import compress_file, decompress_file  # type: ignore
 from .speeds import update_from_benchmarks
 
 

@@ -1,3 +1,5 @@
+"""Compression and decompression speed estimates for various algorithms"""
+
 from __future__ import annotations
 
 import json

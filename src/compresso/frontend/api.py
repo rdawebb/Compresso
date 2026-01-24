@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-import compresso as comp
+import src.compresso as comp
 
 from ..backend.capabilities import list_capabilities
 from ..backend.file_inspect import InspectResult
