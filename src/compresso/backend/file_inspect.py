@@ -5,7 +5,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from .capabilities import get_by_id
 from .speeds import get_estimated_speeds
@@ -20,20 +20,20 @@ class InspectResult:
     """Holds the result of inspecting a compressed file
 
     Attributes:
-        path (Path): The path to the compressed file.
-        is_compresso (bool): Whether the file is a valid Compresso file.
-        header_ok (bool): Whether the file header is valid.
-        reason (Optional[str]): Reason for invalidity if applicable.
-        version (Optional[int]): Compresso version.
-        algo_id (Optional[int]): Algorithm ID.
-        algo_name (Optional[str]): Algorithm name.
-        level (Optional[int]): Compression level (None if auto/unspecified).
-        flags (Optional[int]): Compression flags.
-        orig_size (Optional[int]): Original uncompressed size in bytes.
-        backend_available (bool): Whether the backend for the algorithm is available.
-        has_streaming (bool): Whether the algorithm supports streaming.
-        can_decompress (bool): Whether the file can be decompressed with the available backends.
-        estimated_decomp_s (Optional[float]): Estimated decompression time in seconds.
+        path: The path to the compressed file.
+        is_compresso: Whether the file is a valid Compresso file.
+        header_ok: Whether the file header is valid.
+        reason: Reason for invalidity if applicable.
+        version: Compresso version.
+        algo_id: Algorithm ID.
+        algo_name: Algorithm name.
+        level: Compression level (None if auto/unspecified).
+        flags: Compression flags.
+        orig_size: Original uncompressed size in bytes.
+        backend_available: Whether the backend for the algorithm is available.
+        has_streaming: Whether the algorithm supports streaming.
+        can_decompress: Whether the file can be decompressed with the available backends.
+        estimated_decomp_s: Estimated decompression time in seconds.
     """
 
     path: Path
@@ -66,9 +66,9 @@ def _failed_inspection(
     """Helper function to create a failed inspection result.
 
     Args:
-        path (Path): The path to the file.
-        reason (str): The reason for the failure.
-        is_compresso (bool): Whether the file is a Compresso file.
+        path: The path to the file.
+        reason: The reason for the failure.
+        is_compresso: Whether the file is a Compresso file.
 
     Returns:
         InspectResult: The failed inspection result.
@@ -91,11 +91,11 @@ def _failed_inspection(
     )
 
 
-def inspect(path: str | Path) -> InspectResult:
+def inspect(path: Union[str, Path]) -> InspectResult:
     """Inspect a compressed file and extract metadata
 
     Args:
-        path (str | Path): The path to the compressed file.
+        path: The path to the compressed file.
 
     Returns:
         InspectResult: The result of the inspection.

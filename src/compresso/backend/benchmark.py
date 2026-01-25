@@ -7,7 +7,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Union
 
 from tabulate import tabulate
 
@@ -86,13 +86,13 @@ def _safe_unlink(path: Path) -> None:
 
 
 def benchmark_file(
-    src: str | Path,
+    src: Union[str, Path],
     *,
-    algos: Iterable[str] | None = None,
-    strategies: Iterable[str] | None = None,
-    levels: Iterable[int | None] | None = None,
+    algos: Union[Iterable[str], None] = None,
+    strategies: Union[Iterable[str], None] = None,
+    levels: Union[Iterable[Optional[int]], None] = None,
     repeats: int = 1,
-    temp_dir: str | Path | None = None,
+    temp_dir: Union[str, Path, None] = None,
     update_cache: bool = False,
 ) -> List[BenchmarkResult]:
     """Benchmark compression and decompression on a single file

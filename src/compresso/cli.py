@@ -9,7 +9,7 @@ from pathlib import Path
 import click
 from typer_extensions import ExtendedTyper
 
-from compresso import (
+from ._core import (
     BackendError,
     Error,
     HeaderError,

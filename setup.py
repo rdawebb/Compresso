@@ -21,5 +21,5 @@ setup(
             libraries=["z", "bz2", "lzma", "zstd", "lz4", "snappy"],
         )
     ],
-    python_requires=">=3.11",
+    python_requires=">=3.9",
 )

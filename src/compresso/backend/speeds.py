@@ -34,10 +34,10 @@ class AlgoSpeeds:
     """Dataclass representing compression and decompression speeds for an algorithm.
 
     Attributes:
-        algo (str): The name of the compression algorithm.
-        comp_mb_s (float): Compression speed in megabytes per second.
-        decomp_mb_s (float): Decompression speed in megabytes per second.
-        samples (int): Number of samples used to calculate the speeds.
+        algo: The name of the compression algorithm.
+        comp_mb_s: Compression speed in megabytes per second.
+        decomp_mb_s: Decompression speed in megabytes per second.
+        samples: Number of samples used to calculate the speeds.
     """
 
     algo: str
@@ -50,7 +50,7 @@ def _load_raw() -> Dict[str, AlgoSpeeds]:
     """Load raw speed data from the speeds file.
 
     Returns:
-        Dict[str, AlgoSpeeds]: A dictionary mapping algorithm names to their speed data.
+        A dictionary mapping algorithm names to their speed data.
     """
     if not _SPEEDS_FILE.is_file():
         return {}
@@ -79,7 +79,7 @@ def _save_raw(entries: Dict[str, AlgoSpeeds]) -> None:
     """Save raw speed data to the speeds file.
 
     Args:
-        entries (Dict[str, AlgoSpeeds]): A dictionary mapping algorithm names to their speed data.
+        entries: A dictionary mapping algorithm names to their speed data.
     """
     if not _CONFIG_DIR.exists():
         _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -100,7 +100,7 @@ def update_from_benchmarks(results: Iterable[object]) -> None:
     """Update speed estimates based on benchmark results.
 
     Args:
-        results (Iterable[object]): An iterable of benchmark result objects. Each object should have 'algo', 'comp_mb_s', and 'decomp_mb_s' attributes.
+        results: An iterable of benchmark result objects. Each object should have 'algo', 'comp_mb_s', and 'decomp_mb_s' attributes.
     """
     existing = _load_raw()
 
@@ -160,11 +160,11 @@ def get_estimated_speeds(algo: str, *, operation: str = "decompress") -> float:
     """Get estimated speed for a given algorithm and operation.
 
     Args:
-        algo (str): The name of the compression algorithm.
-        operation (str): The operation type, either "compress" or "decompress". Defaults to "decompress".
+        algo: The name of the compression algorithm.
+        operation: The operation type, either "compress" or "decompress". Defaults to "decompress".
 
     Returns:
-        float: The estimated speed in MB/s for the specified algorithm and operation.
+        The estimated speed in MB/s for the specified algorithm and operation.
     """
     algo = algo.lower()
     db = _load_raw()
