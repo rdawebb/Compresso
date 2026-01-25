@@ -11,7 +11,7 @@ from .capabilities import get_by_id
 from .speeds import get_estimated_speeds
 
 COMP_HEADER_STRUCT = struct.Struct(
-    "<4sBBBQ"
+    "<4sBBBBQ"
 )  # magic, version, algo, level, flags, original_size
 
 
@@ -60,6 +60,35 @@ class InspectResult:
     estimated_decomp_s: Optional[float]  # in seconds
 
 
+def _failed_inspection(path: Path, reason: str, is_compresso: bool = False) -> InspectResult:
+    """Helper function to create a failed inspection result.
+
+    Args:
+        path (Path): The path to the file.
+        reason (str): The reason for the failure.
+        is_compresso (bool): Whether the file is a Compresso file.
+
+    Returns:
+        InspectResult: The failed inspection result.
+    """
+    return InspectResult(
+        path=path,
+        is_compresso=is_compresso,
+        header_ok=False,
+        reason=reason,
+        version=None,
+        algo_id=None,
+        algo_name=None,
+        level=None,
+        flags=None,
+        orig_size=None,
+        backend_available=False,
+        has_streaming=False,
+        can_decompress=False,
+        estimated_decomp_s=None,
+    )
+
+
 def inspect(path: str | Path) -> InspectResult:
     """Inspect a compressed file and extract metadata
 
@@ -71,99 +100,24 @@ def inspect(path: str | Path) -> InspectResult:
     """
     path = Path(path)
     if not path.is_file():
-        return InspectResult(
-            path=path,
-            is_compresso=False,
-            header_ok=False,
-            reason="Not a file",
-            version=None,
-            algo_id=None,
-            algo_name=None,
-            level=None,
-            flags=None,
-            orig_size=None,
-            backend_available=False,
-            has_streaming=False,
-            can_decompress=False,
-            estimated_decomp_s=None,
-        )
+        return _failed_inspection(path, "Not a file")
 
     try:
         with path.open("rb") as f:
             data = f.read(COMP_HEADER_STRUCT.size)
     except OSError as e:
-        return InspectResult(
-            path=path,
-            is_compresso=False,
-            header_ok=False,
-            reason=f"Failed to read file: {e}",
-            version=None,
-            algo_id=None,
-            algo_name=None,
-            level=None,
-            flags=None,
-            orig_size=None,
-            backend_available=False,
-            has_streaming=False,
-            can_decompress=False,
-            estimated_decomp_s=None,
-        )
+        return _failed_inspection(path, f"Failed to read file: {e}")
 
     if len(data) < COMP_HEADER_STRUCT.size:
-        return InspectResult(
-            path=path,
-            is_compresso=False,
-            header_ok=False,
-            reason="File too small to be a valid Compresso file",
-            version=None,
-            algo_id=None,
-            algo_name=None,
-            level=None,
-            flags=None,
-            orig_size=None,
-            backend_available=False,
-            has_streaming=False,
-            can_decompress=False,
-            estimated_decomp_s=None,
-        )
+        return _failed_inspection(path, "File too small to be a valid Compresso file")
 
     magic, version, algo_id, level, flags, orig_size = COMP_HEADER_STRUCT.unpack(data)
 
     if magic != b"COMP":
-        return InspectResult(
-            path=path,
-            is_compresso=False,
-            header_ok=False,
-            reason="Magic bytes do not match Compresso format",
-            version=None,
-            algo_id=None,
-            algo_name=None,
-            level=None,
-            flags=None,
-            orig_size=None,
-            backend_available=False,
-            has_streaming=False,
-            can_decompress=False,
-            estimated_decomp_s=None,
-        )
+        return _failed_inspection(path, "Invalid magic number", is_compresso=False)
 
     if version != 1:
-        return InspectResult(
-            path=path,
-            is_compresso=True,
-            header_ok=False,
-            reason=f"Unsupported header version: {version}",
-            version=version,
-            algo_id=None,
-            algo_name=None,
-            level=None,
-            flags=None,
-            orig_size=None,
-            backend_available=False,
-            has_streaming=False,
-            can_decompress=False,
-            estimated_decomp_s=None,
-        )
+        return _failed_inspection(path, f"Unsupported header version: {version}")
 
     cap = get_by_id(algo_id)
     backend_available = cap is not None and cap.is_available()

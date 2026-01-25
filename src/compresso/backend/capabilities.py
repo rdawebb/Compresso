@@ -24,6 +24,14 @@ class BackendCapabilities:
     has_buffer: bool
     has_stream: bool
 
+    def is_available(self) -> bool:
+        """Check if the backend is available for use
+
+        Returns:
+            bool: Always True if the backend is compiled and listed.
+        """
+        return True
+
 
 ## Cached capabilities
 _cap_list: List[BackendCapabilities] | None = None

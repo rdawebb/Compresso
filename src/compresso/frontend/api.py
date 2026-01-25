@@ -259,12 +259,14 @@ class CompressionJob:
             if progress:
                 progress(0.0, 0, total)
 
+            lvl = -1 if self.plan.options.level is None else int(self.plan.options.level)
+
             comp.compress_file(
-                self.plan.src,
-                self.plan.dest,
-                algo=self.plan.options.algo,
-                strategy=self.plan.options.strategy,
-                level=self.plan.options.level,
+                str(self.plan.src),
+                str(self.plan.dest),
+                self.plan.backend_name or "",
+                self.plan.options.strategy or "",
+                lvl,
             )
 
             if progress:
@@ -334,8 +336,9 @@ class DecompressionJob:
                 progress(0.0, 0, total)
 
             comp.decompress_file(
-                self.plan.src,
-                self.plan.dest,
+                str(self.plan.src),
+                str(self.plan.dest),
+                insp.algo_name or "",
             )
 
             if progress:
