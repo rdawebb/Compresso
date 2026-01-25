@@ -97,12 +97,11 @@ snappy_compress_stream(FILE *src, FILE *dst, int level)
 
     size_t max_comp_len = snappy_max_compressed_length(SNAPPY_CHUNK);
 
-    char *input_buffer = (char *)malloc(SNAPPY_CHUNK);
-    char *comp_buffer = (char *)malloc(max_comp_len);
+    char *input_buffer = (char *)safe_malloc(SNAPPY_CHUNK);
+    char *comp_buffer = (char *)safe_malloc(max_comp_len);
     if (!input_buffer || !comp_buffer) {
         free(input_buffer);
         free(comp_buffer);
-        PyErr_NoMemory();
         return -1; // memory allocation failure
     }
 
@@ -134,7 +133,7 @@ snappy_compress_stream(FILE *src, FILE *dst, int level)
             break;
         }
 
-        if (nread > UINT32_MAX || comp_len > UINT32_MAX) {
+        if (comp_len > UINT32_MAX) {
             return_code = -1; // size overflow
             break;
         }
@@ -168,12 +167,11 @@ snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size)
 
     size_t max_comp_len = snappy_max_compressed_length(SNAPPY_CHUNK);
 
-    char *comp_buffer = (char *)malloc(max_comp_len);
-    char *output_buffer = (char *)malloc(SNAPPY_CHUNK);
+    char *comp_buffer = (char *)safe_malloc(max_comp_len);
+    char *output_buffer = (char *)safe_malloc(SNAPPY_CHUNK);
     if (!comp_buffer || !output_buffer) {
         free(comp_buffer);
         free(output_buffer);
-        PyErr_NoMemory();
         return -1; // memory allocation failure
     }
 

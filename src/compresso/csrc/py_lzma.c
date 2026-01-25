@@ -13,11 +13,13 @@ lzma_is_available(void) {
 static size_t
 lzma_max_compressed_size(size_t input_size) {
     const size_t overhead = 128 * 1024;
-    if (input_size > SIZE_MAX / 4 * 3 - overhead) {
+    size_t tmp, result;
+    tmp = input_size / 3;
+    
+    if (__builtin_add_overflow(input_size, tmp, &result) || __builtin_add_overflow(result, overhead, &result)) {
         return SIZE_MAX;
     }
-
-    return input_size + input_size / 3 + overhead; // safe upper bound
+    return result;
 }
 
 static uint32_t

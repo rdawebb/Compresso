@@ -72,13 +72,15 @@ typedef enum {
 } Strategy;
 
 
-// Exception Objects
+// ---- Exception Objects ----
+
 extern PyObject *comp_Error;
 extern PyObject *comp_HeaderError;
 extern PyObject *comp_BackendError;
 
 
-// Helpers
+// ---- Helpers ----
+
 Strategy strategy_from_string(const char *str);
 
 const CBackend *find_backend_by_name(const char *name);
@@ -86,8 +88,43 @@ const CBackend *find_backend_by_id(uint8_t id);
 
 PyObject *get_capabilities(void);
 
+#define MAX_FILE_SIZE (10ULL * 1024 * 1024 * 1024) // 10 GB
+#define MAX_DECOMPRESSED_SIZE (10ULL * 1024 * 1024 * 1024) // 10 GB
+#define MAX_COMPRESSED_SIZE (12ULL * 1024 * 1024 * 1024) // 12 GB
 
-// Public API
+static inline int validate_size(uint64_t size, uint64_t max_size, const char *name) {
+    if (size == 0) {
+        PyErr_Format(PyExc_ValueError, "%s is zero", name);
+        return -1;
+    }
+    if (size > max_size) {
+        PyErr_Format(PyExc_ValueError, "%s (%llu bytes) exceeds maximum size (%llu bytes)",
+                     name, (unsigned long long)size, (unsigned long long)max_size);
+        return -1;
+    }
+    return 0;
+}
+
+static inline void* safe_malloc(size_t size) {
+    if (size == 0) {
+        PyErr_SetString(PyExc_ValueError, "Cannot allocate zero bytes");
+        return NULL;
+    }
+    if (size > SIZE_MAX / 2) {
+        PyErr_Format(PyExc_MemoryError, "Allocation size (%zu bytes) is too large", size);
+        return NULL;
+    }
+
+    void *ptr = malloc(size);
+    if (!ptr) {
+        PyErr_NoMemory();
+    }
+    return ptr;
+}
+
+
+// ---- Public API ----
+
 int compress_file(const char *src_path, const char *dst_path,
                   const char *algo_name, const char *strategy_name,
                   int level);
