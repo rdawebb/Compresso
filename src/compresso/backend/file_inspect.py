@@ -60,7 +60,9 @@ class InspectResult:
     estimated_decomp_s: Optional[float]  # in seconds
 
 
-def _failed_inspection(path: Path, reason: str, is_compresso: bool = False) -> InspectResult:
+def _failed_inspection(
+    path: Path, reason: str, is_compresso: bool = False
+) -> InspectResult:
     """Helper function to create a failed inspection result.
 
     Args:

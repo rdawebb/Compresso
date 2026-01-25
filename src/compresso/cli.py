@@ -9,15 +9,15 @@ from pathlib import Path
 import click
 from typer_extensions import ExtendedTyper
 
-from src.compresso import (
+from compresso import (
     BackendError,
     Error,
     HeaderError,
 )
-from src.compresso.backend.benchmark import benchmark_file, print_results
-from src.compresso.backend.capabilities import list_capabilities
-from src.compresso.backend.file_inspect import inspect as inspect_file
-from src.compresso.frontend.api import (
+from compresso.backend.benchmark import benchmark_file, print_results
+from compresso.backend.capabilities import list_capabilities
+from compresso.backend.file_inspect import inspect as inspect_file
+from compresso.frontend.api import (
     CompressionJob,
     CompressionOptions,
     DecompressionJob,
@@ -28,10 +28,10 @@ app = ExtendedTyper(help="Compresso - Fast file compression and decompression to
 
 def format_size(size_bytes: int) -> str:
     """Format byte size in human-readable format.
-    
+
     Args:
         size_bytes: Size in bytes
-        
+
     Returns:
         Formatted string (e.g., "1.5 MB")
     """
@@ -44,15 +44,15 @@ def format_size(size_bytes: int) -> str:
 
 def format_time(seconds: float) -> str:
     """Format time duration in human-readable format.
-    
+
     Args:
         seconds: Time in seconds
-        
+
     Returns:
         Formatted string (e.g., "1.5s", "2m 30s")
     """
     if seconds < 1:
-        return f"{seconds*1000:.0f}ms"
+        return f"{seconds * 1000:.0f}ms"
     elif seconds < 60:
         return f"{seconds:.2f}s"
     else:
@@ -64,10 +64,26 @@ def format_time(seconds: float) -> str:
 @app.command_with_aliases(aliases=["c", "comp"])
 def compress(
     file: Path = app.Argument(..., help="File to compress"),
-    output: Path | None = app.Option(None, "--output", "-o", help="Output file path (default: input.comp)"),
-    algo: str | None = app.Option("auto", "--algo", "-a", case_sensitive=False, help="Compression algorithm to use"),
-    strategy: str = app.Option("balanced", "--strategy", "-s", case_sensitive=False, help="Compression strategy to use (fast/balanced/max_ratio)"),
-    level: int | None = app.Option(None, "--level", "-l", min=0, max=9, help="Compression level (0-9)"),
+    output: Path | None = app.Option(
+        None, "--output", "-o", help="Output file path (default: input.comp)"
+    ),
+    algo: str | None = app.Option(
+        "auto",
+        "--algo",
+        "-a",
+        case_sensitive=False,
+        help="Compression algorithm to use",
+    ),
+    strategy: str = app.Option(
+        "balanced",
+        "--strategy",
+        "-s",
+        case_sensitive=False,
+        help="Compression strategy to use (fast/balanced/max_ratio)",
+    ),
+    level: int | None = app.Option(
+        None, "--level", "-l", min=0, max=9, help="Compression level (0-9)"
+    ),
     quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress all output"),
 ):
     """Compress a file using the specified algorithm and strategy.
@@ -127,7 +143,9 @@ def compress(
         elapsed = time.time() - start_time
 
         if not result.ok:
-            app.echo(app.style(f"\n✗ Compression failed: {result.error}", fg="red"), err=True)
+            app.echo(
+                app.style(f"\n✗ Compression failed: {result.error}", fg="red"), err=True
+            )
             sys.exit(1)
 
         compressed_size = plan.dest.stat().st_size
@@ -142,7 +160,9 @@ def compress(
             app.echo(f"  Ratio:           {ratio:.1f}% of original")
             app.echo(f"  Time:            {format_time(elapsed)}")
             app.echo(f"  Speed:           {speed_mbs:.2f} MB/s")
-            app.echo(f"  Saved:           {format_size(plan.input_size - compressed_size)}")
+            app.echo(
+                f"  Saved:           {format_size(plan.input_size - compressed_size)}"
+            )
             app.echo()
 
     except (Error, HeaderError, BackendError) as e:
@@ -156,7 +176,12 @@ def compress(
 @app.command_with_aliases(aliases=["d", "decomp"])
 def decompress(
     file: Path = app.Argument(..., help="File to decompress"),
-    output: Path | None = app.Option(None, "--output", "-o", help="Output file path (default: remove .comp extension)"),
+    output: Path | None = app.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output file path (default: remove .comp extension)",
+    ),
     quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress progress output"),
 ):
     """Decompress a Compresso compressed file.
@@ -237,9 +262,7 @@ def decompress(
 
         decompressed_size = plan.dest.stat().st_size
         compressed_size = plan.src.stat().st_size
-        speed_mbs = (
-            (decompressed_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-        )
+        speed_mbs = (decompressed_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
 
         if not quiet:
             app.echo()
@@ -311,14 +334,16 @@ def inspect(
 
         app.echo(app.style("✓ Valid Compresso file", fg="green"))
         app.echo()
-        app.echo(f"Algorithm:       {result.algo_name or 'Unknown'} (ID: {result.algo_id})")
+        app.echo(
+            f"Algorithm:       {result.algo_name or 'Unknown'} (ID: {result.algo_id})"
+        )
         app.echo(f"Version:         {result.version}")
         app.echo()
 
         if result.level is not None:
             app.echo(f"Level:           {result.level}")
         else:
-            app.echo(f"Level:           auto")
+            app.echo("Level:           auto")
 
         if result.orig_size:
             app.echo(f"Original size:   {format_size(result.orig_size)}")
@@ -336,9 +361,7 @@ def inspect(
         app.echo(f"Can decompress:     {'Yes' if result.can_decompress else 'No'}")
 
         if result.estimated_decomp_s:
-            app.echo(
-                f"Est. decomp time:   {format_time(result.estimated_decomp_s)}"
-            )
+            app.echo(f"Est. decomp time:   {format_time(result.estimated_decomp_s)}")
 
         if not result.can_decompress and result.reason:
             app.echo()
@@ -352,12 +375,26 @@ def inspect(
 @app.command_with_aliases(aliases=["b", "bench"])
 def benchmark(
     file: Path = app.Argument(..., help="File to benchmark"),
-    algos: str | None = app.Option("all", "--algos", help="Comma-separated list of algorithms"),
-    strategies: str | None = app.Option("all", "--strategies", help="Comma-separated list of strategies"),
-    levels: str | None = app.Option("auto", "--levels", help="Comma-separated list of levels (0-9)"),
-    repeats: int = app.Option(1, "--repeats", help="Number of times to repeat each benchmark"),
-    temp_dir: Path | None = app.Option(None, "--temp-dir", help="Temporary directory for benchmark files"),
-    update_cache: bool = app.Option(False, "--update-cache", help="Update speed estimates cache with benchmark results"),
+    algos: str | None = app.Option(
+        "all", "--algos", help="Comma-separated list of algorithms"
+    ),
+    strategies: str | None = app.Option(
+        "all", "--strategies", help="Comma-separated list of strategies"
+    ),
+    levels: str | None = app.Option(
+        "auto", "--levels", help="Comma-separated list of levels (0-9)"
+    ),
+    repeats: int = app.Option(
+        1, "--repeats", help="Number of times to repeat each benchmark"
+    ),
+    temp_dir: Path | None = app.Option(
+        None, "--temp-dir", help="Temporary directory for benchmark files"
+    ),
+    update_cache: bool = app.Option(
+        False,
+        "--update-cache",
+        help="Update speed estimates cache with benchmark results",
+    ),
 ):
     """Run compression benchmarks on a file.
 
@@ -408,7 +445,9 @@ def benchmark(
         if strategy_list:
             app.echo(f"Strategies: {', '.join(strategy_list)}")
         if level_list is not None:
-            level_str = ', '.join(str(l) if l is not None else 'auto' for l in level_list)
+            level_str = ", ".join(
+                str(level) if level is not None else "auto" for level in level_list
+            )
             app.echo(f"Levels: {level_str}")
         app.echo()
 

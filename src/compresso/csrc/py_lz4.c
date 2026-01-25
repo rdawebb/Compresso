@@ -6,13 +6,13 @@
 #include "common.h"
 
 static int
-lz4_is_available(void) 
+lz4_is_available(void)
 {
     return 1; // lz4 is always available if this code is compiled
 }
 
 static size_t
-lz4_max_compressed_size(size_t input_size) 
+lz4_max_compressed_size(size_t input_size)
 {
     LZ4F_preferences_t prefs;
     memset(&prefs, 0, sizeof(prefs));
@@ -84,7 +84,7 @@ lz4_decompress_buffer(const unsigned char *input, size_t input_size,
                               output + output_pos, &dst_size_tmp,
                               input + input_pos, &src_size_tmp,
                               NULL);
-        
+
         if (LZ4F_isError(ret)) {
             err = -1; // decompression error
             break;
@@ -220,7 +220,7 @@ lz4_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size)
                 break;
             }
             input_pos = 0;
-            
+
             if (input_size == 0) {
                 break; // end of file
             }

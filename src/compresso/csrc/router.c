@@ -44,7 +44,7 @@ static const CBackend *registered_backends[8];
 static size_t num_registered_backends = 0;
 
 static void
-register_backend(const CBackend *b) 
+register_backend(const CBackend *b)
 {
     if (!b) {
         return;
@@ -61,13 +61,13 @@ register_backend(const CBackend *b)
         if (b->id < 7) {
             backend_by_id[b->id] = b;
         }
-    }    
+    }
 }
 
 static int backends_init = 0;
 
 static void
-init_backends(void) 
+init_backends(void)
 {
     if (backends_init) return;
     backends_init = 1;
@@ -83,7 +83,7 @@ init_backends(void)
 
 // ---- Backend Strategy & Lookup ----
 
-Strategy strategy_from_string(const char *str) 
+Strategy strategy_from_string(const char *str)
 {
     if (!str) return STRAT_BALANCED;
     if (strcmp(str, "fast") == 0) return STRAT_FAST;
@@ -91,7 +91,7 @@ Strategy strategy_from_string(const char *str)
     return STRAT_BALANCED;
 }
 
-const CBackend *find_backend_by_name(const char *name) 
+const CBackend *find_backend_by_name(const char *name)
 {
     if (!name) return NULL;
     init_backends();
@@ -103,7 +103,7 @@ const CBackend *find_backend_by_name(const char *name)
     return NULL;
 }
 
-const CBackend *find_backend_by_id(uint8_t id) 
+const CBackend *find_backend_by_id(uint8_t id)
 {
     init_backends();
     if (id < 7) {
@@ -113,7 +113,7 @@ const CBackend *find_backend_by_id(uint8_t id)
 }
 
 static const CBackend *
-choose_backend(Strategy strat) 
+choose_backend(Strategy strat)
 {
     init_backends();
 
@@ -136,7 +136,7 @@ choose_backend(Strategy strat)
             default: break;
         }
     }
-    
+
     switch (strat) {
         case STRAT_FAST:
             // speed priority
@@ -532,7 +532,7 @@ int decompress_file(const char *src_path, const char *dst_path,
             goto done;
         }
     } else {
-        
+
 #if defined(_WIN32) || defined(_WIN64)
 
         if (_fseeki64(src, 0, SEEK_END) != 0) {
@@ -680,7 +680,7 @@ done:
 // ---- Capability Check Helper ----
 
 PyObject *
-get_capabilities(void) 
+get_capabilities(void)
 {
     init_backends();
 

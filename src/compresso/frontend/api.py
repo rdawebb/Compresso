@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-import src.compresso as comp
+import compresso as comp
 
 from ..backend.capabilities import list_capabilities
 from ..backend.file_inspect import InspectResult
@@ -259,7 +259,9 @@ class CompressionJob:
             if progress:
                 progress(0.0, 0, total)
 
-            lvl = -1 if self.plan.options.level is None else int(self.plan.options.level)
+            lvl = (
+                -1 if self.plan.options.level is None else int(self.plan.options.level)
+            )
 
             comp.compress_file(
                 str(self.plan.src),

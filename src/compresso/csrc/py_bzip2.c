@@ -13,7 +13,7 @@ static size_t
 bzip2_max_compressed_size(size_t input_size) {
     size_t tmp, result;
     tmp = input_size / 100;
-    
+
     if (__builtin_add_overflow(input_size, tmp, &result) ||
         __builtin_add_overflow(result, 600, &result)) {
         return SIZE_MAX;
@@ -47,7 +47,7 @@ bzip2_compress_buffer(const unsigned char *input, size_t input_size,
     Py_BEGIN_ALLOW_THREADS
     ret = BZ2_bzBuffToBuffCompress(
         (char *) output, &dest_len, (char *) input, (unsigned int) input_size,
-        blockSize100k, 
+        blockSize100k,
         0, 30 // verbosity and workFactor (recommended default)
     );
     Py_END_ALLOW_THREADS

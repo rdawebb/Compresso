@@ -63,7 +63,7 @@ snappy_decompress_buffer(const unsigned char *input, size_t input_size,
 
 // ---- Helpers ----
 
-size_t snappy_decompressed_size(const unsigned char *input, size_t input_size) 
+size_t snappy_decompressed_size(const unsigned char *input, size_t input_size)
 {
     size_t result = 0;
     snappy_status status = snappy_uncompressed_length((const char *)input, input_size, &result);
@@ -71,7 +71,7 @@ size_t snappy_decompressed_size(const unsigned char *input, size_t input_size)
 }
 
 static void
-write_u32_le(uint32_t value, unsigned char buffer[4]) 
+write_u32_le(uint32_t value, unsigned char buffer[4])
 {
     buffer[0] = (unsigned char)(value & 0xFF);
     buffer[1] = (unsigned char)((value >> 8) & 0xFF);
@@ -115,7 +115,7 @@ snappy_compress_stream(FILE *src, FILE *dst, int level)
             return_code = -1; // read error
             break;
         }
-        
+
         if (nread == 0) {
             break; // end of file
         }
@@ -217,7 +217,7 @@ snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size)
         size_t output_len = orig_len;
         snappy_status status = snappy_uncompress(comp_buffer, comp_len,
                                                 output_buffer, &output_len);
-        
+
         if (status != SNAPPY_OK || output_len != orig_len) {
             return_code = -1; // decompression error
             break;

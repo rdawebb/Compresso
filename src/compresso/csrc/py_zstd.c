@@ -31,7 +31,7 @@ zstd_compress_buffer(const unsigned char *input, size_t input_size,
 {
     int zlevel = (level >= 0) ? zstd_level_from_generic(level)
                               : ZSTD_CLEVEL_DEFAULT;
-    
+
     int ret;
     Py_BEGIN_ALLOW_THREADS
     ret = ZSTD_compress(output, *output_capacity, input, input_size, zlevel);
@@ -71,7 +71,7 @@ zstd_compress_stream(FILE *src, FILE *dst, int level)
 {
     int zlevel = (level >= 0) ? zstd_level_from_generic(level)
                               : ZSTD_CLEVEL_DEFAULT;
-                
+
     ZSTD_CStream *cstream = ZSTD_createCStream();
     if (!cstream) return -1; // memory allocation failure
 
@@ -167,7 +167,7 @@ zstd_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size)
                 break;
             }
             input_pos = 0;
-            
+
             if (input_size == 0) {
                 break; // end of input
             }

@@ -25,4 +25,4 @@ dev = [
 ]
 
 [project.scripts]
-compresso-bench = "src.compresso.cli:main"
+compresso = "compresso.cli:main"

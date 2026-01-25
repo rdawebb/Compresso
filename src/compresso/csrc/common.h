@@ -2,7 +2,7 @@
 #define COMMON_H
 
 #define PY_SSIZE_T_CLEAN
-#include <Python.h> 
+#include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -23,7 +23,7 @@ typedef struct {
 } CHeader;
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(sizeof(CHeader) == 16, 
+_Static_assert(sizeof(CHeader) == 16,
 "CHeader must be exactly 16 bytes with no padding");
 #endif
 

@@ -43,9 +43,3 @@ repos:
         entry: uv run python -m py_compile
         language: system
         types: [python]
-
-      - id: run-tests
-        name: Run test suite
-        entry: uv run pytest .
-        language: system
-        types: [python]

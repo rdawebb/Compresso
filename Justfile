@@ -26,6 +26,10 @@ test:
 test-cov:
     uv run pytest tests/ --cov=src --cov-report=html --cov-report=term
 
+# Run all pre-commit hooks
+pre:
+    uv run prek run --all-files
+
 # Clean up temporary files
 clean:
     uv run python scripts/clean.py
