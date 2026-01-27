@@ -26,6 +26,10 @@ test:
 test-cov:
     uv run pytest tests/ --cov=src --cov-report=html --cov-report=term
 
+# Run all C tests
+test-c:
+    cd tests/c && rake test:all
+
 # Run all pre-commit hooks
 pre:
     uv run prek run --all-files

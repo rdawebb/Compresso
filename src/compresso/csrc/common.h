@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "archive.h"
 
 
 // ---- Header ----
@@ -38,6 +39,7 @@ typedef enum {
     ALGO_ZSTD = 4,
     ALGO_LZ4 = 5,
     ALGO_SNAPPY = 6,
+    ALGO_ZIP = 7
 } AlgoID;
 
 

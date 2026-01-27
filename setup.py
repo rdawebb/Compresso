@@ -3,6 +3,7 @@
 from setuptools import setup, Extension, find_packages
 
 setup(
+    name="compresso",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     ext_modules=[
@@ -11,14 +12,16 @@ setup(
             sources=[
                 "src/compresso/csrc/_core.c",
                 "src/compresso/csrc/router.c",
-                "src/compresso/csrc/py_zlib.c",
-                "src/compresso/csrc/py_bzip2.c",
-                "src/compresso/csrc/py_lzma.c",
-                "src/compresso/csrc/py_zstd.c",
-                "src/compresso/csrc/py_lz4.c",
-                "src/compresso/csrc/py_snappy.c",
+                "src/compresso/csrc/format_detection.c",
+                # Compression algorithms
+                "src/compresso/csrc/compression/py_zlib.c",
+                "src/compresso/csrc/compression/py_bzip2.c",
+                "src/compresso/csrc/compression/py_lzma.c",
+                "src/compresso/csrc/compression/py_zstd.c",
+                "src/compresso/csrc/compression/py_lz4.c",
+                "src/compresso/csrc/compression/py_snappy.c",
             ],
-            libraries=["z", "bz2", "lzma", "zstd", "lz4", "snappy"],
+            libraries=["z", "bz2", "lzma", "zstd", "lz4", "snappy", "archive"],
         )
     ],
     python_requires=">=3.9",

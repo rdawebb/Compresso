@@ -51,12 +51,20 @@ class BenchmarkResult:
 
     @property
     def ratio(self) -> float:
-        """Compression ratio - smaller is better"""
+        """Compression ratio - smaller is better
+
+        Returns:
+            The compression ratio.
+        """
         return self.compressed_size / self.input_size if self.input_size else 0.0
 
     @property
     def comp_mb_s(self) -> float:
-        """Compression speed in MB/s"""
+        """Compression speed in MB/s
+
+        Returns:
+            The compression speed in MB/s.
+        """
         return (
             (self.input_size / (1024 * 1024)) / self.compress_time
             if self.compress_time
@@ -65,7 +73,11 @@ class BenchmarkResult:
 
     @property
     def decomp_mb_s(self) -> float:
-        """Decompression speed in MB/s"""
+        """Decompression speed in MB/s
+
+        Returns:
+            The decompression speed in MB/s.
+        """
         return (
             (self.input_size / (1024 * 1024)) / self.decompress_time
             if self.decompress_time

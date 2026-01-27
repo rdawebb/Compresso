@@ -3,7 +3,7 @@
 #define LZ4_OUT_CHUNK (LZ4_CHUNK + LZ4_CHUNK / 255 + 16) // worst-case output size for LZ4 frame
 #include <Python.h>
 #include <lz4frame.h>
-#include "common.h"
+#include "../common.h"
 
 static int
 lz4_is_available(void)

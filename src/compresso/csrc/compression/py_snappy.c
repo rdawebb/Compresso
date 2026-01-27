@@ -2,7 +2,7 @@
 #define SNAPPY_CHUNK 65536 // 64KB
 #include <Python.h>
 #include <snappy-c.h>
-#include "common.h"
+#include "../common.h"
 
 static int
 snappy_is_available(void) {

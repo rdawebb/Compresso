@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Union
 
 from .. import _core
 
@@ -13,10 +13,10 @@ class BackendCapabilities:
     """Holds the capability information for a compression backend
 
     Attributes:
-        name (str): Name of the compression algorithm.
-        id (int): Algorithm ID.
-        has_buffer (bool): Whether the backend has a buffer.
-        has_stream (bool): Whether the backend supports streaming compression/decompression.
+        name: Name of the compression algorithm.
+        id: Algorithm ID.
+        has_buffer: Whether the backend has a buffer.
+        has_stream: Whether the backend supports streaming compression/decompression.
     """
 
     name: str
@@ -34,9 +34,9 @@ class BackendCapabilities:
 
 
 ## Cached capabilities
-_cap_list: List[BackendCapabilities] | None = None
-_cap_by_name: Dict[str, BackendCapabilities] | None = None
-_cap_by_id: Dict[int, BackendCapabilities] | None = None
+_cap_list: Union[List[BackendCapabilities], None] = None
+_cap_by_name: Union[Dict[str, BackendCapabilities], None] = None
+_cap_by_id: Union[Dict[int, BackendCapabilities], None] = None
 
 
 def _load_capabilities() -> None:
@@ -86,7 +86,7 @@ def get_by_name(name: str) -> BackendCapabilities | None:
     """Get capability information by algorithm name
 
     Args:
-        name (str): Name of the compression algorithm.
+        name: Name of the compression algorithm.
 
     Returns:
         BackendCapabilities or None if not found
@@ -100,7 +100,7 @@ def get_by_id(cid: int) -> BackendCapabilities | None:
     """Get capability information by algorithm ID
 
     Args:
-        cid (int): Algorithm ID.
+        cid: Algorithm ID.
 
     Returns:
         BackendCapabilities or None if not found

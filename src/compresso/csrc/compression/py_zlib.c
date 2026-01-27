@@ -2,7 +2,7 @@
 #define ZLIB_CHUNK 65536 // 64KB
 #include <Python.h>
 #include <zlib.h>
-#include "common.h"
+#include "../common.h"
 
 static int
 zlib_is_available(void) {
@@ -22,7 +22,7 @@ zlib_compress_buffer(const unsigned char *input, size_t input_size,
                      unsigned char *output, size_t *output_capacity,
                      int level, size_t *output_size)
 {
-    uLongf dest_len = (uLongf)output_capacity;
+    uLongf dest_len = (uLongf)(*output_capacity);
     int ret;
 
     Py_BEGIN_ALLOW_THREADS
@@ -76,7 +76,7 @@ zlib_compress_stream(FILE *src, FILE *dst, int level)
 
     ret = deflateInit(&strm, zlevel);
     if (ret != Z_OK) {
-        return -1; // initialization failed
+        return -1; // initialisation failed
     }
 
     Py_BEGIN_ALLOW_THREADS
@@ -136,7 +136,7 @@ zlib_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size)
     memset(&strm, 0, sizeof(strm));
     ret = inflateInit(&strm);
     if (ret != Z_OK) {
-        return -1; // initialization failed
+        return -1; // initialisation failed
     }
 
     Py_BEGIN_ALLOW_THREADS

@@ -2,7 +2,7 @@
 #define BZIP2_CHUNK 65536 // 64KB
 #include <Python.h>
 #include <bzlib.h>
-#include "common.h"
+#include "../common.h"
 
 static int
 bzip2_is_available(void) {

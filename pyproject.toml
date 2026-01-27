@@ -16,7 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "prek>=0.3.0,<1.0.0",
-    "pytest>=9.0.0,<10.0.0",
+    "pytest>=8.0.0,<10.0.0",
     "pytest-cov>=7.0.0,<8.0.0",
     "ruff>=0.14.14,<15.0.0",
     "rust-just>=1.46.0,<2.0.0",

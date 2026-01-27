@@ -11,7 +11,7 @@ PyObject *comp_BackendError;
 // ---- Module Methods ----
 
 static PyObject *
-py_compress_file(PyObject *self, PyObject *args, PyObject *kwargs)
+py_compress_file(PyObject *self __attribute__((unused)), PyObject *args, PyObject *kwargs)
 {
     static char *kwlist[] = {"src_path", "dst_path", "algo", "strategy", "level", NULL};
 
@@ -47,11 +47,11 @@ py_compress_file(PyObject *self, PyObject *args, PyObject *kwargs)
 
     Py_DECREF(src_path_bytes);
     Py_DECREF(dst_path_bytes);
-    Py_RETURN_NONE;
+    return PyLong_FromLong(0);
 }
 
 static PyObject *
-py_decompress_file(PyObject *self, PyObject *args, PyObject *kwargs)
+py_decompress_file(PyObject *self __attribute__((unused)), PyObject *args, PyObject *kwargs)
 {
     static char *kwlist[] = {"src_path", "dst_path", "algo", NULL};
 
@@ -85,17 +85,20 @@ py_decompress_file(PyObject *self, PyObject *args, PyObject *kwargs)
 
     Py_DECREF(src_path_bytes);
     Py_DECREF(dst_path_bytes);
-    Py_RETURN_NONE;
+    return PyLong_FromLong(0);
 }
 
 static PyObject *
-py_get_capabilities(PyObject *self, PyObject *Py_UNUSED(ignored))
+py_get_capabilities(PyObject *self __attribute__((unused)), PyObject *Py_UNUSED(ignored))
 {
     return get_capabilities();
 }
 
 
 // ---- Module Definition ----
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type-mismatch"
 
 static PyMethodDef CoreMethods[] = {
     {"compress_file", (PyCFunction)py_compress_file, METH_VARARGS | METH_KEYWORDS,
@@ -107,12 +110,18 @@ static PyMethodDef CoreMethods[] = {
     {NULL, NULL, 0, NULL}  // Sentinel
 };
 
+#pragma GCC diagnostic pop
+
 static struct PyModuleDef coremodule = {
     PyModuleDef_HEAD_INIT,
     "_core",
     "Compresso core extension",
     -1,
-    CoreMethods
+    CoreMethods,
+    NULL,  // m_slots
+    NULL,  // m_traverse
+    NULL,  // m_clear
+    NULL   // m_free
 };
 
 

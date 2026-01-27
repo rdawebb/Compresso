@@ -1,0 +1,82 @@
+# Compresso - C Test Suite
+
+require 'rake'
+require 'rake/clean'
+
+# Set BUILD_DIR before requiring helpers so it uses the correct path
+BUILD_DIR = File.join(__dir__, 'build')
+
+require_relative 'lib/rakefile_helper.rb'
+
+# Build directory (defined in rakefile_helper, just register it with Rake)
+directory BUILD_DIR
+CLEAN.include(BUILD_DIR)
+
+task :prepare_for_tests => BUILD_DIR
+
+# Default task
+task :default => ['test']
+
+# Namespace for test tasks
+namespace :test do
+  desc "Build and run all tests"
+  task :all => [:clean, :prepare_for_tests, :run]
+
+  desc "Build and run all tests (alias for 'rake test')"
+  task :run => [:prepare_for_tests] do
+    run_all_tests()
+  end
+
+  # Individual test targets
+  desc "Run format detection tests"
+  task :format_detection => [:prepare_for_tests] do
+    run_single_test('test_format_detection.c')
+  end
+
+  desc "Run router tests"
+  task :router => [:prepare_for_tests] do
+    run_single_test('test_router.c')
+  end
+
+  desc "Run compression tests"
+  namespace :compression do
+    desc "Run zlib tests"
+    task :zlib => [:prepare_for_tests] do
+      run_single_test('compression/test_zlib.c')
+    end
+
+    desc "Run bzip2 tests"
+    task :bzip2 => [:prepare_for_tests] do
+      run_single_test('compression/test_bzip2.c')
+    end
+
+    desc "Run lzma tests"
+    task :lzma => [:prepare_for_tests] do
+      run_single_test('compression/test_lzma.c')
+    end
+
+    desc "Run zstd tests"
+    task :zstd => [:prepare_for_tests] do
+      run_single_test('compression/test_zstd.c')
+    end
+
+    desc "Run lz4 tests"
+    task :lz4 => [:prepare_for_tests] do
+      run_single_test('compression/test_lz4.c')
+    end
+
+    desc "Run snappy tests"
+    task :snappy => [:prepare_for_tests] do
+      run_single_test('compression/test_snappy.c')
+    end
+
+    desc "Run all compression tests"
+    task :all => [:prepare_for_tests] do
+      run_all_compression_tests()
+    end
+  end
+end
+
+# Shorthand tasks
+task :test => ['test:run']
+task :ci => ['test:all']

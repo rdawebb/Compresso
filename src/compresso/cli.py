@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import Union
 
 import click
 from typer_extensions import ExtendedTyper
@@ -14,10 +15,10 @@ from ._core import (
     Error,
     HeaderError,
 )
-from compresso.backend.benchmark import benchmark_file, print_results
-from compresso.backend.capabilities import list_capabilities
-from compresso.backend.file_inspect import inspect as inspect_file
-from compresso.frontend.api import (
+from .backend.benchmark import benchmark_file, print_results
+from .backend.capabilities import list_capabilities
+from .backend.file_inspect import inspect as inspect_file
+from .frontend.api import (
     CompressionJob,
     CompressionOptions,
     DecompressionJob,
@@ -26,7 +27,7 @@ from compresso.frontend.api import (
 app = ExtendedTyper(help="Compresso - Fast file compression and decompression tool")
 
 
-def format_size(size_bytes: int) -> str:
+def format_size(size_bytes: float) -> str:
     """Format byte size in human-readable format.
 
     Args:
@@ -38,7 +39,7 @@ def format_size(size_bytes: int) -> str:
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if size_bytes < 1024.0:
             return f"{size_bytes:.2f} {unit}"
-        size_bytes = int(size_bytes / 1024.0)
+        size_bytes = size_bytes / 1024.0
     return f"{size_bytes:.2f} PB"
 
 
@@ -64,10 +65,10 @@ def format_time(seconds: float) -> str:
 @app.command_with_aliases(aliases=["c", "comp"])
 def compress(
     file: Path = app.Argument(..., help="File to compress"),
-    output: Path | None = app.Option(
+    output: Union[Path, None] = app.Option(
         None, "--output", "-o", help="Output file path (default: input.comp)"
     ),
-    algo: str | None = app.Option(
+    algo: Union[str, None] = app.Option(
         "auto",
         "--algo",
         "-a",
@@ -81,7 +82,7 @@ def compress(
         case_sensitive=False,
         help="Compression strategy to use (fast/balanced/max_ratio)",
     ),
-    level: int | None = app.Option(
+    level: Union[int, None] = app.Option(
         None, "--level", "-l", min=0, max=9, help="Compression level (0-9)"
     ),
     quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress all output"),
@@ -89,12 +90,12 @@ def compress(
     """Compress a file using the specified algorithm and strategy.
 
     Args:
-        file (Path): The path to the file to compress.
-        output (Path | None): The path to the output file (default: None).
-        algo (str | None): The compression algorithm to use (default: None).
-        strategy (str): The compression strategy to use (default: "balanced").
-        level (int | None): The compression level to use (default: None).
-        quiet (bool): If True, suppress all output (default: False).
+        file: The path to the file to compress.
+        output: The path to the output file (default: None).
+        algo: The compression algorithm to use (default: None).
+        strategy: The compression strategy to use (default: "balanced").
+        level: The compression level to use (default: None).
+        quiet: If True, suppress all output (default: False).
     """
     try:
         algo_lower = algo.lower() if algo else None
@@ -176,7 +177,7 @@ def compress(
 @app.command_with_aliases(aliases=["d", "decomp"])
 def decompress(
     file: Path = app.Argument(..., help="File to decompress"),
-    output: Path | None = app.Option(
+    output: Union[Path, None] = app.Option(
         None,
         "--output",
         "-o",
@@ -187,9 +188,9 @@ def decompress(
     """Decompress a Compresso compressed file.
 
     Args:
-        file (Path): The path to the compressed file.
-        output (Path | None): The path to the output file (default: remove .comp extension).
-        quiet (bool): If True, suppress progress output.
+        file: The path to the compressed file.
+        output: The path to the output file (default: remove .comp extension).
+        quiet: If True, suppress progress output.
     """
     try:
         job = DecompressionJob.from_file(file, output)
@@ -289,8 +290,8 @@ def inspect(
     """Inspect a compressed file and show metadata.
 
     Args:
-        file (Path): The path to the compressed file.
-        output_json (bool): If True, output metadata in JSON format.
+        file: The path to the compressed file.
+        output_json: If True, output metadata in JSON format.
     """
     try:
         result = inspect_file(file)
@@ -375,19 +376,19 @@ def inspect(
 @app.command_with_aliases(aliases=["b", "bench"])
 def benchmark(
     file: Path = app.Argument(..., help="File to benchmark"),
-    algos: str | None = app.Option(
+    algos: Union[str, None] = app.Option(
         "all", "--algos", help="Comma-separated list of algorithms"
     ),
-    strategies: str | None = app.Option(
+    strategies: Union[str, None] = app.Option(
         "all", "--strategies", help="Comma-separated list of strategies"
     ),
-    levels: str | None = app.Option(
+    levels: Union[str, None] = app.Option(
         "auto", "--levels", help="Comma-separated list of levels (0-9)"
     ),
     repeats: int = app.Option(
         1, "--repeats", help="Number of times to repeat each benchmark"
     ),
-    temp_dir: Path | None = app.Option(
+    temp_dir: Union[Path, None] = app.Option(
         None, "--temp-dir", help="Temporary directory for benchmark files"
     ),
     update_cache: bool = app.Option(
@@ -399,13 +400,13 @@ def benchmark(
     """Run compression benchmarks on a file.
 
     Args:
-        file (Path): The path to the file to benchmark.
-        algos (str | None): Comma-separated list of algorithms to use (default: all available).
-        strategies (str | None): Comma-separated list of strategies to use (default: all).
-        levels (str | None): Comma-separated list of levels to use (default: all).
-        repeats (int): Number of times to repeat each benchmark (default: 1).
-        temp_dir (Path | None): Temporary directory for benchmark files (default: None).
-        update_cache (bool): If True, update the speed estimates cache with benchmark results (default: False).
+        file: The path to the file to benchmark.
+        algos: Comma-separated list of algorithms to use (default: all available).
+        strategies: Comma-separated list of strategies to use (default: all).
+        levels: Comma-separated list of levels to use (default: all).
+        repeats: Number of times to repeat each benchmark (default: 1).
+        temp_dir: Temporary directory for benchmark files (default: None).
+        update_cache: If True, update the speed estimates cache with benchmark results (default: False).
     """
     try:
         algo_list = None

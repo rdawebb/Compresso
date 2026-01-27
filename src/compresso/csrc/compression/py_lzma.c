@@ -3,7 +3,7 @@
 #define LZMA_DECOMPRESS_MEMLIMIT (512ULL * 1024 * 1024) // 512MB
 #include <Python.h>
 #include <lzma.h>
-#include "common.h"
+#include "../common.h"
 
 static int
 lzma_is_available(void) {

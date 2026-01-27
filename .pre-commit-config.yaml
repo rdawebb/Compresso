@@ -9,7 +9,7 @@ repos:
       - id: check-yaml
         name: Check YAML
       - id: check-added-large-files
-        args: ['--maxkb=100']
+        args: ['--maxkb=200']
         name: Check added large files
       - id: check-toml
         name: Check TOML
@@ -43,3 +43,22 @@ repos:
         entry: uv run python -m py_compile
         language: system
         types: [python]
+
+      - id: c-check-syntax
+        name: Check for C syntax errors
+        entry: uv run sh -c 'gcc $(python3-config --includes) -fsyntax-only "$@"'
+        language: system
+        types: [c]
+
+      - id: run-python-tests
+        name: Run Python tests
+        entry: uv run pytest tests/
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: run-c-tests
+        name: Run C tests
+        entry: uv run cd tests/c && rake test:all
+        language: system
+        types: [c]

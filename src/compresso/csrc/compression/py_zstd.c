@@ -2,7 +2,7 @@
 #define ZSTD_CHUNK 65536 // 64KB
 #include <Python.h>
 #include <zstd.h>
-#include "common.h"
+#include "../common.h"
 
 static int
 zstd_is_available(void) {

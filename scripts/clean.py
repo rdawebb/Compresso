@@ -8,8 +8,8 @@ def remove_dirs(root: Path, dir_names: list[str]) -> None:
     """Remove directories with specified names under the root path
 
     Args:
-        root (Path): Root directory to start searching from
-        dir_names (list[str]): List of directory names to remove
+        root: Root directory to start searching from
+        dir_names: List of directory names to remove
     """
     for dir in dir_names:
         for path in root.rglob(dir):
@@ -21,8 +21,8 @@ def remove_files(root: Path, extensions: list[str]) -> None:
     """Remove files with specified extensions under the root path
 
     Args:
-        root (Path): Root directory to start searching from
-        extensions (list[str]): List of file extensions to remove
+        root: Root directory to start searching from
+        extensions: List of file extensions to remove
     """
     for ext in extensions:
         for file in root.rglob(f"*{ext}"):

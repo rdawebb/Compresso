@@ -174,6 +174,7 @@ choose_backend(Strategy strat)
 // ---- I/O Helpers ----
 
 static unsigned char *
+__attribute__((unused))
 read_file_to_memory(const char *path, size_t *out_size)
 {
     FILE *f = fopen(path, "rb");
@@ -263,6 +264,7 @@ read_file_to_memory(const char *path, size_t *out_size)
 }
 
 static int
+__attribute__((unused))
 write_memory_to_file(const char *path, const unsigned char *data, size_t size)
 {
     FILE *f = fopen(path, "wb");
@@ -295,6 +297,8 @@ int compress_file(const char *src_path, const char *dst_path,
     const CBackend *backend = NULL;
 
     int return_code = 0;
+    FILE *src = NULL;
+    FILE *dst = NULL;
 
     if (algo_name && algo_name[0] != '\0') {
         backend = find_backend_by_name(algo_name);
@@ -313,14 +317,14 @@ int compress_file(const char *src_path, const char *dst_path,
         }
     }
 
-    FILE *src = fopen(src_path, "rb");
+    src = fopen(src_path, "rb");
     if (!src) {
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
         return_code = -1;
         goto done;
     }
 
-    FILE *dst = fopen(dst_path, "wb");
+    dst = fopen(dst_path, "wb");
     if (!dst) {
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, dst_path);
         return_code = -1;
@@ -457,8 +461,8 @@ int compress_file(const char *src_path, const char *dst_path,
     }
 
 done:
-    fclose(src);
-    fclose(dst);
+    if (src) fclose(src);
+    if (dst) fclose(dst);
     return return_code;
 }
 
@@ -468,15 +472,17 @@ int decompress_file(const char *src_path, const char *dst_path,
     init_backends();
 
     int return_code = 0;
+    FILE *src = NULL;
+    FILE *dst = NULL;
 
-    FILE *src = fopen(src_path, "rb");
+    src = fopen(src_path, "rb");
     if (!src) {
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
         return_code = -1;
         goto done;
     }
 
-    FILE *dst = fopen(dst_path, "wb");
+    dst = fopen(dst_path, "wb");
     if (!dst) {
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, dst_path);
         return_code = -1;
@@ -671,8 +677,8 @@ int decompress_file(const char *src_path, const char *dst_path,
     }
 
 done:
-    fclose(src);
-    fclose(dst);
+    if (src) fclose(src);
+    if (dst) fclose(dst);
     return return_code;
 }
 

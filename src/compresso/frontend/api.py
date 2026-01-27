@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
-import compresso as comp
+from .._core import compress_file, decompress_file
 
 from ..backend.capabilities import list_capabilities
 from ..backend.file_inspect import InspectResult
@@ -21,9 +21,9 @@ class CompressionOptions:
     """User-facing compression options.
 
     Attributes:
-        algo (Optional[str]): Compression algorithm name, or None for auto.
-        strategy (str): Compression strategy - "fast", "balanced", or "max_ratio".
-        level (Optional[int]): Compression level (0-9), or None for auto.
+        algo: Compression algorithm name, or None for auto.
+        strategy: Compression strategy - "fast", "balanced", or "max_ratio".
+        level: Compression level (0-9), or None for auto.
     """
 
     algo: Optional[str] = None
@@ -36,14 +36,14 @@ class CompressionPlan:
     """Holds a compression plan based on user options and file characteristics.
 
     Attributes:
-        src (Path): Source file path.
-        dest (Path): Destination file path.
-        options (CompressionOptions): User-defined compression options.
-        input_size (int): Size of the input file in bytes.
-        backend_name (Optional[str]): Selected backend name, or None if unavailable.
-        estimated_seconds (Optional[float]): Estimated compression time in seconds, or None if unavailable.
-        can_compress (bool): Whether compression can proceed with the selected options.
-        reason_if_unavailable (Optional[str]): Reason why compression cannot proceed, if applicable.
+        src: Source file path.
+        dest: Destination file path.
+        options: User-defined compression options.
+        input_size: Size of the input file in bytes.
+        backend_name: Selected backend name, or None if unavailable.
+        estimated_seconds: Estimated compression time in seconds, or None if unavailable.
+        can_compress: Whether compression can proceed with the selected options.
+        reason_if_unavailable: Reason why compression cannot proceed, if applicable.
     """
 
     src: Path
@@ -62,10 +62,10 @@ class DecompressionPlan:
     """Holds a decompression plan based on file inspection.
 
     Attributes:
-        src (Path): Source file path.
-        dest (Path): Destination file path.
-        inspection (InspectResult): Result of the file inspection.
-        estimated_seconds (Optional[float]): Estimated decompression time in seconds, or None if unavailable.
+        src: Source file path.
+        dest: Destination file path.
+        inspection: Result of the file inspection.
+        estimated_seconds: Estimated decompression time in seconds, or None if unavailable.
     """
 
     src: Path
@@ -79,10 +79,10 @@ def _choose_backend_for_strategy(strategy: str) -> Optional[str]:
     """Approximate the algo the backend will choose for a given strategy.
 
     Args:
-        strategy (str): Compression strategy - "fast", "balanced", or "max_ratio".
+        strategy: Compression strategy - "fast", "balanced", or "max_ratio".
 
     Returns:
-        Optional[str]: The chosen backend name, or None if no suitable backend is found.
+        The chosen backend name, or None if no suitable backend is found.
     """
     strategy = (strategy or "balanced").lower()
     caps = list_capabilities()
@@ -106,16 +106,16 @@ def _choose_backend_for_strategy(strategy: str) -> Optional[str]:
 
 
 def plan_compression(
-    src: str | Path,
-    dest: Optional[str | Path] = None,
+    src: Union[str, Path],
+    dest: Optional[Union[str, Path]] = None,
     options: Optional[CompressionOptions] = None,
 ) -> CompressionPlan:
     """Plan a compression operation based on user options and file characteristics.
 
     Args:
-        src (str | Path): Source file path.
-        dest (Optional[str | Path]): Destination file path. If None, appends ".comp" to source.
-        options (Optional[CompressionOptions]): User-defined compression options. If None, defaults are used.
+        src: Source file path.
+        dest: Destination file path. If None, appends ".comp" to source.
+        options: User-defined compression options. If None, defaults are used.
 
     Returns:
         CompressionPlan: The resulting compression plan.
@@ -176,13 +176,13 @@ def plan_compression(
 
 
 def plan_decompression(
-    src: str | Path, dest: Optional[str | Path] = None
+    src: Union[str, Path], dest: Optional[Union[str, Path]] = None
 ) -> DecompressionPlan:
     """Plan a decompression operation based on file inspection.
 
     Args:
-        src (str | Path): Source file path.
-        dest (Optional[str | Path]): Destination file path. If None, removes
+        src: Source file path.
+        dest: Destination file path. If None, removes
             ".comp" suffix from source if present.
 
     Returns:
@@ -210,11 +210,17 @@ def plan_decompression(
 
 @dataclass
 class JobResult:
-    """Holds the result of a compression or decompression job."""
+    """Holds the result of a compression or decompression job.
+
+    Attributes:
+        ok (bool): Indicates if the job was successful.
+        error (Optional[BaseException]): The error encountered, if any.
+        plan (CompressionPlan | DecompressionPlan): The associated plan.
+    """
 
     ok: bool
     error: Optional[BaseException]
-    plan: CompressionPlan | DecompressionPlan
+    plan: Union[CompressionPlan, DecompressionPlan]
 
 
 ProgressCallback = Callable[[float, int, int], None]
@@ -224,23 +230,33 @@ class CompressionJob:
     """Compression job high-level wrapper."""
 
     def __init__(self, plan: CompressionPlan):
+        """Initialise the compression job."""
         self.plan = plan
 
     @classmethod
     def from_file(
         cls,
-        src: str | Path,
-        dest: Optional[str | Path] = None,
+        src: Union[str, Path],
+        dest: Optional[Union[str, Path]] = None,
         options: Optional[CompressionOptions] = None,
-    ) -> "CompressionJob":
-        """Create a CompressionJob from file paths and options."""
+    ) -> CompressionJob:
+        """Create a CompressionJob from file paths and options.
+
+        Args:
+            src: Source file path.
+            dest: Destination file path. If None, defaults to appending ".comp" to the source.
+            options: User-defined compression options. If None, defaults are used.
+
+        Returns:
+            CompressionJob: The created compression job.
+        """
         return cls(plan_compression(src, dest, options))
 
     def run(self, progress: Optional[ProgressCallback] = None) -> JobResult:
         """Run the compression job.
 
         Args:
-            progress (Optional[ProgressCallback]): Optional progress callback.
+            progress: Optional progress callback.
 
         Returns:
             JobResult: The result of the compression job.
@@ -263,7 +279,7 @@ class CompressionJob:
                 -1 if self.plan.options.level is None else int(self.plan.options.level)
             )
 
-            comp.compress_file(
+            compress_file(
                 str(self.plan.src),
                 str(self.plan.dest),
                 self.plan.backend_name or "",
@@ -291,20 +307,29 @@ class DecompressionJob:
     """Decompression job high-level wrapper."""
 
     def __init__(self, plan: DecompressionPlan):
+        """Initialise the decompression job."""
         self.plan = plan
 
     @classmethod
     def from_file(
-        cls, src: str | Path, dest: Optional[str | Path] = None
-    ) -> "DecompressionJob":
-        """Create a DecompressionJob from file paths."""
+        cls, src: Union[str, Path], dest: Optional[Union[str, Path]] = None
+    ) -> DecompressionJob:
+        """Create a DecompressionJob from file paths.
+
+        Args:
+            src: Source file path.
+            dest: Destination file path. If None, defaults to the source path.
+
+        Returns:
+            DecompressionJob: The created decompression job.
+        """
         return cls(plan_decompression(src, dest))
 
     def run(self, progress: Optional[ProgressCallback] = None) -> JobResult:
         """Run the decompression job.
 
         Args:
-            progress (Optional[ProgressCallback]): Optional progress callback.
+            progress: Optional progress callback.
 
         Returns:
             JobResult: The result of the decompression job.
@@ -337,7 +362,7 @@ class DecompressionJob:
             if progress:
                 progress(0.0, 0, total)
 
-            comp.decompress_file(
+            decompress_file(
                 str(self.plan.src),
                 str(self.plan.dest),
                 insp.algo_name or "",
