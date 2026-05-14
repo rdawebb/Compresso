@@ -221,6 +221,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Dev
+dev/
+
 # To be committed
 README.md
 CHANGELOG.md

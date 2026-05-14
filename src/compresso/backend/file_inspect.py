@@ -14,6 +14,8 @@ COMP_HEADER_STRUCT = struct.Struct(
     "<4sBBBBQ"
 )  # magic, version, algo, level, flags, original_size
 
+_LEVEL_AUTO = 255  # Special value indicating 'auto' or 'unspecified' level
+
 
 @dataclass
 class InspectResult:
@@ -26,7 +28,7 @@ class InspectResult:
         reason: Reason for invalidity if applicable.
         version: Compresso version.
         algo_id: Algorithm ID.
-        algo_name: Algorithm name.
+        algo_name: Human-readable algorithm name for user display.
         level: Compression level (None if auto/unspecified).
         flags: Compression flags.
         orig_size: Original uncompressed size in bytes.
@@ -102,42 +104,57 @@ def inspect(path: Union[str, Path]) -> InspectResult:
     """
     path = Path(path)
     if not path.is_file():
-        return _failed_inspection(path, "Not a file")
+        return _failed_inspection(path, reason="Not a file")
 
     try:
-        with path.open("rb") as f:
-            data = f.read(COMP_HEADER_STRUCT.size)
+        with path.open(mode="rb") as f:
+            data: bytes = f.read(COMP_HEADER_STRUCT.size)
     except OSError as e:
-        return _failed_inspection(path, f"Failed to read file: {e}")
+        return _failed_inspection(path, reason=f"Failed to read file: {e}")
 
     if len(data) < COMP_HEADER_STRUCT.size:
-        return _failed_inspection(path, "File too small to be a valid Compresso file")
+        return _failed_inspection(
+            path, reason="File too small to be a valid Compresso file"
+        )
 
     magic, version, algo_id, level, flags, orig_size = COMP_HEADER_STRUCT.unpack(data)
 
     if magic != b"COMP":
-        return _failed_inspection(path, "Invalid magic number", is_compresso=False)
+        return _failed_inspection(
+            path, reason="Invalid magic number", is_compresso=False
+        )
 
     if version != 1:
-        return _failed_inspection(path, f"Unsupported header version: {version}")
+        return _failed_inspection(path, reason=f"Unsupported header version: {version}")
 
-    cap = get_by_id(algo_id)
-    backend_available = cap is not None and cap.is_available()
-    algo_name = cap.name if cap else None
-    has_streaming = cap.has_stream if cap else False
+    _MAX_ORIG_SIZE = (1 << 63) - 1
 
-    can_decompress = backend_available
-    reason = None
+    if orig_size > _MAX_ORIG_SIZE:
+        return _failed_inspection(
+            path,
+            reason=f"Original size {orig_size} exceeds maximum limit {_MAX_ORIG_SIZE}",
+            is_compresso=True,
+        )
+
+    cap = get_by_id(cid=algo_id)
+    backend_available: bool = cap is not None and cap.is_available()
+    algo_name: str | None = cap.name if cap else None
+    has_streaming: bool = cap.has_stream if cap else False
+
+    can_decompress: bool = backend_available
+    reason: Optional[str] = None
     if not can_decompress:
         reason = "No available backend for this algorithm"
 
     est_time = None
     if can_decompress and orig_size > 0:
         if algo_name is not None:
-            mb_s = get_estimated_speeds(algo_name, operation="decompress")
+            mb_s: int | float = get_estimated_speeds(
+                algo=algo_name, operation="decompress"
+            )
         else:
             mb_s = 200.0
-        est_time = orig_size / (mb_s * 1024 * 1024)
+        est_time: float | None = orig_size / (mb_s * 1024 * 1024)
 
     return InspectResult(
         path=path,
@@ -147,7 +164,7 @@ def inspect(path: Union[str, Path]) -> InspectResult:
         version=version,
         algo_id=algo_id,
         algo_name=algo_name,
-        level=level if level != 255 else None,
+        level=level if level != _LEVEL_AUTO else None,
         flags=flags,
         orig_size=orig_size,
         backend_available=backend_available,

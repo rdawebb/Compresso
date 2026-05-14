@@ -18,13 +18,13 @@ from .speeds import update_from_benchmarks
 # C extension wrappers for compression and decompression
 def compress(src_path, dest_path, *, algo=None, strategy="balanced", level=None):
     """Compress a file using the specified algorithm and strategy."""
-    lvl = -1 if level is None else int(level)
-    return compress_file(src_path, dest_path, algo or "", strategy or "", lvl)
+    lvl: int = -1 if level is None else int(level)
+    return compress_file(input_path=src_path, output_path=dest_path, algorithm=algo or "", strategy=strategy or "", level=lvl)
 
 
 def decompress(src_path, dest_path, *, algo=None):
     """Decompress a file using the specified algorithm."""
-    return decompress_file(src_path, dest_path, algo or "")
+    return decompress_file(input_path=src_path, output_path=dest_path, algorithm=algo or "")
 
 
 @dataclass
@@ -125,19 +125,19 @@ def benchmark_file(
         raise FileNotFoundError(f"Source file {src} does not exist or is not a file")
 
     if temp_dir is None:
-        temp_dir = Path(os.getenv("TMPDIR", "/tmp"))
+        temp_dir = Path(os.getenv(key="TMPDIR", default="/tmp"))
 
     if algos is None:
-        algos = ["zlib", "bzip2", "lzma", "zstd", "lz4", "snappy"]
+        algos: list[str] = ["zlib", "bzip2", "lzma", "zstd", "lz4", "snappy"]
 
     if strategies is None:
-        strategies = ["fast", "balanced", "max_ratio"]
+        strategies: list[str] = ["fast", "balanced", "max_ratio"]
 
     if levels is None:
-        levels = [None, 1, 3, 6, 9]
+        levels: list[None | int] = [None, 1, 3, 6, 9]
 
-    temp_base = Path(temp_dir) if temp_dir else src.parent
-    input_size = src.stat().st_size
+    temp_base: Path = Path(temp_dir) if temp_dir else src.parent
+    input_size: int = src.stat().st_size
 
     results: List[BenchmarkResult] = []
 
@@ -161,10 +161,10 @@ def benchmark_file(
                         decomp_path = Path(decomp_file.name)
 
                         # Compression
-                        start_time = time.perf_counter()
+                        start_time: float = time.perf_counter()
                         compress(
-                            str(src),
-                            str(comp_path),
+                            src_path=str(object=src),
+                            dest_path=str(object=comp_path),
                             algo=algo,
                             strategy=strategy,
                             level=level,
@@ -172,18 +172,18 @@ def benchmark_file(
                         comp_times.append(time.perf_counter() - start_time)
 
                         if compressed_size is None:
-                            compressed_size = comp_path.stat().st_size
+                            compressed_size: int = comp_path.stat().st_size
                         else:
-                            sz = comp_path.stat().st_size
+                            sz: int = comp_path.stat().st_size
                             if sz != compressed_size:
                                 print(
                                     f"Warning: Compressed size changed between runs: {compressed_size} vs {sz}"
                                 )
-                                compressed_size = sz
+                                compressed_size: int = sz
 
                         # Decompression
-                        start_time = time.perf_counter()
-                        decompress(str(comp_path), str(decomp_path))
+                        start_time: float = time.perf_counter()
+                        decompress(src_path=str(object=comp_path), dest_path=str(object=decomp_path))
                         decomp_times.append(time.perf_counter() - start_time)
 
                         # Verify
@@ -195,11 +195,11 @@ def benchmark_file(
                                 f"Warning: Decompressed file size mismatch for {decomp_path}"
                             )
 
-                        _safe_unlink(comp_path)
-                        _safe_unlink(decomp_path)
+                        _safe_unlink(path=comp_path)
+                        _safe_unlink(path=decomp_path)
 
-                avg_comp_time = sum(comp_times) / repeats
-                avg_decomp_time = sum(decomp_times) / repeats
+                avg_comp_time: float = sum(comp_times) / repeats
+                avg_decomp_time: float = sum(decomp_times) / repeats
 
                 results.append(
                     BenchmarkResult(
@@ -229,7 +229,7 @@ def print_results(results: List[BenchmarkResult]) -> None:
         print("No results to display.")
         return
 
-    headers = [
+    headers: list[str] = [
         "Algo",
         "Strategy",
         "Level",
@@ -240,9 +240,9 @@ def print_results(results: List[BenchmarkResult]) -> None:
         "Ratio (comp/orig)",
     ]
 
-    table_data = []
+    table_data: list[list[str | int]] = []
     for r in results:
-        row = [
+        row: list[str | int] = [
             r.algo,
             r.strategy,
             r.level if r.level is not None else "auto",
@@ -254,4 +254,4 @@ def print_results(results: List[BenchmarkResult]) -> None:
         ]
         table_data.append(row)
 
-    print(tabulate(table_data, headers=headers, tablefmt="grid"))
+    print(tabulate(tabular_data=table_data, headers=headers, tablefmt="grid"))

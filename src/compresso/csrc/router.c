@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#define BACKEND_ID_MAX 32
 #include <Python.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,8 @@ const CBackend *get_lzma_backend(void);
 const CBackend *get_zstd_backend(void);
 const CBackend *get_lz4_backend(void);
 const CBackend *get_snappy_backend(void);
+
+static int decompress_compresso_file(const char *src_path, const char *dest_path, AlgoID algo);
 
 // Snappy helper
 size_t snappy_decompressed_size(const unsigned char *input, size_t input_size);
@@ -39,8 +42,8 @@ set_backend_error(const CBackend *backend, const char *operation, const char *de
 
 // ---- Backend Registry ----
 
-static const CBackend *backend_by_id[7] = {NULL};
-static const CBackend *registered_backends[8];
+static const CBackend *backend_by_id[BACKEND_ID_MAX] = {NULL};
+static const CBackend *registered_backends[BACKEND_ID_MAX];
 static size_t num_registered_backends = 0;
 
 static void
@@ -58,7 +61,7 @@ register_backend(const CBackend *b)
     if (num_registered_backends < sizeof(registered_backends) / sizeof(registered_backends[0])) {
         registered_backends[num_registered_backends++] = b;
 
-        if (b->id < 7) {
+        if (b->id < BACKEND_ID_MAX) {
             backend_by_id[b->id] = b;
         }
     }
@@ -91,6 +94,18 @@ Strategy strategy_from_string(const char *str)
     return STRAT_BALANCED;
 }
 
+AlgoID algo_from_string(const char *str)
+{
+    if (!str || str[0] == '\0') return ALGO_NONE;
+    if (strcmp(str, "zlib") == 0) return ALGO_ZLIB;
+    if (strcmp(str, "bzip2") == 0) return ALGO_BZIP2;
+    if (strcmp(str, "lzma") == 0) return ALGO_LZMA;
+    if (strcmp(str, "zstd") == 0) return ALGO_ZSTD;
+    if (strcmp(str, "lz4") == 0) return ALGO_LZ4;
+    if (strcmp(str, "snappy") == 0) return ALGO_SNAPPY;
+    return ALGO_NONE;
+}
+
 const CBackend *find_backend_by_name(const char *name)
 {
     if (!name) return NULL;
@@ -106,7 +121,7 @@ const CBackend *find_backend_by_name(const char *name)
 const CBackend *find_backend_by_id(uint8_t id)
 {
     init_backends();
-    if (id < 7) {
+    if (id < BACKEND_ID_MAX) {
         return backend_by_id[id];
     }
     return NULL;
@@ -168,6 +183,13 @@ choose_backend(Strategy strat)
     }
 
     return NULL;
+}
+
+const char *
+get_default_backend_for_strategy(Strategy strat)
+{
+    const CBackend *b = choose_backend(strat);
+    return b ? b->name : NULL;
 }
 
 
@@ -289,7 +311,7 @@ write_memory_to_file(const char *path, const unsigned char *data, size_t size)
 // ---- Public API ----
 
 int compress_file(const char *src_path, const char *dst_path,
-                  const char *algo_name, const char *strategy_name,
+                  AlgoID algo, Strategy strategy,
                   int level)
 {
     init_backends();
@@ -300,16 +322,15 @@ int compress_file(const char *src_path, const char *dst_path,
     FILE *src = NULL;
     FILE *dst = NULL;
 
-    if (algo_name && algo_name[0] != '\0') {
-        backend = find_backend_by_name(algo_name);
+    if (algo != ALGO_NONE) {
+        backend = find_backend_by_id(algo);
         if (!backend) {
             PyErr_SetString(PyExc_ValueError, "Specified compression algorithm not available");
             return_code = -1;
             goto done;
         }
     } else {
-        Strategy strat = strategy_from_string(strategy_name);
-        backend = choose_backend(strat);
+        backend = choose_backend(strategy);
         if (!backend) {
             PyErr_SetString(comp_Error, "No available compression backend found");
             return_code = -1;
@@ -467,7 +488,62 @@ done:
 }
 
 int decompress_file(const char *src_path, const char *dst_path,
-                    const char *algo_name)
+                    AlgoID algo)
+{
+    init_backends();
+    
+    Format format = detect_format_from_path(src_path);
+    if (format == FORMAT_UNKNOWN) {
+        PyErr_SetString(comp_Error, "Unknown or unsupported format");
+        return -1;
+    }
+
+    if (format == FORMAT_GZIP || format == FORMAT_BZIP2 || format == FORMAT_XZ || format == FORMAT_ZSTD || format == FORMAT_LZ4) {
+        const StandaloneFormat *standalone = NULL;
+
+        switch (format) {
+            case FORMAT_GZIP:
+                standalone = get_gzip_format();
+                break;
+            case FORMAT_BZIP2:
+                standalone = get_bzip2_format();
+                break;
+            case FORMAT_XZ:
+                standalone = get_xz_format();
+                break;
+            case FORMAT_ZSTD:
+                standalone = get_zstd_format();
+                break;
+            case FORMAT_LZ4:
+                standalone = get_lz4_format();
+                break;
+            default:
+                break;
+        }
+
+        if (!standalone) {
+            PyErr_SetString(comp_Error, "Standalone format backend not available");
+            return -1;
+        }
+
+        return standalone->decompress_file(src_path, dst_path);
+    }
+
+    if (format_is_archive(format)) {
+        PyErr_SetString(comp_Error, "Use archive decompression API for archive formats");
+        return -1;
+    }
+
+    if (format == FORMAT_COMPRESSO) {
+        return decompress_compresso_file(src_path, dst_path, algo);
+    }
+
+    PyErr_Format(comp_Error, "Unknown or unsupported format: %s", format_name_string(format));
+    return -1;
+}
+
+static int decompress_compresso_file(const char *src_path, const char *dst_path,
+                                    AlgoID algo)
 {
     init_backends();
 
@@ -510,10 +586,10 @@ int decompress_file(const char *src_path, const char *dst_path,
 
     const CBackend *backend = NULL;
 
-    if (algo_name && algo_name[0] != '\0') {
-        backend = find_backend_by_name(algo_name);
+    if (algo != ALGO_NONE) {
+        backend = find_backend_by_id(algo);
         if (!backend) {
-            PyErr_SetString(PyExc_ValueError, "Specified compression algorithm not available");
+            PyErr_SetString(comp_BackendError, "Specified compression algorithm not available");
             return_code = -1;
             goto done;
         }
@@ -656,7 +732,7 @@ int decompress_file(const char *src_path, const char *dst_path,
         size_t output_size = 0;
         if (backend->decompress_buffer(comp_buffer, comp_size,
                                         output_buffer, &output_capacity,
-                                        &output_size) != 0 || output_size != output_capacity) {
+                                        &output_size) != 0 || output_size != (size_t)orig_size) {
             free(comp_buffer);
             free(output_buffer);
             set_backend_error(backend, "decompression", "buffer decompression");

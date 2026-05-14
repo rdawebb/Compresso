@@ -42,7 +42,7 @@ _cap_by_id: Union[Dict[int, BackendCapabilities], None] = None
 def _load_capabilities() -> None:
     """Load capabilities from the compressor module"""
     global _cap_list, _cap_by_name, _cap_by_id
-    raw = _core.get_capabilities()
+    raw: list[tuple[str, int, bool, bool]] = _core.get_capabilities()
     caps: List[BackendCapabilities] = []
     by_name: Dict[str, BackendCapabilities] = {}
     by_id: Dict[int, BackendCapabilities] = {}
@@ -50,7 +50,7 @@ def _load_capabilities() -> None:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name", ""))
+        name = str(object=item.get("name", ""))
         cid = int(item.get("id", -1))
         has_buffer = bool(item.get("has_buffer", False))
         has_stream = bool(item.get("has_stream", False))
@@ -79,7 +79,7 @@ def list_capabilities() -> List[BackendCapabilities]:
     """
     if _cap_list is None:
         _load_capabilities()
-    return _cap_list  # type: ignore[return-value]
+    return _cap_list  # type: ignore[return-value]  # ty:ignore[invalid-return-type]
 
 
 def get_by_name(name: str) -> BackendCapabilities | None:
@@ -93,7 +93,7 @@ def get_by_name(name: str) -> BackendCapabilities | None:
     """
     if _cap_by_name is None:
         _load_capabilities()
-    return _cap_by_name.get(name)  # type: ignore[attr-defined]
+    return _cap_by_name.get(name)  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
 
 
 def get_by_id(cid: int) -> BackendCapabilities | None:
@@ -107,4 +107,4 @@ def get_by_id(cid: int) -> BackendCapabilities | None:
     """
     if _cap_by_id is None:
         _load_capabilities()
-    return _cap_by_id.get(cid)  # type: ignore[attr-defined]
+    return _cap_by_id.get(cid)  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]

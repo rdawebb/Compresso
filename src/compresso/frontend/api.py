@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import Callable, Optional, Union
 
 from .._core import compress_file, decompress_file
-
-from ..backend.capabilities import list_capabilities
+from .._core import get_default_backend_for_strategy as default_backend
 from ..backend.file_inspect import InspectResult
 from ..backend.file_inspect import inspect as inspect_file
 from ..backend.speeds import get_estimated_speeds
@@ -75,36 +74,6 @@ class DecompressionPlan:
     estimated_seconds: Optional[float]
 
 
-def _choose_backend_for_strategy(strategy: str) -> Optional[str]:
-    """Approximate the algo the backend will choose for a given strategy.
-
-    Args:
-        strategy: Compression strategy - "fast", "balanced", or "max_ratio".
-
-    Returns:
-        The chosen backend name, or None if no suitable backend is found.
-    """
-    strategy = (strategy or "balanced").lower()
-    caps = list_capabilities()
-    by_name = {cap.name: cap for cap in caps}
-
-    def first_available(names) -> Optional[str]:
-        for name in names:
-            cap = by_name.get(name)
-            if cap is not None:
-                return name
-        return None
-
-    if strategy == "fast":
-        return first_available(["lz4", "snappy", "zstd", "zlib", "bzip2", "lzma"])
-
-    if strategy == "max_ratio":
-        return first_available(["bzip2", "lzma", "zstd", "zlib", "lz4", "snappy"])
-
-    # Balanced
-    return first_available(["zstd", "zlib", "bzip2", "lzma", "lz4", "snappy"])
-
-
 def plan_compression(
     src: Union[str, Path],
     dest: Optional[Union[str, Path]] = None,
@@ -122,7 +91,7 @@ def plan_compression(
     """
     src_path = Path(src)
     if dest is None:
-        dest_path = src_path.with_suffix(src_path.suffix + ".comp")
+        dest_path: Path = src_path.with_suffix(suffix=src_path.suffix + ".comp")
     else:
         dest_path = Path(dest)
 
@@ -141,12 +110,12 @@ def plan_compression(
             reason_if_unavailable="Source file does not exist or is not a file",
         )
 
-    input_size = src_path.stat().st_size
+    input_size: int = src_path.stat().st_size
 
     if options.algo:
-        backend_name = options.algo.lower()
+        backend_name: str = options.algo.lower()
     else:
-        backend_name = _choose_backend_for_strategy(options.strategy)
+        backend_name: str | None = default_backend(options.strategy or "balanced")
 
     if backend_name is None:
         return CompressionPlan(
@@ -160,8 +129,8 @@ def plan_compression(
             reason_if_unavailable="No suitable backend found for the selected strategy",
         )
 
-    mb_s = get_estimated_speeds(backend_name, operation="compress")
-    estimated_seconds = (input_size / MB) / mb_s if input_size > 0 else 0.0
+    mb_s: int | float = get_estimated_speeds(algo=backend_name, operation="compress")
+    estimated_seconds: int | float = (input_size / MB) / mb_s if input_size > 0 else 0.0
 
     return CompressionPlan(
         src=src_path,
@@ -191,14 +160,14 @@ def plan_decompression(
     src_path = Path(src)
     if dest is None:
         if src_path.suffix:
-            dest_path = src_path.with_suffix("")
+            dest_path: Path = src_path.with_suffix(suffix="")
         else:
-            dest_path = src_path.with_suffix(".out")
+            dest_path: Path = src_path.with_suffix(suffix=".out")
     else:
         dest_path = Path(dest)
 
-    inspection = inspect_file(src_path)
-    est_seconds = inspection.estimated_decomp_s
+    inspection: InspectResult = inspect_file(path=src_path)
+    est_seconds: int | float | None = inspection.estimated_decomp_s
 
     return DecompressionPlan(
         src=src_path,
@@ -231,7 +200,7 @@ class CompressionJob:
 
     def __init__(self, plan: CompressionPlan):
         """Initialise the compression job."""
-        self.plan = plan
+        self.plan: CompressionPlan = plan
 
     @classmethod
     def from_file(
@@ -250,7 +219,7 @@ class CompressionJob:
         Returns:
             CompressionJob: The created compression job.
         """
-        return cls(plan_compression(src, dest, options))
+        return cls(plan=plan_compression(src, dest, options))
 
     def run(self, progress: Optional[ProgressCallback] = None) -> JobResult:
         """Run the compression job.
@@ -270,21 +239,21 @@ class CompressionJob:
                 plan=self.plan,
             )
 
-        total = self.plan.input_size
+        total: int = self.plan.input_size
         try:
             if progress:
                 progress(0.0, 0, total)
 
-            lvl = (
+            lvl: int = (
                 -1 if self.plan.options.level is None else int(self.plan.options.level)
             )
 
             compress_file(
-                str(self.plan.src),
-                str(self.plan.dest),
-                self.plan.backend_name or "",
-                self.plan.options.strategy or "",
-                lvl,
+                input_path=str(object=self.plan.src),
+                output_path=str(object=self.plan.dest),
+                algorithm=self.plan.backend_name or "",
+                strategy=self.plan.options.strategy or "",
+                level=lvl,
             )
 
             if progress:
@@ -308,7 +277,7 @@ class DecompressionJob:
 
     def __init__(self, plan: DecompressionPlan):
         """Initialise the decompression job."""
-        self.plan = plan
+        self.plan: DecompressionPlan = plan
 
     @classmethod
     def from_file(
@@ -323,7 +292,7 @@ class DecompressionJob:
         Returns:
             DecompressionJob: The created decompression job.
         """
-        return cls(plan_decompression(src, dest))
+        return cls(plan=plan_decompression(src, dest))
 
     def run(self, progress: Optional[ProgressCallback] = None) -> JobResult:
         """Run the decompression job.
@@ -334,7 +303,7 @@ class DecompressionJob:
         Returns:
             JobResult: The result of the decompression job.
         """
-        insp = self.plan.inspection
+        insp: InspectResult = self.plan.inspection
 
         if not insp.is_compresso:
             return JobResult(
@@ -363,9 +332,9 @@ class DecompressionJob:
                 progress(0.0, 0, total)
 
             decompress_file(
-                str(self.plan.src),
-                str(self.plan.dest),
-                insp.algo_name or "",
+                input_path=str(object=self.plan.src),
+                output_path=str(object=self.plan.dest),
+                algorithm="",
             )
 
             if progress:

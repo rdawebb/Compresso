@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from typing import Union
+from typing import List, Union
 
 import click
 from typer_extensions import ExtendedTyper
@@ -15,13 +15,17 @@ from ._core import (
     Error,
     HeaderError,
 )
-from .backend.benchmark import benchmark_file, print_results
-from .backend.capabilities import list_capabilities
+from .backend.benchmark import BenchmarkResult, benchmark_file, print_results
+from .backend.capabilities import BackendCapabilities, list_capabilities
+from .backend.file_inspect import InspectResult
 from .backend.file_inspect import inspect as inspect_file
 from .frontend.api import (
     CompressionJob,
     CompressionOptions,
+    CompressionPlan,
     DecompressionJob,
+    DecompressionPlan,
+    JobResult,
 )
 
 app = ExtendedTyper(help="Compresso - Fast file compression and decompression tool")
@@ -39,7 +43,7 @@ def format_size(size_bytes: float) -> str:
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if size_bytes < 1024.0:
             return f"{size_bytes:.2f} {unit}"
-        size_bytes = size_bytes / 1024.0
+        size_bytes: float = size_bytes / 1024.0
     return f"{size_bytes:.2f} PB"
 
 
@@ -57,14 +61,14 @@ def format_time(seconds: float) -> str:
     elif seconds < 60:
         return f"{seconds:.2f}s"
     else:
-        mins = int(seconds // 60)
-        secs = seconds % 60
+        mins: int = int(seconds // 60)
+        secs: float = seconds % 60
         return f"{mins}m {secs:.1f}s"
 
 
 @app.command_with_aliases(aliases=["c", "comp"])
 def compress(
-    file: Path = app.Argument(..., help="File to compress"),
+    file: Path = app.Argument(default=..., help="File to compress"),
     output: Union[Path, None] = app.Option(
         None, "--output", "-o", help="Output file path (default: input.comp)"
     ),
@@ -98,33 +102,37 @@ def compress(
         quiet: If True, suppress all output (default: False).
     """
     try:
-        algo_lower = algo.lower() if algo else None
+        algo_lower: str | None = algo.lower() if algo else None
         options = CompressionOptions(
             algo=None if algo_lower == "auto" else algo_lower,
             strategy=strategy.lower(),
             level=level,
         )
 
-        job = CompressionJob.from_file(file, output, options)
-        plan = job.plan
+        job: CompressionJob = CompressionJob.from_file(
+            src=file, dest=output, options=options
+        )
+        plan: CompressionPlan = job.plan
 
         if not plan.can_compress:
             app.echo(
-                app.style(f"✗ Error: {plan.reason_if_unavailable}", fg="red"),
+                message=app.style(
+                    text=f"✗ Error: {plan.reason_if_unavailable}", fg="red"
+                ),
                 err=True,
             )
             sys.exit(1)
 
         if not quiet:
-            app.echo(f"Compressing: {plan.src}")
-            app.echo(f"Output:      {plan.dest}")
-            app.echo(f"Algorithm:   {plan.backend_name}")
-            app.echo(f"Strategy:    {strategy}")
+            app.echo(message=f"Compressing: {plan.src}")
+            app.echo(message=f"Output:      {plan.dest}")
+            app.echo(message=f"Algorithm:   {plan.backend_name}")
+            app.echo(message=f"Strategy:    {strategy}")
             if level is not None:
-                app.echo(f"Level:       {level}")
+                app.echo(message=f"Level:       {level}")
             app.echo()
 
-        start_time = time.time()
+        start_time: float = time.time()
 
         if not quiet and plan.input_size > 1024 * 1024:
             with click.progressbar(
@@ -135,42 +143,55 @@ def compress(
             ) as bar:
 
                 def progress_callback(fraction, current, total):
-                    bar.update(current - bar.pos)
+                    bar.update(n_steps=current - bar.pos)
 
-                result = job.run(progress=progress_callback)
+                result: JobResult = job.run(progress=progress_callback)
         else:
-            result = job.run()
+            result: JobResult = job.run()
 
-        elapsed = time.time() - start_time
+        elapsed: float = time.time() - start_time
 
         if not result.ok:
             app.echo(
-                app.style(f"\n✗ Compression failed: {result.error}", fg="red"), err=True
+                message=app.style(
+                    text=f"\n✗ Compression failed: {result.error}", fg="red"
+                ),
+                err=True,
             )
             sys.exit(1)
 
-        compressed_size = plan.dest.stat().st_size
-        ratio = (compressed_size / plan.input_size) * 100 if plan.input_size > 0 else 0
-        speed_mbs = (plan.input_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+        compressed_size: int = plan.dest.stat().st_size
+        ratio: int | float = (
+            (compressed_size / plan.input_size) * 100 if plan.input_size > 0 else 0
+        )
+        speed_mbs: int | float = (
+            (plan.input_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+        )
 
         if not quiet:
             app.echo()
-            app.echo(app.style("✓ Compression successful!", fg="green"))
-            app.echo(f"  Original size:   {format_size(plan.input_size)}")
-            app.echo(f"  Compressed size: {format_size(compressed_size)}")
-            app.echo(f"  Ratio:           {ratio:.1f}% of original")
-            app.echo(f"  Time:            {format_time(elapsed)}")
-            app.echo(f"  Speed:           {speed_mbs:.2f} MB/s")
+            app.echo(message=app.style(text="✓ Compression successful!", fg="green"))
             app.echo(
-                f"  Saved:           {format_size(plan.input_size - compressed_size)}"
+                message=f"  Original size:   {format_size(size_bytes=plan.input_size)}"
+            )
+            app.echo(
+                message=f"  Compressed size: {format_size(size_bytes=compressed_size)}"
+            )
+            app.echo(message=f"  Ratio:           {ratio:.1f}% of original")
+            app.echo(message=f"  Time:            {format_time(seconds=elapsed)}")
+            app.echo(message=f"  Speed:           {speed_mbs:.2f} MB/s")
+            app.echo(
+                message=f"  Saved:           {format_size(size_bytes=plan.input_size - compressed_size)}"
             )
             app.echo()
 
     except (Error, HeaderError, BackendError) as e:
-        app.echo(app.style(f"✗ Compression error: {e}", fg="red"), err=True)
+        app.echo(
+            message=app.style(text=f"✗ Compression error: {e}", fg="red"), err=True
+        )
         sys.exit(1)
     except Exception as e:
-        app.echo(app.style(f"✗ Unexpected error: {e}", fg="red"), err=True)
+        app.echo(message=app.style(text=f"✗ Unexpected error: {e}", fg="red"), err=True)
         sys.exit(1)
 
 
@@ -193,14 +214,14 @@ def decompress(
         quiet: If True, suppress progress output.
     """
     try:
-        job = DecompressionJob.from_file(file, output)
-        plan = job.plan
-        insp = plan.inspection
+        job: DecompressionJob = DecompressionJob.from_file(src=file, dest=output)
+        plan: DecompressionPlan = job.plan
+        insp: InspectResult = plan.inspection
 
         if not insp.is_compresso:
             app.echo(
-                app.style(
-                    f"✗ Error: Not a valid Compresso file\n  Reason: {insp.reason}",
+                message=app.style(
+                    text=f"✗ Error: Not a valid Compresso file\n  Reason: {insp.reason}",
                     fg="red",
                 ),
                 err=True,
@@ -209,8 +230,8 @@ def decompress(
 
         if not insp.header_ok:
             app.echo(
-                app.style(
-                    f"✗ Error: Invalid file header\n  Reason: {insp.reason}",
+                message=app.style(
+                    text=f"✗ Error: Invalid file header\n  Reason: {insp.reason}",
                     fg="red",
                 ),
                 err=True,
@@ -219,8 +240,8 @@ def decompress(
 
         if not insp.can_decompress:
             app.echo(
-                app.style(
-                    f"✗ Error: Cannot decompress file\n  Reason: {insp.reason}",
+                message=app.style(
+                    text=f"✗ Error: Cannot decompress file\n  Reason: {insp.reason}",
                     fg="red",
                 ),
                 err=True,
@@ -228,14 +249,16 @@ def decompress(
             sys.exit(1)
 
         if not quiet:
-            app.echo(f"Decompressing: {plan.src}")
-            app.echo(f"Output:        {plan.dest}")
-            app.echo(f"Algorithm:     {insp.algo_name}")
+            app.echo(message=f"Decompressing: {plan.src}")
+            app.echo(message=f"Output:        {plan.dest}")
+            app.echo(message=f"Algorithm:     {insp.algo_name}")
             if insp.orig_size:
-                app.echo(f"Original size: {format_size(insp.orig_size)}")
+                app.echo(
+                    message=f"Original size: {format_size(size_bytes=insp.orig_size)}"
+                )
             app.echo()
 
-        start_time = time.time()
+        start_time: float = time.time()
 
         if not quiet and insp.orig_size and insp.orig_size > 1024 * 1024:
             with click.progressbar(
@@ -246,39 +269,49 @@ def decompress(
             ) as bar:
 
                 def progress_callback(fraction, current, total):
-                    bar.update(current - bar.pos)
+                    bar.update(n_steps=current - bar.pos)
 
-                result = job.run(progress=progress_callback)
+                result: JobResult = job.run(progress=progress_callback)
         else:
-            result = job.run()
+            result: JobResult = job.run()
 
-        elapsed = time.time() - start_time
+        elapsed: float = time.time() - start_time
 
         if not result.ok:
             app.echo(
-                app.style(f"\n✗ Decompression failed: {result.error}", fg="red"),
+                message=app.style(
+                    text=f"\n✗ Decompression failed: {result.error}", fg="red"
+                ),
                 err=True,
             )
             sys.exit(1)
 
-        decompressed_size = plan.dest.stat().st_size
-        compressed_size = plan.src.stat().st_size
-        speed_mbs = (decompressed_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+        decompressed_size: int = plan.dest.stat().st_size
+        compressed_size: int = plan.src.stat().st_size
+        speed_mbs: int | float = (
+            (decompressed_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+        )
 
         if not quiet:
             app.echo()
-            app.echo(app.style("✓ Decompression successful!", fg="green"))
-            app.echo(f"  Compressed size:   {format_size(compressed_size)}")
-            app.echo(f"  Decompressed size: {format_size(decompressed_size)}")
-            app.echo(f"  Time:              {format_time(elapsed)}")
-            app.echo(f"  Speed:             {speed_mbs:.2f} MB/s")
+            app.echo(message=app.style(text="✓ Decompression successful!", fg="green"))
+            app.echo(
+                message=f"  Compressed size:   {format_size(size_bytes=compressed_size)}"
+            )
+            app.echo(
+                message=f"  Decompressed size: {format_size(size_bytes=decompressed_size)}"
+            )
+            app.echo(message=f"  Time:              {format_time(seconds=elapsed)}")
+            app.echo(message=f"  Speed:             {speed_mbs:.2f} MB/s")
             app.echo()
 
     except (Error, HeaderError, BackendError) as e:
-        app.echo(app.style(f"✗ Decompression error: {e}", fg="red"), err=True)
+        app.echo(
+            message=app.style(text=f"✗ Decompression error: {e}", fg="red"), err=True
+        )
         sys.exit(1)
     except Exception as e:
-        app.echo(app.style(f"✗ Unexpected error: {e}", fg="red"), err=True)
+        app.echo(message=app.style(text=f"✗ Unexpected error: {e}", fg="red"), err=True)
         sys.exit(1)
 
 
@@ -294,13 +327,13 @@ def inspect(
         output_json: If True, output metadata in JSON format.
     """
     try:
-        result = inspect_file(file)
+        result: InspectResult = inspect_file(path=file)
 
         if output_json:
             import json
 
-            data = {
-                "path": str(result.path),
+            data: dict[str, str | int | None | float] = {
+                "path": str(object=result.path),
                 "is_compresso": result.is_compresso,
                 "header_ok": result.header_ok,
                 "version": result.version,
@@ -315,61 +348,73 @@ def inspect(
                 "estimated_decomp_s": result.estimated_decomp_s,
                 "reason": result.reason,
             }
-            app.echo(json.dumps(data, indent=2))
+            app.echo(message=json.dumps(obj=data, indent=2))
             return
 
-        app.echo(f"File: {result.path}")
+        app.echo(message=f"File: {result.path}")
         app.echo()
 
         if not result.is_compresso:
-            app.echo(app.style("✗ Not a valid Compresso file", fg="red"))
+            app.echo(message=app.style(text="✗ Not a valid Compresso file", fg="red"))
             if result.reason:
-                app.echo(f"  Reason: {result.reason}")
+                app.echo(message=f"  Reason: {result.reason}")
             sys.exit(1)
 
         if not result.header_ok:
-            app.echo(app.style("✗ Invalid file header", fg="yellow"))
+            app.echo(message=app.style(text="✗ Invalid file header", fg="yellow"))
             if result.reason:
-                app.echo(f"  Reason: {result.reason}")
+                app.echo(message=f"  Reason: {result.reason}")
             sys.exit(1)
 
-        app.echo(app.style("✓ Valid Compresso file", fg="green"))
+        app.echo(message=app.style(text="✓ Valid Compresso file", fg="green"))
         app.echo()
         app.echo(
-            f"Algorithm:       {result.algo_name or 'Unknown'} (ID: {result.algo_id})"
+            message=f"Algorithm:       {result.algo_name or 'Unknown'} (ID: {result.algo_id})"
         )
-        app.echo(f"Version:         {result.version}")
+        app.echo(message=f"Version:         {result.version}")
         app.echo()
 
         if result.level is not None:
-            app.echo(f"Level:           {result.level}")
+            app.echo(message=f"Level:           {result.level}")
         else:
-            app.echo("Level:           auto")
+            app.echo(message="Level:           auto")
 
         if result.orig_size:
-            app.echo(f"Original size:   {format_size(result.orig_size)}")
+            app.echo(
+                message=f"Original size:   {format_size(size_bytes=result.orig_size)}"
+            )
 
-        compressed_size = file.stat().st_size
-        app.echo(f"Compressed size: {format_size(compressed_size)}")
+        compressed_size: int = file.stat().st_size
+        app.echo(message=f"Compressed size: {format_size(size_bytes=compressed_size)}")
 
         if result.orig_size:
-            ratio = (compressed_size / result.orig_size) * 100
-            app.echo(f"Compression:     {ratio:.1f}% of original")
+            ratio: int | float = (compressed_size / result.orig_size) * 100
+            app.echo(message=f"Compression:     {ratio:.1f}% of original")
 
         app.echo()
-        app.echo(f"Backend available:  {'Yes' if result.backend_available else 'No'}")
-        app.echo(f"Streaming support:  {'Yes' if result.has_streaming else 'No'}")
-        app.echo(f"Can decompress:     {'Yes' if result.can_decompress else 'No'}")
+        app.echo(
+            message=f"Backend available:  {'Yes' if result.backend_available else 'No'}"
+        )
+        app.echo(
+            message=f"Streaming support:  {'Yes' if result.has_streaming else 'No'}"
+        )
+        app.echo(
+            message=f"Can decompress:     {'Yes' if result.can_decompress else 'No'}"
+        )
 
         if result.estimated_decomp_s:
-            app.echo(f"Est. decomp time:   {format_time(result.estimated_decomp_s)}")
+            app.echo(
+                message=f"Est. decomp time:   {format_time(seconds=result.estimated_decomp_s)}"
+            )
 
         if not result.can_decompress and result.reason:
             app.echo()
-            app.echo(app.style(f"⚠ {result.reason}", fg="yellow"))
+            app.echo(message=app.style(text=f"⚠ {result.reason}", fg="yellow"))
 
     except Exception as e:
-        app.echo(app.style(f"✗ Error inspecting file: {e}", fg="red"), err=True)
+        app.echo(
+            message=app.style(text=f"✗ Error inspecting file: {e}", fg="red"), err=True
+        )
         sys.exit(1)
 
 
@@ -409,19 +454,21 @@ def benchmark(
         update_cache: If True, update the speed estimates cache with benchmark results (default: False).
     """
     try:
-        algo_list = None
+        algo_list: List[str] = []
         if algos:
-            algo_list = [a.strip() for a in algos.split(",") if a.strip()]
+            algo_list: List[str] = [a.strip() for a in algos.split(",") if a.strip()]
 
-        strategy_list = None
+        strategy_list: List[str] = []
         if strategies:
-            strategy_list = [s.strip() for s in strategies.split(",") if s.strip()]
+            strategy_list: List[str] = [
+                s.strip() for s in strategies.split(",") if s.strip()
+            ]
 
-        level_list = None
+        level_list: List[Union[int, None]] = []
         if levels:
-            level_list = []
-            for level in levels.split(","):
-                level = level.strip()
+            level_list: List[Union[int, None]] = []
+            for level in levels.split(sep=","):
+                level: str = level.strip()
                 if not level:
                     continue
                 if level.lower() in ("auto", "default"):
@@ -431,29 +478,30 @@ def benchmark(
                         level_list.append(int(level))
                     except ValueError:
                         app.echo(
-                            app.style(
-                                f"✗ Invalid level: {level}. Use integers 0-9 or 'auto'",
+                            message=app.style(
+                                text=f"✗ Invalid level: {level}. Use integers 0-9 or 'auto'",
                                 fg="red",
                             ),
                             err=True,
                         )
                         sys.exit(1)
 
-        app.echo(f"Running benchmarks on: {file}")
-        app.echo(f"Repeats: {repeats}")
+        app.echo(message=f"Running benchmarks on: {file}")
+        app.echo(message=f"Repeats: {repeats}")
         if algo_list:
-            app.echo(f"Algorithms: {', '.join(algo_list)}")
+            app.echo(message=f"Algorithms: {', '.join(algo_list)}")
         if strategy_list:
-            app.echo(f"Strategies: {', '.join(strategy_list)}")
+            app.echo(message=f"Strategies: {', '.join(strategy_list)}")
         if level_list is not None:
-            level_str = ", ".join(
-                str(level) if level is not None else "auto" for level in level_list
+            level_str: str = ", ".join(
+                str(object=level) if level is not None else "auto"
+                for level in level_list
             )
-            app.echo(f"Levels: {level_str}")
+            app.echo(message=f"Levels: {level_str}")
         app.echo()
 
-        results = benchmark_file(
-            file,
+        results: List[BenchmarkResult] = benchmark_file(
+            src=file,
             algos=algo_list,
             strategies=strategy_list,
             levels=level_list,
@@ -463,21 +511,24 @@ def benchmark(
         )
 
         if not results:
-            app.echo(app.style("✗ No benchmark results generated", fg="red"), err=True)
+            app.echo(
+                message=app.style(text="✗ No benchmark results generated", fg="red"),
+                err=True,
+            )
             sys.exit(1)
 
         print_results(results)
 
         if update_cache:
             app.echo()
-            app.echo(app.style("✓ Speed cache updated", fg="green"))
+            app.echo(message=app.style(text="✓ Speed cache updated", fg="green"))
             app.echo()
 
     except FileNotFoundError as e:
-        app.echo(app.style(f"✗ File not found: {e}", fg="red"), err=True)
+        app.echo(message=app.style(text=f"✗ File not found: {e}", fg="red"), err=True)
         sys.exit(1)
     except Exception as e:
-        app.echo(app.style(f"✗ Benchmark error: {e}", fg="red"), err=True)
+        app.echo(message=app.style(text=f"✗ Benchmark error: {e}", fg="red"), err=True)
         sys.exit(1)
 
 
@@ -485,24 +536,37 @@ def benchmark(
 def list():
     """List all available compression algorithms."""
     try:
-        caps = list_capabilities()
+        caps: List[BackendCapabilities] = list_capabilities()
 
         if not caps:
-            app.echo(app.style("✗ No compression backends available", fg="red"))
+            app.echo(
+                message=app.style(text="✗ No compression backends available", fg="red")
+            )
             sys.exit(1)
 
-        app.echo(f"Available compression algorithms: {len(caps)}")
+        app.echo(message=f"Available compression algorithms: {len(caps)}")
         app.echo()
 
         for cap in caps:
-            app.echo(app.style(f"● {cap.name}", fg="green", bold=True))
-            app.echo(f"  ID:              {cap.id}")
-            app.echo(f"  Buffer mode:     {'Yes' if cap.has_buffer else 'No'}")
-            app.echo(f"  Streaming mode:  {'Yes' if cap.has_stream else 'No'}")
+            app.echo(message=app.style(text=f"● {cap.name}", fg="green", bold=True))
+            app.echo(message=app.style(text=f"  ID:              {cap.id}"))
+            app.echo(
+                message=app.style(
+                    text=f"  Buffer mode:     {'Yes' if cap.has_buffer else 'No'}"
+                )
+            )
+            app.echo(
+                message=app.style(
+                    text=f"  Streaming mode:  {'Yes' if cap.has_stream else 'No'}"
+                )
+            )
             app.echo()
 
     except Exception as e:
-        app.echo(app.style(f"✗ Error listing algorithms: {e}", fg="red"), err=True)
+        app.echo(
+            message=app.style(text=f"✗ Error listing algorithms: {e}", fg="red"),
+            err=True,
+        )
         sys.exit(1)
 
 

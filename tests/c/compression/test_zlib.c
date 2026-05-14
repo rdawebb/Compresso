@@ -20,7 +20,7 @@ static unsigned char* read_file(const char *filename, size_t *out_size) {
     size_t size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    unsigned char *buffer = malloc(size);
+    unsigned char *buffer = safe_malloc(size);
     if (!buffer) {
         fclose(f);
         return NULL;
@@ -77,7 +77,7 @@ void test_zlib_compress_small_file(void) {
 
     // Compress
     size_t output_capacity = file_size * 2;
-    unsigned char *compressed = malloc(output_capacity);
+    unsigned char *compressed = safe_malloc(output_capacity);
     size_t compressed_size = 0;
 
     int result = backend->compress_buffer(
@@ -108,7 +108,7 @@ void test_zlib_decompress_file_roundtrip(void) {
 
     // Compress
     size_t compressed_capacity = original_size * 2;
-    unsigned char *compressed = malloc(compressed_capacity);
+    unsigned char *compressed = safe_malloc(compressed_capacity);
     size_t compressed_size = 0;
 
     backend->compress_buffer(
@@ -122,7 +122,7 @@ void test_zlib_decompress_file_roundtrip(void) {
 
     // Decompress
     size_t decompressed_capacity = original_size;
-    unsigned char *decompressed = malloc(decompressed_capacity);
+    unsigned char *decompressed = safe_malloc(decompressed_capacity);
     size_t decompressed_size = 0;
 
     int result = backend->decompress_buffer(
@@ -147,7 +147,7 @@ void test_zlib_round_trip_large_file(void) {
 
     // Create large test data
     size_t data_size = 100000;
-    unsigned char *original = malloc(data_size);
+    unsigned char *original = safe_malloc(data_size);
     TEST_ASSERT_NOT_NULL(original);
 
     // Fill with pattern
@@ -159,7 +159,7 @@ void test_zlib_round_trip_large_file(void) {
 
     // Compress
     size_t compressed_capacity = data_size * 2;
-    unsigned char *compressed = malloc(compressed_capacity);
+    unsigned char *compressed = safe_malloc(compressed_capacity);
     size_t compressed_size = 0;
 
     backend->compress_buffer(
@@ -173,7 +173,7 @@ void test_zlib_round_trip_large_file(void) {
 
     // Decompress
     size_t decompressed_capacity = data_size;
-    unsigned char *decompressed = malloc(decompressed_capacity);
+    unsigned char *decompressed = safe_malloc(decompressed_capacity);
     size_t decompressed_size = 0;
 
     backend->decompress_buffer(
@@ -200,7 +200,7 @@ void test_zlib_different_compression_levels(void) {
     TEST_ASSERT_NOT_NULL(file_data);
 
     size_t output_capacity = file_size * 2;
-    unsigned char *output = malloc(output_capacity);
+    unsigned char *output = safe_malloc(output_capacity);
 
     // Test level 1 (fast)
     size_t cap1 = output_capacity;

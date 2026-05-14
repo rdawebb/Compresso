@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
-#include "archive.h"
+#include "archives.h"
 
 
 // ---- Magic Byte Constants ----
@@ -288,6 +288,49 @@ Format format_get_compression(Format format)
         case FORMAT_TAR_LZ4:  return FORMAT_LZ4;
         default:              return FORMAT_UNKNOWN;
     }
+}
+
+const char* format_name_string(Format format)
+{
+    switch (format) {
+        case FORMAT_COMPRESSO: return "compresso";
+        case FORMAT_GZIP:      return "gzip";
+        case FORMAT_BZIP2:     return "bzip2";
+        case FORMAT_XZ:        return "xz";
+        case FORMAT_ZSTD:      return "zstd";
+        case FORMAT_LZ4:       return "lz4";
+        case FORMAT_ZIP:       return "zip";
+        case FORMAT_7Z:        return "7z";
+        case FORMAT_TAR:       return "tar";
+        case FORMAT_TAR_GZ:    return "tar.gz";
+        case FORMAT_TAR_BZ2:   return "tar.bz2";
+        case FORMAT_TAR_XZ:    return "tar.xz";
+        case FORMAT_TAR_ZST:   return "tar.zst";
+        case FORMAT_TAR_LZ4:   return "tar.lz4";
+        default:               return "unknown";
+    }
+}
+
+Format format_from_name(const char *name)
+{
+    if (!name) return FORMAT_UNKNOWN;
+
+    if (strcmp(name, "compresso") == 0) return FORMAT_COMPRESSO;
+    if (strcmp(name, "gzip") == 0 || strcmp(name, "gz") == 0) return FORMAT_GZIP;
+    if (strcmp(name, "bzip2") == 0 || strcmp(name, "bz2") == 0) return FORMAT_BZIP2;
+    if (strcmp(name, "xz") == 0 || strcmp(name, "lzma") == 0) return FORMAT_XZ;
+    if (strcmp(name, "zstd") == 0 || strcmp(name, "zst") == 0) return FORMAT_ZSTD;
+    if (strcmp(name, "lz4") == 0) return FORMAT_LZ4;
+    if (strcmp(name, "zip") == 0) return FORMAT_ZIP;
+    if (strcmp(name, "7z") == 0) return FORMAT_7Z;
+    if (strcmp(name, "tar") == 0) return FORMAT_TAR;
+    if (strcmp(name, "tar.gz") == 0 || strcmp(name, "tgz") == 0) return FORMAT_TAR_GZ;
+    if (strcmp(name, "tar.bz2") == 0 || strcmp(name, "tbz2") == 0) return FORMAT_TAR_BZ2;
+    if (strcmp(name, "tar.xz") == 0 || strcmp(name, "txz") == 0) return FORMAT_TAR_XZ;
+    if (strcmp(name, "tar.zst") == 0 || strcmp(name, "tzst") == 0) return FORMAT_TAR_ZST;
+    if (strcmp(name, "tar.lz4") == 0 || strcmp(name, "tlz4") == 0) return FORMAT_TAR_LZ4;
+
+    return FORMAT_UNKNOWN;
 }
 
 

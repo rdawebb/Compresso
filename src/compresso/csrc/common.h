@@ -6,7 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include "archive.h"
+#include "archives.h"
+#include "standalone.h"
 
 
 // ---- Header ----
@@ -84,6 +85,7 @@ extern PyObject *comp_BackendError;
 // ---- Helpers ----
 
 Strategy strategy_from_string(const char *str);
+AlgoID algo_from_string(const char *str);
 
 const CBackend *find_backend_by_name(const char *name);
 const CBackend *find_backend_by_id(uint8_t id);
@@ -128,11 +130,13 @@ static inline void* safe_malloc(size_t size) {
 // ---- Public API ----
 
 int compress_file(const char *src_path, const char *dst_path,
-                  const char *algo_name, const char *strategy_name,
+                  AlgoID algo, Strategy strategy,
                   int level);
 
 int decompress_file(const char *src_path, const char *dst_path,
-                    const char *algo_name);
+                    AlgoID algo);
+
+const char *get_default_backend_for_strategy(Strategy strat);
 
 
 #endif // COMMON_H

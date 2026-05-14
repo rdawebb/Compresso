@@ -1,5 +1,5 @@
 #include "unity.h"
-#include "../../src/compresso/csrc/archive.h"
+#include "../../src/compresso/csrc/archives.h"
 #include <string.h>
 
 // Forward declaration of the function we're testing

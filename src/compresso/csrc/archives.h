@@ -31,12 +31,6 @@ typedef struct {
 } ArchiveEntry;
 
 
-ArchiveEntry* archive_entry_new(void);
-void archive_entry_free(ArchiveEntry *entry);
-void archive_entry_set_path(ArchiveEntry *entry, const char *path);
-void archive_entry_set_symlink_target(ArchiveEntry *entry, const char *target);
-
-
 // ---- Archive Backend Interface ----
 
 typedef struct CArchive {
@@ -120,6 +114,9 @@ int format_is_combined(Format format);
 
 Format format_get_archive(Format format);
 Format format_get_compression(Format format);
+
+const char* format_name_string(Format format);
+Format format_from_name(const char *name);
 
 
 // ---- Operation Modes ----

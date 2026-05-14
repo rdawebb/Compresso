@@ -56,7 +56,7 @@ def _load_raw() -> Dict[str, AlgoSpeeds]:
         return {}
 
     try:
-        data = json.loads(_SPEEDS_FILE.read_text("utf-8"))
+        data = json.loads(s=_SPEEDS_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -84,7 +84,7 @@ def _save_raw(entries: Dict[str, AlgoSpeeds]) -> None:
     if not _CONFIG_DIR.exists():
         _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    data = {
+    data: dict[str, dict[str, int | float]] = {
         algo: {
             "comp_mb_s": entry.comp_mb_s,
             "decomp_mb_s": entry.decomp_mb_s,
@@ -93,7 +93,7 @@ def _save_raw(entries: Dict[str, AlgoSpeeds]) -> None:
         for algo, entry in entries.items()
     }
 
-    _SPEEDS_FILE.write_text(json.dumps(data, indent=4), "utf-8")
+    _SPEEDS_FILE.write_text(data=json.dumps(obj=data, indent=4), encoding="utf-8")
 
 
 def update_from_benchmarks(results: Iterable[object]) -> None:
@@ -102,11 +102,11 @@ def update_from_benchmarks(results: Iterable[object]) -> None:
     Args:
         results: An iterable of benchmark result objects. Each object should have 'algo', 'comp_mb_s', and 'decomp_mb_s' attributes.
     """
-    existing = _load_raw()
+    existing: dict[str, AlgoSpeeds] = _load_raw()
 
     accumulated: Dict[str, dict] = {}
     for result in results:
-        algo = getattr(result, "algo", None)
+        algo: str | None = getattr(result, "algo", None)
         if not algo:
             continue
         comp = float(getattr(result, "comp_mb_s", None) or 0.0)
@@ -115,7 +115,7 @@ def update_from_benchmarks(results: Iterable[object]) -> None:
         if comp <= 0.0 or decomp <= 0.0:
             continue
 
-        agg = accumulated.setdefault(
+        agg: dict[str, float | int] = accumulated.setdefault(
             algo, {"comp_sum": 0.0, "decomp_sum": 0.0, "count": 0}
         )
         agg["comp_sum"] += comp
@@ -126,11 +126,11 @@ def update_from_benchmarks(results: Iterable[object]) -> None:
         return
 
     for algo, stats in accumulated.items():
-        new_count = stats["count"]
-        new_comp_avg = stats["comp_sum"] / new_count
-        new_decomp_avg = stats["decomp_sum"] / new_count
+        new_count: int = stats["count"]
+        new_comp_avg: float = stats["comp_sum"] / new_count
+        new_decomp_avg: float = stats["decomp_sum"] / new_count
 
-        old = existing.get(algo)
+        old: AlgoSpeeds | None = existing.get(algo)
         if old is None or old.samples <= 0:
             existing[algo] = AlgoSpeeds(
                 algo=algo,
@@ -139,11 +139,11 @@ def update_from_benchmarks(results: Iterable[object]) -> None:
                 samples=new_count,
             )
         else:
-            total_samples = old.samples + new_count
-            combined_comp = (
+            total_samples: int = old.samples + new_count
+            combined_comp: float = (
                 old.comp_mb_s * old.samples + new_comp_avg * new_count
             ) / total_samples
-            combined_decomp = (
+            combined_decomp: float = (
                 old.decomp_mb_s * old.samples + new_decomp_avg * new_count
             ) / total_samples
             existing[algo] = AlgoSpeeds(
@@ -153,7 +153,7 @@ def update_from_benchmarks(results: Iterable[object]) -> None:
                 samples=total_samples,
             )
 
-    _save_raw(existing)
+    _save_raw(entries=existing)
 
 
 def get_estimated_speeds(algo: str, *, operation: str = "decompress") -> float:
@@ -166,11 +166,11 @@ def get_estimated_speeds(algo: str, *, operation: str = "decompress") -> float:
     Returns:
         The estimated speed in MB/s for the specified algorithm and operation.
     """
-    algo = algo.lower()
-    db = _load_raw()
+    algo: str = algo.lower()
+    db: dict[str, AlgoSpeeds] = _load_raw()
 
     if algo in db:
-        entry = db[algo]
+        entry: AlgoSpeeds = db[algo]
         if operation == "compress":
             if entry.comp_mb_s > 0.0:
                 return entry.comp_mb_s

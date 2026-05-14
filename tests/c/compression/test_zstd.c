@@ -20,7 +20,7 @@ static unsigned char* read_file(const char *filename, size_t *out_size) {
     size_t size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    unsigned char *buffer = malloc(size);
+    unsigned char *buffer = safe_malloc(size);
     if (!buffer) {
         fclose(f);
         return NULL;
@@ -85,7 +85,7 @@ void test_zstd_compress_file_basic(void) {
     TEST_ASSERT_GREATER_THAN(0, file_size);
 
     size_t output_capacity = file_size * 2;
-    unsigned char *output = malloc(output_capacity);
+    unsigned char *output = safe_malloc(output_capacity);
     size_t output_size = 0;
 
     int result = backend->compress_buffer(
@@ -117,7 +117,7 @@ void test_zstd_file_round_trip(void) {
 
     // Compress
     size_t compressed_capacity = original_size * 2;
-    unsigned char *compressed = malloc(compressed_capacity);
+    unsigned char *compressed = safe_malloc(compressed_capacity);
     size_t compressed_size = 0;
 
     backend->compress_buffer(
@@ -130,7 +130,7 @@ void test_zstd_file_round_trip(void) {
     );
 
     // Decompress
-    unsigned char *decompressed = malloc(original_size);
+    unsigned char *decompressed = safe_malloc(original_size);
     size_t decompressed_capacity = original_size;
     size_t decompressed_size = 0;
 
@@ -158,13 +158,13 @@ void test_zstd_fast_compression(void) {
     }
 
     size_t input_size = 5000;
-    unsigned char *data = malloc(input_size);
+    unsigned char *data = safe_malloc(input_size);
     for (size_t i = 0; i < input_size; i++) {
         data[i] = (unsigned char)(i % 256);
     }
 
     size_t output_capacity = input_size * 2;
-    unsigned char *output = malloc(output_capacity);
+    unsigned char *output = safe_malloc(output_capacity);
     size_t output_size = 0;
 
     // Level 1 is very fast
@@ -192,11 +192,11 @@ void test_zstd_compression_levels(void) {
 
     // Create compressible data
     size_t input_size = 10000;
-    unsigned char *data = malloc(input_size);
+    unsigned char *data = safe_malloc(input_size);
     memset(data, 'B', input_size);
 
     size_t output_capacity = input_size * 2;
-    unsigned char *output = malloc(output_capacity);
+    unsigned char *output = safe_malloc(output_capacity);
 
     // Test level 1 (fast)
     size_t size_level1 = 0;
@@ -221,20 +221,20 @@ void test_zstd_binary_data_roundtrip(void) {
     }
 
     size_t input_size = 5000;
-    unsigned char *data = malloc(input_size);
+    unsigned char *data = safe_malloc(input_size);
     for (size_t i = 0; i < input_size; i++) {
         data[i] = (unsigned char)(i * 137 % 256);  // Pseudo-random
     }
 
     // Compress
     size_t compressed_capacity = input_size * 2;
-    unsigned char *compressed = malloc(compressed_capacity);
+    unsigned char *compressed = safe_malloc(compressed_capacity);
     size_t compressed_size = 0;
 
     backend->compress_buffer(data, input_size, compressed, &compressed_capacity, 5, &compressed_size);
 
     // Decompress
-    unsigned char *decompressed = malloc(input_size);
+    unsigned char *decompressed = safe_malloc(input_size);
     size_t decompressed_capacity = input_size;
     size_t decompressed_size = 0;
 
