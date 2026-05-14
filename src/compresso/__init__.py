@@ -13,7 +13,7 @@ from .frontend.api import (
     DecompressionPlan,
 )
 
-__all__ = [
+__all__: list[str] = [
     "compress_file",
     "decompress_file",
     "Error",

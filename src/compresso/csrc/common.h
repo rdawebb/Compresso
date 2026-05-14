@@ -75,6 +75,26 @@ typedef enum {
 } Strategy;
 
 
+// ---- Backend Getters ----
+
+const CBackend *get_zlib_backend(void);
+const CBackend *get_bzip2_backend(void);
+const CBackend *get_lzma_backend(void);
+const CBackend *get_zstd_backend(void);
+const CBackend *get_lz4_backend(void);
+const CBackend *get_snappy_backend(void);
+
+
+// ---- Snappy Helper ----
+
+size_t snappy_decompressed_size(const unsigned char *input, size_t input_size);
+
+
+// ---- Internal Helper ----
+
+const CBackend *choose_backend(Strategy strat);
+
+
 // ---- Exception Objects ----
 
 extern PyObject *comp_Error;

@@ -116,15 +116,21 @@ py_create_archive(PyObject *self __attribute__((unused)), PyObject *args, PyObje
     static char *kwlist[] = {"output_path", "format", "input_paths", "compression_level", NULL};
 
     const char *output_path = NULL;
-    Format format = FORMAT_UNKNOWN;
+    const char *format_name = NULL;
     PyObject *input_paths_obj = NULL;
     int compression_level = -1;
 
     if (!PyArg_ParseTupleAndKeywords(args, kwargs , "ssO|i", kwlist,
-                                     &output_path, &format, &input_paths_obj,
+                                     &output_path, &format_name, &input_paths_obj,
                                      &compression_level))
     {
         return NULL; // Error already set
+    }
+
+    Format format = format_from_name(format_name);
+    if (format == FORMAT_UNKNOWN) {
+        PyErr_Format(PyExc_ValueError, "Unknown archive format: %s", format_name);
+        return NULL;
     }
 
     if (!PyList_Check(input_paths_obj)) {
@@ -226,18 +232,24 @@ py_compress_standalone(PyObject *self __attribute__((unused)), PyObject *args, P
 
     const char *input_path = NULL;
     const char *output_path = NULL;
-    Format format = FORMAT_UNKNOWN;
+    const char *format_name = NULL;
     int compression_level = -1;
 
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sss|i", kwlist,
-                                     &input_path, &output_path, &format, &compression_level))
+                                     &input_path, &output_path, &format_name, &compression_level))
     {
         return NULL; // Error already set
     }
 
+    Format format = format_from_name(format_name);
+    if (format == FORMAT_UNKNOWN) {
+        PyErr_Format(PyExc_ValueError, "Unknown standalone format: %s", format_name);
+        return NULL;
+    }
+
     const StandaloneFormat *fmt = find_standalone_format(format);
     if (!fmt) {
-        PyErr_Format(PyExc_ValueError, "Unknown format: %s", format);
+        PyErr_Format(PyExc_ValueError, "Format not supported: %s", format);
         return NULL;
     }
 
