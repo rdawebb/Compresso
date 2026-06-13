@@ -1,187 +1,171 @@
 #define PY_SSIZE_T_CLEAN
 #define BZIP2_CHUNK 65536 // 64KB
+#include "../common.h"
 #include <Python.h>
 #include <bzlib.h>
-#include "../common.h"
 
-static int
-bzip2_is_available(void) {
-    return 1; // bzip2 is always available if this code is compiled
+static int bzip2_is_available(void) {
+  return 1; // bzip2 is always available if this code is compiled
 }
 
-static size_t
-bzip2_max_compressed_size(size_t input_size) {
-    size_t tmp, result;
-    tmp = input_size / 100;
+static size_t bzip2_max_compressed_size(size_t input_size) {
+  size_t tmp, result;
+  tmp = input_size / 100;
 
-    if (__builtin_add_overflow(input_size, tmp, &result) ||
-        __builtin_add_overflow(result, 600, &result)) {
-        return SIZE_MAX;
-    }
-    return result;
+  if (__builtin_add_overflow(input_size, tmp, &result) ||
+      __builtin_add_overflow(result, 600, &result)) {
+    return SIZE_MAX;
+  }
+  return result;
 }
 
-static int
-bzip2_block_size_from_level(int level) {
-    if (level <= 0) return 9; // default: max compression
-    if (level > 9) return 9;
-    return level;
+static int bzip2_block_size_from_level(int level) {
+  if (level <= 0)
+    return 9; // default: max compression
+  if (level > 9)
+    return 9;
+  return level;
 }
-
 
 // ---- Buffer Compression/Decompression ----
 
-static int
-bzip2_compress_buffer(const unsigned char *input, size_t input_size,
-                      unsigned char *output, size_t *output_capacity,
-                      int level, size_t *output_size)
-{
-    int blockSize100k;
-    if (level <= 0) blockSize100k = 9; // default: max compression
-    else if (level > 9) blockSize100k = 9;
-    else blockSize100k = level;
+static int bzip2_compress_buffer(const unsigned char *input, size_t input_size,
+                                 unsigned char *output, size_t *output_capacity,
+                                 int level, size_t *output_size) {
+  int blockSize100k;
+  if (level <= 0)
+    blockSize100k = 9; // default: max compression
+  else if (level > 9)
+    blockSize100k = 9;
+  else
+    blockSize100k = level;
 
-    unsigned int dest_len = (unsigned int)(*output_capacity);
-    int ret;
+  unsigned int dest_len = (unsigned int)(*output_capacity);
+  int ret;
 
-    Py_BEGIN_ALLOW_THREADS
-    ret = BZ2_bzBuffToBuffCompress(
-        (char *) output, &dest_len, (char *) input, (unsigned int) input_size,
-        blockSize100k,
-        0, 30 // verbosity and workFactor (recommended default)
-    );
-    Py_END_ALLOW_THREADS
+  Py_BEGIN_ALLOW_THREADS ret = BZ2_bzBuffToBuffCompress(
+      (char *)output, &dest_len, (char *)input, (unsigned int)input_size,
+      blockSize100k, 0, 30 // verbosity and workFactor (recommended default)
+  );
+  Py_END_ALLOW_THREADS
 
-    if (ret != BZ_OK) {
-        return -1; // compression failed
-    }
+      if (ret != BZ_OK) {
+    return -1; // compression failed
+  }
 
-    *output_size = (size_t)dest_len;
-    return 0; // success
+  *output_size = (size_t)dest_len;
+  return 0; // success
 }
 
-static int
-bzip2_decompress_buffer(const unsigned char *input, size_t input_size,
-                        unsigned char *output, size_t *output_capacity,
-                        size_t *output_size)
-{
-    unsigned int dest_len = (unsigned int)(*output_capacity);
-    int ret;
+static int bzip2_decompress_buffer(const unsigned char *input,
+                                   size_t input_size, unsigned char *output,
+                                   size_t *output_capacity,
+                                   size_t *output_size) {
+  unsigned int dest_len = (unsigned int)(*output_capacity);
+  int ret;
 
-    Py_BEGIN_ALLOW_THREADS
-    ret = BZ2_bzBuffToBuffDecompress(
-        (char *) output, &dest_len, (char *) input, (unsigned int) input_size,
-        0, 0 // small and verbosity flags
-    );
-    Py_END_ALLOW_THREADS
+  Py_BEGIN_ALLOW_THREADS ret = BZ2_bzBuffToBuffDecompress(
+      (char *)output, &dest_len, (char *)input, (unsigned int)input_size, 0,
+      0 // small and verbosity flags
+  );
+  Py_END_ALLOW_THREADS
 
-    if (ret != BZ_OK) {
-        return -1; // decompression failed
-    }
+      if (ret != BZ_OK) {
+    return -1; // decompression failed
+  }
 
-    *output_size = (size_t)dest_len;
-    return 0; // success
+  *output_size = (size_t)dest_len;
+  return 0; // success
 }
 
 // ---- Stream Compression/Decompression ----
 
-static int
-bzip2_compress_stream(FILE *src, FILE *dst, int level)
-{
-    int bzerr;
-    int blockSize100k = bzip2_block_size_from_level(level);
+static int bzip2_compress_stream(FILE *src, FILE *dst, int level) {
+  int bzerr;
+  int blockSize100k = bzip2_block_size_from_level(level);
 
-    BZFILE *bzf = BZ2_bzWriteOpen(
-        &bzerr,
-        dst,
-        blockSize100k,
-        0, 30 // verbosity and workFactor (recommended default)
-    );
-    if (bzerr != BZ_OK || bzf == NULL) {
-        return -1; // failed to open bzip2 stream
+  BZFILE *bzf =
+      BZ2_bzWriteOpen(&bzerr, dst, blockSize100k, 0,
+                      30 // verbosity and workFactor (recommended default)
+      );
+  if (bzerr != BZ_OK || bzf == NULL) {
+    return -1; // failed to open bzip2 stream
+  }
+
+  unsigned char buffer[BZIP2_CHUNK];
+  int ret = 0;
+
+  Py_BEGIN_ALLOW_THREADS
+
+      for (;;) {
+    size_t nread = fread(buffer, 1, BZIP2_CHUNK, src);
+    if (ferror(src)) {
+      ret = -1; // read error
+      break;
     }
 
-    unsigned char buffer[BZIP2_CHUNK];
-    int ret = 0;
-
-    Py_BEGIN_ALLOW_THREADS
-
-    for (;;) {
-        size_t nread = fread(buffer, 1, BZIP2_CHUNK, src);
-        if (ferror(src)) {
-            ret = -1; // read error
-            break;
-        }
-
-        if (nread > 0) {
-            BZ2_bzWrite(&bzerr, bzf, buffer, (int)nread);
-            if (bzerr != BZ_OK) {
-                ret = -1; // write error
-                break;
-            }
-        }
-
-        if (feof(src)) {
-            break; // end of file
-        }
+    if (nread > 0) {
+      BZ2_bzWrite(&bzerr, bzf, buffer, (int)nread);
+      if (bzerr != BZ_OK) {
+        ret = -1; // write error
+        break;
+      }
     }
 
-    BZ2_bzWriteClose(&bzerr, bzf, 0, NULL, NULL);
-    if (bzerr != BZ_OK) {
-        ret = -1; // error closing bzip2 stream
+    if (feof(src)) {
+      break; // end of file
     }
+  }
 
-    Py_END_ALLOW_THREADS
+  BZ2_bzWriteClose(&bzerr, bzf, 0, NULL, NULL);
+  if (bzerr != BZ_OK) {
+    ret = -1; // error closing bzip2 stream
+  }
 
-    return ret;
+  Py_END_ALLOW_THREADS
+
+      return ret;
 }
 
-static int
-bzip2_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size)
-{
-    (void)orig_size; // unused
+static int bzip2_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
+  (void)orig_size; // unused
 
-    int bzerr;
-    BZFILE *bzf = BZ2_bzReadOpen(
-        &bzerr,
-        src,
-        0, 0, // small and verbosity flags
-        NULL, 0
-    );
-    if (bzerr != BZ_OK || bzf == NULL) {
-        return -1; // failed to open bzip2 stream
-    }
+  int bzerr;
+  BZFILE *bzf = BZ2_bzReadOpen(&bzerr, src, 0, 0, // small and verbosity flags
+                               NULL, 0);
+  if (bzerr != BZ_OK || bzf == NULL) {
+    return -1; // failed to open bzip2 stream
+  }
 
-    unsigned char buffer[BZIP2_CHUNK];
-    int ret = 0;
+  unsigned char buffer[BZIP2_CHUNK];
+  int ret = 0;
 
-    Py_BEGIN_ALLOW_THREADS
+  Py_BEGIN_ALLOW_THREADS
 
-    for (;;) {
-        int nread = BZ2_bzRead(&bzerr, bzf, buffer, BZIP2_CHUNK);
-        if (bzerr == BZ_OK || bzerr == BZ_STREAM_END) {
-            if (nread > 0) {
-                if (fwrite(buffer, 1, nread, dst) != (size_t)nread || ferror(dst)) {
-                    ret = -1; // write error
-                    break;
-                }
-            }
-            if (bzerr == BZ_STREAM_END) {
-                break; // end of stream
-            }
-        } else {
-            ret = -1; // read error
-            break;
+      for (;;) {
+    int nread = BZ2_bzRead(&bzerr, bzf, buffer, BZIP2_CHUNK);
+    if (bzerr == BZ_OK || bzerr == BZ_STREAM_END) {
+      if (nread > 0) {
+        if (fwrite(buffer, 1, nread, dst) != (size_t)nread || ferror(dst)) {
+          ret = -1; // write error
+          break;
         }
+      }
+      if (bzerr == BZ_STREAM_END) {
+        break; // end of stream
+      }
+    } else {
+      ret = -1; // read error
+      break;
     }
+  }
 
-    BZ2_bzReadClose(&bzerr, bzf);
+  BZ2_bzReadClose(&bzerr, bzf);
 
-    Py_END_ALLOW_THREADS
+  Py_END_ALLOW_THREADS
 
-    return ret;
+      return ret;
 }
-
 
 // ---- Backend Definition ----
 
@@ -196,6 +180,4 @@ static const CBackend bzip2_backend = {
     .decompress_stream = bzip2_decompress_stream,
 };
 
-const CBackend *get_bzip2_backend(void) {
-    return &bzip2_backend;
-}
+const CBackend *get_bzip2_backend(void) { return &bzip2_backend; }

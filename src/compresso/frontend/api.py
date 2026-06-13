@@ -92,6 +92,7 @@ def plan_compression(
     src_path = Path(src)
     if dest is None:
         dest_path: Path = src_path.with_suffix(suffix=src_path.suffix + ".comp")
+
     else:
         dest_path = Path(dest)
 
@@ -114,6 +115,7 @@ def plan_compression(
 
     if options.algo:
         backend_name: str = options.algo.lower()
+
     else:
         backend_name: str | None = default_backend(options.strategy or "balanced")
 
@@ -161,8 +163,10 @@ def plan_decompression(
     if dest is None:
         if src_path.suffix:
             dest_path: Path = src_path.with_suffix(suffix="")
+
         else:
             dest_path: Path = src_path.with_suffix(suffix=".out")
+
     else:
         dest_path = Path(dest)
 
@@ -249,9 +253,9 @@ class CompressionJob:
             )
 
             compress_file(
-                input_path=str(object=self.plan.src),
-                output_path=str(object=self.plan.dest),
-                algorithm=self.plan.backend_name or "",
+                src_path=str(object=self.plan.src),
+                dst_path=str(object=self.plan.dest),
+                algo=self.plan.backend_name or "",
                 strategy=self.plan.options.strategy or "",
                 level=lvl,
             )
@@ -264,6 +268,7 @@ class CompressionJob:
                 error=None,
                 plan=self.plan,
             )
+
         except BaseException as e:
             return JobResult(
                 ok=False,
@@ -332,9 +337,9 @@ class DecompressionJob:
                 progress(0.0, 0, total)
 
             decompress_file(
-                input_path=str(object=self.plan.src),
-                output_path=str(object=self.plan.dest),
-                algorithm="",
+                src_path=str(object=self.plan.src),
+                dst_path=str(object=self.plan.dest),
+                algo="",
             )
 
             if progress:
@@ -345,6 +350,7 @@ class DecompressionJob:
                 error=None,
                 plan=self.plan,
             )
+
         except BaseException as e:
             return JobResult(
                 ok=False,

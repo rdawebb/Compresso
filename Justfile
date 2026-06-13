@@ -18,6 +18,9 @@ format:
 type:
     uv run ty check src/ tests/
 
+# Check code quality
+check: lint format type
+
 # Run all Python tests
 test:
     uv run pytest tests/ -v

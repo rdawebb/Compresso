@@ -4,20 +4,23 @@ from typing import List, Tuple
 
 class Error(Exception):
     """Base error for compression operations."""
+
     pass
 
 class HeaderError(Error):
     """Error reading or writing compression headers."""
+
     pass
 
 class BackendError(Error):
     """Error in compression backend."""
+
     pass
 
 def compress_file(
-    input_path: str,
-    output_path: str,
-    algorithm: str,
+    src_path: str,
+    dst_path: str,
+    algo: str,
     strategy: str,
     level: int,
 ) -> int:
@@ -25,9 +28,9 @@ def compress_file(
     ...
 
 def decompress_file(
-    input_path: str,
-    output_path: str,
-    algorithm: str,
+    src_path: str,
+    dst_path: str,
+    algo: str,
 ) -> int:
     """Decompress a file."""
     ...

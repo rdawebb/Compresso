@@ -19,12 +19,18 @@ from .speeds import update_from_benchmarks
 def compress(src_path, dest_path, *, algo=None, strategy="balanced", level=None):
     """Compress a file using the specified algorithm and strategy."""
     lvl: int = -1 if level is None else int(level)
-    return compress_file(input_path=src_path, output_path=dest_path, algorithm=algo or "", strategy=strategy or "", level=lvl)
+    return compress_file(
+        src_path=src_path,
+        dst_path=dest_path,
+        algo=algo or "",
+        strategy=strategy or "",
+        level=lvl,
+    )
 
 
 def decompress(src_path, dest_path, *, algo=None):
     """Decompress a file using the specified algorithm."""
-    return decompress_file(input_path=src_path, output_path=dest_path, algorithm=algo or "")
+    return decompress_file(src_path=src_path, dst_path=dest_path, algo=algo or "")
 
 
 @dataclass
@@ -93,6 +99,7 @@ def _safe_unlink(path: Path) -> None:
     """
     try:
         path.unlink()
+
     except FileNotFoundError:
         pass
 
@@ -173,6 +180,7 @@ def benchmark_file(
 
                         if compressed_size is None:
                             compressed_size: int = comp_path.stat().st_size
+
                         else:
                             sz: int = comp_path.stat().st_size
                             if sz != compressed_size:
@@ -183,7 +191,10 @@ def benchmark_file(
 
                         # Decompression
                         start_time: float = time.perf_counter()
-                        decompress(src_path=str(object=comp_path), dest_path=str(object=decomp_path))
+                        decompress(
+                            src_path=str(object=comp_path),
+                            dest_path=str(object=decomp_path),
+                        )
                         decomp_times.append(time.perf_counter() - start_time)
 
                         # Verify

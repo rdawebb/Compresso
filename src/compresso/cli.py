@@ -43,7 +43,9 @@ def format_size(size_bytes: float) -> str:
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if size_bytes < 1024.0:
             return f"{size_bytes:.2f} {unit}"
+
         size_bytes: float = size_bytes / 1024.0
+
     return f"{size_bytes:.2f} PB"
 
 
@@ -58,11 +60,14 @@ def format_time(seconds: float) -> str:
     """
     if seconds < 1:
         return f"{seconds * 1000:.0f}ms"
+
     elif seconds < 60:
         return f"{seconds:.2f}s"
+
     else:
         mins: int = int(seconds // 60)
         secs: float = seconds % 60
+
         return f"{mins}m {secs:.1f}s"
 
 
@@ -146,6 +151,7 @@ def compress(
                     bar.update(n_steps=current - bar.pos)
 
                 result: JobResult = job.run(progress=progress_callback)
+
         else:
             result: JobResult = job.run()
 
@@ -190,6 +196,7 @@ def compress(
             message=app.style(text=f"✗ Compression error: {e}", fg="red"), err=True
         )
         sys.exit(1)
+
     except Exception as e:
         app.echo(message=app.style(text=f"✗ Unexpected error: {e}", fg="red"), err=True)
         sys.exit(1)
@@ -272,6 +279,7 @@ def decompress(
                     bar.update(n_steps=current - bar.pos)
 
                 result: JobResult = job.run(progress=progress_callback)
+
         else:
             result: JobResult = job.run()
 
@@ -310,6 +318,7 @@ def decompress(
             message=app.style(text=f"✗ Decompression error: {e}", fg="red"), err=True
         )
         sys.exit(1)
+
     except Exception as e:
         app.echo(message=app.style(text=f"✗ Unexpected error: {e}", fg="red"), err=True)
         sys.exit(1)
@@ -376,6 +385,7 @@ def inspect(
 
         if result.level is not None:
             app.echo(message=f"Level:           {result.level}")
+
         else:
             app.echo(message="Level:           auto")
 
@@ -404,7 +414,7 @@ def inspect(
 
         if result.estimated_decomp_s:
             app.echo(
-                message=f"Est. decomp time:   {format_time(seconds=result.estimated_decomp_s)}"
+                message=f"Est. decomp time:   {format_time(seconds=result.estimated_decomp_s)}\n"
             )
 
         if not result.can_decompress and result.reason:
@@ -455,14 +465,12 @@ def benchmark(
     """
     try:
         algo_list: List[str] = []
-        if algos:
-            algo_list: List[str] = [a.strip() for a in algos.split(",") if a.strip()]
+        if algos and algos.lower() != "all":
+            algo_list = [a.strip() for a in algos.split(",") if a.strip()]
 
         strategy_list: List[str] = []
-        if strategies:
-            strategy_list: List[str] = [
-                s.strip() for s in strategies.split(",") if s.strip()
-            ]
+        if strategies and strategies.lower() != "all":
+            strategy_list = [s.strip() for s in strategies.split(",") if s.strip()]
 
         level_list: List[Union[int, None]] = []
         if levels:
@@ -471,11 +479,14 @@ def benchmark(
                 level: str = level.strip()
                 if not level:
                     continue
+
                 if level.lower() in ("auto", "default"):
                     level_list.append(None)
+
                 else:
                     try:
                         level_list.append(int(level))
+
                     except ValueError:
                         app.echo(
                             message=app.style(
@@ -490,8 +501,10 @@ def benchmark(
         app.echo(message=f"Repeats: {repeats}")
         if algo_list:
             app.echo(message=f"Algorithms: {', '.join(algo_list)}")
+
         if strategy_list:
             app.echo(message=f"Strategies: {', '.join(strategy_list)}")
+
         if level_list is not None:
             level_str: str = ", ".join(
                 str(object=level) if level is not None else "auto"
@@ -502,9 +515,9 @@ def benchmark(
 
         results: List[BenchmarkResult] = benchmark_file(
             src=file,
-            algos=algo_list,
-            strategies=strategy_list,
-            levels=level_list,
+            algos=algo_list or None,
+            strategies=strategy_list or None,
+            levels=level_list or None,
             repeats=repeats,
             temp_dir=temp_dir,
             update_cache=update_cache,
@@ -512,7 +525,7 @@ def benchmark(
 
         if not results:
             app.echo(
-                message=app.style(text="✗ No benchmark results generated", fg="red"),
+                message=app.style(text="✗ No benchmark results generated\n", fg="red"),
                 err=True,
             )
             sys.exit(1)
@@ -521,14 +534,17 @@ def benchmark(
 
         if update_cache:
             app.echo()
-            app.echo(message=app.style(text="✓ Speed cache updated", fg="green"))
+            app.echo(message=app.style(text="✓ Speed cache updated\n", fg="green"))
             app.echo()
 
     except FileNotFoundError as e:
-        app.echo(message=app.style(text=f"✗ File not found: {e}", fg="red"), err=True)
+        app.echo(message=app.style(text=f"✗ File not found: {e}\n", fg="red"), err=True)
         sys.exit(1)
+
     except Exception as e:
-        app.echo(message=app.style(text=f"✗ Benchmark error: {e}", fg="red"), err=True)
+        app.echo(
+            message=app.style(text=f"✗ Benchmark error: {e}\n", fg="red"), err=True
+        )
         sys.exit(1)
 
 

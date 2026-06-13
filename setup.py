@@ -1,6 +1,6 @@
 """Setup script for the Compresso package."""
 
-from setuptools import setup, Extension, find_packages
+from setuptools import Extension, find_packages, setup
 
 setup(
     name="compresso",
@@ -11,8 +11,11 @@ setup(
             name="compresso._core",
             sources=[
                 "src/compresso/csrc/_core.c",
-                "src/compresso/csrc/router.c",
-                "src/compresso/csrc/format_detection.c",
+                "src/compresso/csrc/compress.c",
+                "src/compresso/csrc/format.c",
+                "src/compresso/csrc/registry.c",
+                "src/compresso/csrc/strategy.c",
+                "src/compresso/csrc/archives.c",
                 # Compression algorithms
                 "src/compresso/csrc/compression/py_zlib.c",
                 "src/compresso/csrc/compression/py_bzip2.c",
@@ -20,6 +23,12 @@ setup(
                 "src/compresso/csrc/compression/py_zstd.c",
                 "src/compresso/csrc/compression/py_lz4.c",
                 "src/compresso/csrc/compression/py_snappy.c",
+                # Archive backends
+                "src/compresso/csrc/archives/tar.c",
+                "src/compresso/csrc/archives/zip.c",
+                # Standalone formats
+                "src/compresso/csrc/standalone/gzip.c",
+                "src/compresso/csrc/standalone/registry.c",
             ],
             include_dirs=[
                 "/usr/local/opt/libarchive/include",
@@ -28,7 +37,7 @@ setup(
             library_dirs=[
                 "/usr/local/opt/libarchive/lib",
             ],
-            libraries=["z", "bz2", "lzma", "zstd", "lz4", "snappy", "archive"],
+            libraries=["z", "bz2", "lzma", "zstd", "lz4", "snappy", "zip", "archive"],
         )
     ],
     python_requires=">=3.9",
