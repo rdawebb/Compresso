@@ -28,6 +28,10 @@ setup(
                 "src/compresso/csrc/archives/zip.c",
                 # Standalone formats
                 "src/compresso/csrc/standalone/gzip.c",
+                "src/compresso/csrc/standalone/bzip2.c",
+                "src/compresso/csrc/standalone/xz.c",
+                "src/compresso/csrc/standalone/zstd.c",
+                "src/compresso/csrc/standalone/lz4.c",
                 "src/compresso/csrc/standalone/registry.c",
             ],
             include_dirs=[

@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import List, Union
 
-import click
 from typer_extensions import ExtendedTyper
 
 from ._core import (
@@ -71,7 +70,7 @@ def format_time(seconds: float) -> str:
         return f"{mins}m {secs:.1f}s"
 
 
-@app.command_with_aliases(aliases=["c", "comp"])
+@app.command(aliases=["c", "comp"])
 def compress(
     file: Path = app.Argument(default=..., help="File to compress"),
     output: Union[Path, None] = app.Option(
@@ -140,7 +139,7 @@ def compress(
         start_time: float = time.time()
 
         if not quiet and plan.input_size > 1024 * 1024:
-            with click.progressbar(
+            with app.progressbar(
                 length=plan.input_size,
                 label="Compressing",
                 show_eta=True,
@@ -175,7 +174,6 @@ def compress(
         )
 
         if not quiet:
-            app.echo()
             app.echo(message=app.style(text="✓ Compression successful!", fg="green"))
             app.echo(
                 message=f"  Original size:   {format_size(size_bytes=plan.input_size)}"
@@ -202,7 +200,7 @@ def compress(
         sys.exit(1)
 
 
-@app.command_with_aliases(aliases=["d", "decomp"])
+@app.command(aliases=["d", "decomp"])
 def decompress(
     file: Path = app.Argument(..., help="File to decompress"),
     output: Union[Path, None] = app.Option(
@@ -268,7 +266,7 @@ def decompress(
         start_time: float = time.time()
 
         if not quiet and insp.orig_size and insp.orig_size > 1024 * 1024:
-            with click.progressbar(
+            with app.progressbar(
                 length=insp.orig_size,
                 label="Decompressing",
                 show_eta=True,
@@ -301,7 +299,6 @@ def decompress(
         )
 
         if not quiet:
-            app.echo()
             app.echo(message=app.style(text="✓ Decompression successful!", fg="green"))
             app.echo(
                 message=f"  Compressed size:   {format_size(size_bytes=compressed_size)}"
@@ -324,7 +321,7 @@ def decompress(
         sys.exit(1)
 
 
-@app.command_with_aliases(aliases=["i", "info"])
+@app.command(aliases=["i", "info"])
 def inspect(
     file: Path = app.Argument(..., help="File to inspect"),
     output_json: bool = app.Option(False, "--json", help="Output in JSON format"),
@@ -367,6 +364,7 @@ def inspect(
             app.echo(message=app.style(text="✗ Not a valid Compresso file", fg="red"))
             if result.reason:
                 app.echo(message=f"  Reason: {result.reason}")
+                app.echo()
             sys.exit(1)
 
         if not result.header_ok:
@@ -428,7 +426,7 @@ def inspect(
         sys.exit(1)
 
 
-@app.command_with_aliases(aliases=["b", "bench"])
+@app.command(aliases=["b", "bench"])
 def benchmark(
     file: Path = app.Argument(..., help="File to benchmark"),
     algos: Union[str, None] = app.Option(
@@ -548,7 +546,7 @@ def benchmark(
         sys.exit(1)
 
 
-@app.command_with_aliases(aliases=["l", "ls"])
+@app.command(aliases=["l", "ls"])
 def list():
     """List all available compression algorithms."""
     try:

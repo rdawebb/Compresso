@@ -75,6 +75,19 @@ namespace :test do
       run_all_compression_tests()
     end
   end
+
+  desc "Run standalone format tests"
+  namespace :standalone do
+    desc "Run standalone single-file format tests"
+    task :formats => [:prepare_for_tests] do
+      run_single_test('standalone/test_standalone.c')
+    end
+
+    desc "Run all standalone format tests"
+    task :all => [:prepare_for_tests] do
+      Dir.glob('standalone/test_*.c').sort.each { |f| run_single_test(f) }
+    end
+  end
 end
 
 # Shorthand tasks

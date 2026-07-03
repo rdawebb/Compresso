@@ -267,11 +267,6 @@ static int gzip_decompress_file(const char *input_path,
     if (strm.avail_in == 0)
       break;
 
-    // Check if trailer
-    if (strm.avail_in <= 8 && feof(input)) {
-      strm.avail_in -= 8; // Don't process trailer
-    }
-
     strm.next_in = in_buf;
 
     do {
@@ -305,29 +300,53 @@ static int gzip_decompress_file(const char *input_path,
 
   Py_END_ALLOW_THREADS
 
-      inflateEnd(&strm);
+      // After the deflate stream ends, inflate leaves the 8-byte trailer
+      // (CRC32 + ISIZE) unconsumed in the input buffer. Capture it from there,
+      // topping up from the file if it was split across a read boundary.
+      uint8_t trailer[8];
+  size_t trailer_have = 0;
+  if (strm.avail_in > 0) {
+    trailer_have = strm.avail_in < 8 ? strm.avail_in : 8;
+    memcpy(trailer, strm.next_in, trailer_have);
+  }
 
-  // Read and verify trailer
-  uint8_t trailer[8];
-  if (fread(trailer, 8, 1, input) == 1) {
-    uint32_t expected_crc = read_le32(trailer);
-    uint32_t expected_size = read_le32(trailer + 4);
+  inflateEnd(&strm);
 
-    if (crc != expected_crc) {
-      PyErr_Format(comp_BackendError, "CRC mismatch: expected %08x, got %08x",
-                   expected_crc, crc);
-      fclose(input);
-      fclose(output);
-      return -1;
-    }
+  if (ret != Z_STREAM_END) {
+    PyErr_SetString(comp_BackendError, "Truncated or incomplete GZIP stream");
+    fclose(input);
+    fclose(output);
+    return -1;
+  }
 
-    if (total_out != expected_size) {
-      PyErr_Format(comp_BackendError, "Size mismatch: expected %u, got %u",
-                   expected_size, total_out);
-      fclose(input);
-      fclose(output);
-      return -1;
-    }
+  if (trailer_have < 8) {
+    trailer_have += fread(trailer + trailer_have, 1, 8 - trailer_have, input);
+  }
+
+  if (trailer_have != 8) {
+    PyErr_SetString(comp_HeaderError, "Missing or truncated GZIP trailer");
+    fclose(input);
+    fclose(output);
+    return -1;
+  }
+
+  uint32_t expected_crc = read_le32(trailer);
+  uint32_t expected_size = read_le32(trailer + 4);
+
+  if (crc != expected_crc) {
+    PyErr_Format(comp_BackendError, "CRC mismatch: expected %08x, got %08x",
+                 expected_crc, crc);
+    fclose(input);
+    fclose(output);
+    return -1;
+  }
+
+  if (total_out != expected_size) {
+    PyErr_Format(comp_BackendError, "Size mismatch: expected %u, got %u",
+                 expected_size, total_out);
+    fclose(input);
+    fclose(output);
+    return -1;
   }
 
   fclose(input);

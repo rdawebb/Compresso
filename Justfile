@@ -37,6 +37,10 @@ test-c:
 pre:
     uv run prek run --all-files
 
+# Regenerate compile_commands.json
+compdb:
+    bear -- uv run python setup.py build_ext --inplace --force
+
 # Clean up temporary files
 clean:
     uv run python scripts/clean.py

@@ -13,6 +13,11 @@ __pycache__/
 *.o
 *.obj
 *.exe
+
+# clangd / C tooling (machine-specific include paths)
+/.clangd
+/compile_commands.json
+/.cache/
 *.out
 *.dll
 *.dylib

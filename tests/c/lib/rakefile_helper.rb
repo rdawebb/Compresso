@@ -15,14 +15,19 @@ CFLAGS = [
   '-I../../src/compresso/csrc'
 ]
 
-# Try to get Python includes - try multiple methods
-python_include = `python3-config --includes 2>/dev/null`.chomp
-if python_include.empty?
-  # Fallback: try to get Python path
-  python_path = `python3 -c "import sysconfig; print(sysconfig.get_path('include'))" 2>/dev/null`.chomp
-  python_include = "-I#{python_path}" unless python_path.empty?
-end
-CFLAGS << python_include unless python_include.empty?
+# Resolve Python build settings from the *active* interpreter (python3) so the
+# headers we compile against and the libpython we link always come from the
+# same version. Do NOT use python3-config: on some systems (e.g. a uv/venv
+# python3 alongside a Homebrew python3-config) it resolves to a different
+# interpreter, producing a header/library version mismatch.
+PY_QUERY = "import sysconfig; g=sysconfig.get_config_var; " \
+           "print(sysconfig.get_path('include')); " \
+           "print(g('LIBPL') or ''); print(g('LIBDIR') or ''); " \
+           "print(g('LDVERSION') or g('VERSION') or '')"
+py_cfg = `python3 -c "#{PY_QUERY}" 2>/dev/null`.split("\n")
+py_include, py_libpl, py_libdir, py_ldversion = py_cfg
+
+CFLAGS << "-I#{py_include}" if py_include && !py_include.empty?
 
 # Linker flags
 LDFLAGS = [
@@ -34,53 +39,57 @@ LDFLAGS = [
   '-lsnappy'
 ]
 
-# Try to get Python ldflags - this includes both lib dir and libs
-python_ldflags = `python3-config --ldflags 2>/dev/null`.chomp
-if !python_ldflags.empty?
-  # Split the string and add as individual flags
-  python_ldflags.split.each { |flag| LDFLAGS << flag }
-end
-
-# Always also add the specific Python library
-python_version = `python3 --version 2>/dev/null`.chomp
-if python_version.include?('3.14')
-  LDFLAGS << '-lpython3.14'
-elsif python_version.include?('3.13')
-  LDFLAGS << '-lpython3.13'
-elsif python_version.include?('3.12')
-  LDFLAGS << '-lpython3.12'
-elsif python_version.include?('3.11')
-  LDFLAGS << '-lpython3.11'
-else
-  # Fallback
-  LDFLAGS << '-lpython3'
-end
+LDFLAGS << "-L#{py_libpl}" if py_libpl && !py_libpl.empty?
+LDFLAGS << "-L#{py_libdir}" if py_libdir && !py_libdir.empty?
+LDFLAGS << (py_ldversion && !py_ldversion.empty? ? "-lpython#{py_ldversion}" : '-lpython3')
+LDFLAGS << '-ldl'
 
 # BUILD_DIR is set by rakefile before requiring this file
 # SRC_DIR is calculated relative to tests/c/ directory
 SRC_DIR = File.join(__dir__, '..', '..', '..', 'src', 'compresso', 'csrc')
 
-# Source files needed for linking
+# Source files needed for linking.
+#
+# Note: _core.c is intentionally excluded. It references the archive API, which
+# pulls in the libarchive/libzip stack and its platform-specific paths. The
+# comp_* exception globals it owns are provided by lib/test_stubs.c instead.
 SOURCE_FILES = [
   'unity.c',  # Unity framework implementation
-  File.join(SRC_DIR, 'format_detection.c'),
-  File.join(SRC_DIR, 'router.c'),
-  File.join(SRC_DIR, '_core.c'),
+  File.join(__dir__, 'test_stubs.c'),
+  File.join(SRC_DIR, 'format.c'),
+  File.join(SRC_DIR, 'registry.c'),
+  File.join(SRC_DIR, 'strategy.c'),
   File.join(SRC_DIR, 'compression', 'py_zlib.c'),
   File.join(SRC_DIR, 'compression', 'py_bzip2.c'),
   File.join(SRC_DIR, 'compression', 'py_lzma.c'),
   File.join(SRC_DIR, 'compression', 'py_zstd.c'),
   File.join(SRC_DIR, 'compression', 'py_lz4.c'),
-  File.join(SRC_DIR, 'compression', 'py_snappy.c')
+  File.join(SRC_DIR, 'compression', 'py_snappy.c'),
+  File.join(SRC_DIR, 'standalone', 'gzip.c'),
+  File.join(SRC_DIR, 'standalone', 'bzip2.c'),
+  File.join(SRC_DIR, 'standalone', 'xz.c'),
+  File.join(SRC_DIR, 'standalone', 'zstd.c'),
+  File.join(SRC_DIR, 'standalone', 'lz4.c'),
+  File.join(SRC_DIR, 'standalone', 'registry.c')
 ]
 
+# Map a source file to its object-file path. Uses the path relative to SRC_DIR
+# (slashes flattened) so that files sharing a basename — e.g. registry.c and
+# standalone/registry.c — produce distinct object files instead of colliding.
+def object_file_for(source_file)
+  rel = source_file.start_with?(SRC_DIR) ? source_file[SRC_DIR.length + 1..] : File.basename(source_file)
+  safe = rel.sub(/\.c$/, '').gsub(/[\/\\]/, '_')
+  File.join(BUILD_DIR, safe + '.o')
+end
+
 def find_test_files
-  files = Dir.glob('test_*.c') + Dir.glob('compression/test_*.c')
+  files = Dir.glob('test_*.c') + Dir.glob('compression/test_*.c') +
+          Dir.glob('standalone/test_*.c')
   files.sort
 end
 
 def compile_file(source_file)
-  obj_file = File.join(BUILD_DIR, File.basename(source_file, '.c') + '.o')
+  obj_file = object_file_for(source_file)
 
   cmd = "#{CC} #{CFLAGS.join(' ')} -c #{source_file} -o #{obj_file}"
   puts "Compiling: #{source_file}"
@@ -104,7 +113,7 @@ def link_test(test_name, obj_files)
 
   # Compile source files if not already compiled
   src_obj_files = SOURCE_FILES.map do |src_file|
-    obj_file = File.join(BUILD_DIR, File.basename(src_file, '.c') + '.o')
+    obj_file = object_file_for(src_file)
     unless File.exist?(obj_file)
       compile_file(src_file)
     end
