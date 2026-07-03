@@ -16,6 +16,7 @@ setup(
                 "src/compresso/csrc/registry.c",
                 "src/compresso/csrc/strategy.c",
                 "src/compresso/csrc/archives.c",
+                "src/compresso/csrc/validate.c",
                 # Compression algorithms
                 "src/compresso/csrc/compression/py_zlib.c",
                 "src/compresso/csrc/compression/py_bzip2.c",

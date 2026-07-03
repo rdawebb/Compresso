@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "common.h"
+#include "validate.h"
 #include <Python.h>
 
 // Error Objects
@@ -43,6 +44,12 @@ static PyObject *py_compress_file(PyObject *self __attribute__((unused)),
   if (algo_name && algo_name[0] != '\0' && algo == ALGO_NONE) {
     PyErr_Format(PyExc_ValueError, "Unknown compression algorithm: %s",
                  algo_name);
+    Py_DECREF(src_path_bytes);
+    Py_DECREF(dst_path_bytes);
+    return NULL;
+  }
+
+  if (validate_compression_request(algo, strat, level, NULL) != 0) {
     Py_DECREF(src_path_bytes);
     Py_DECREF(dst_path_bytes);
     return NULL;
@@ -122,9 +129,14 @@ static PyObject *py_create_archive(PyObject *self __attribute__((unused)),
     return NULL; // Error already set
   }
 
-  Format format = format_from_name(format_name);
-  if (format == FORMAT_UNKNOWN) {
+  CompressionPipeline pipe = pipeline_from_name(format_name, compression_level);
+  if (pipe.archive == ARCHIVE_NONE && pipe.codec == FORMAT_UNKNOWN) {
     PyErr_Format(PyExc_ValueError, "Unknown archive format: %s", format_name);
+    return NULL;
+  }
+
+  if (validate_compression_request(ALGO_NONE, STRAT_BALANCED, compression_level,
+                                   &pipe) != 0) {
     return NULL;
   }
 
@@ -149,8 +161,8 @@ static PyObject *py_create_archive(PyObject *self __attribute__((unused)),
     input_paths[i] = PyUnicode_AsUTF8(item);
   }
 
-  int result = create_archive(output_path, format, input_paths,
-                              (size_t)num_paths, compression_level);
+  int result =
+      create_archive(output_path, &pipe, input_paths, (size_t)num_paths);
   free(input_paths);
   if (result != 0) {
     return NULL; // Error already set
@@ -312,10 +324,11 @@ static PyObject *py_detect_format(PyObject *self __attribute__((unused)),
     return NULL; // Error already set
   }
 
-  Format format = detect_format_from_path(file_path);
-  const char *format_name = format_name_string(format);
+  CompressionPipeline pipe = detect_pipeline_from_path(file_path);
+  char name[32];
+  pipeline_display_name(&pipe, name, sizeof(name));
 
-  return PyUnicode_FromString(format_name);
+  return PyUnicode_FromString(name);
 }
 
 static PyObject *py_format_is_archive(PyObject *self __attribute__((unused)),
@@ -326,9 +339,9 @@ static PyObject *py_format_is_archive(PyObject *self __attribute__((unused)),
     return NULL; // Error already set
   }
 
-  Format format = format_from_name(format_name);
+  CompressionPipeline pipe = pipeline_from_name(format_name, -1);
 
-  if (format_is_archive(format)) {
+  if (pipe.archive != ARCHIVE_NONE) {
     Py_RETURN_TRUE;
   }
 

@@ -77,6 +77,9 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
       archive_entry_set_symlink(ae, entry->symlink_target);
     }
     break;
+  case ENTRY_SPECIAL:
+    archive_entry_set_filetype(ae, AE_IFCHR);
+    break;
   }
 
   // Write header
@@ -178,6 +181,9 @@ static int tar_get_entry_count(void *reader_ptr) {
 
 static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
   TarReader *reader = (TarReader *)reader_ptr;
+
+  // Zero the caller's out-param, so unset fields are never freed
+  memset(entry, 0, sizeof(*entry));
 
   int r = archive_read_next_header(reader->archive, &reader->current_entry);
 

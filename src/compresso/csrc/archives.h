@@ -112,26 +112,14 @@ typedef enum {
   FORMAT_7Z = 11,
 
   // Multi-file formats without built-in compression
-  FORMAT_TAR = 20,
-
-  // Combined formats
-  FORMAT_TAR_GZ = 30,
-  FORMAT_TAR_BZ2 = 31,
-  FORMAT_TAR_XZ = 32,
-  FORMAT_TAR_ZST = 33,
-  FORMAT_TAR_LZ4 = 34
+  FORMAT_TAR = 20
 } Format;
 
 Format detect_format_from_magic_bytes(const unsigned char *magic, size_t size);
 Format detect_format_from_path(const char *path);
 Format detect_format_from_extension(const char *path);
 
-const char *format_name(Format format);
 int format_is_archive(Format format);
-int format_is_combined(Format format);
-
-Format format_get_archive(Format format);
-Format format_get_compression(Format format);
 
 const char *format_name_string(Format format);
 Format format_from_name(const char *name);
@@ -142,11 +130,35 @@ typedef enum { MODE_SINGLE_FILE = 0, MODE_ARCHIVE = 1 } OperationMode;
 
 OperationMode get_operation_mode(Format format);
 
+// ---- Compression Pipeline ----
+
+typedef struct {
+  ArchiveID archive;     // ARCHIVE_NONE for standalone compression
+  Format codec;          // FORMAT_UNKNOWN = no codec (plain tar / zip's
+                         // built-in); otherwise a standalone codec Format
+  int compression_level; // -1 for default
+} CompressionPipeline;
+
+// Map an archive Format to its ArchiveID
+ArchiveID archive_id_from_format(Format format);
+
+// Parse a format name into a pipeline
+CompressionPipeline pipeline_from_name(const char *name, int level);
+
+// Detect an on-disk file's format into a pipeline (level defaults to -1)
+CompressionPipeline detect_pipeline_from_path(const char *path);
+
+// Compose a pipeline's display name into buf
+void pipeline_display_name(const CompressionPipeline *p, char *buf,
+                           size_t buflen);
+
+// Return non-zero if the pipeline is a supported combination
+int pipeline_is_valid(const CompressionPipeline *p);
+
 // ---- High-Level Operations ----
 
-int create_archive(const char *output_path, Format format,
-                   const char **input_paths, size_t num_paths,
-                   int compression_level);
+int create_archive(const char *output_path, const CompressionPipeline *pipeline,
+                   const char **input_paths, size_t num_paths);
 
 int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files);

@@ -6,9 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
 #include "common.h"
+#include "standalone.h"
 #include <Python.h>
 
 // ---- Default Extraction Policies ----
@@ -156,8 +158,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
 }
 
 static int validate_entry_path(const char *output_dir, const char *entry_path,
-                               uint32_t depth,
-                               const ExtractionPolicy *policy) {
+                               uint32_t depth, const ExtractionPolicy *policy) {
   if (entry_path[0] == '/') {
     PyErr_Format(PyExc_ValueError, "Archive entry has an absolute path: %s",
                  entry_path);
@@ -228,62 +229,67 @@ static int check_entry_policy(const ArchiveEntry *entry,
   return 0;
 }
 
-// ---- Archive Operations ----
+// ---- Archive Registry ----
 
-int create_archive(const char *output_path, Format format,
-                   const char **input_paths, size_t num_paths,
-                   int compression_level) {
-  if (format == FORMAT_UNKNOWN) {
-    PyErr_Format(PyExc_ValueError, "Unknown format: %s",
-                 format_name_string(format));
-    return -1;
+const CArchive *find_archive_by_id(uint8_t id) {
+  switch (id) {
+  case ARCHIVE_TAR:
+    return get_tar_archive();
+  case ARCHIVE_ZIP:
+    return get_zip_archive();
+  default:
+    return NULL;
   }
+}
 
-  const CArchive *archive = NULL;
+// ---- Pipeline Helpers ----
 
-  if (format == FORMAT_TAR || format_is_combined(format)) {
-    archive = get_tar_archive();
-  } else if (format == FORMAT_ZIP) {
-    archive = get_zip_archive();
-  } else {
-    PyErr_SetString(PyExc_ValueError, "Format does not support archives");
-    return -1;
+// Build a writable temporary path alongside final_path
+static char *make_temp_path(const char *final_path) {
+  static const char SUFFIX[] = ".compresso-XXXXXX";
+  const char *slash = strrchr(final_path, '/');
+  size_t dir_len = slash ? (size_t)(slash - final_path + 1) : 0;
+  size_t len = dir_len + sizeof(SUFFIX); // sizeof includes the NUL
+
+  char *tmpl = safe_malloc(len);
+  if (!tmpl)
+    return NULL;
+  if (dir_len)
+    memcpy(tmpl, final_path, dir_len);
+  memcpy(tmpl + dir_len, SUFFIX, sizeof(SUFFIX));
+
+  int fd = mkstemp(tmpl);
+  if (fd < 0) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, tmpl);
+    free(tmpl);
+    return NULL;
   }
+  close(fd);
+  return tmpl;
+}
 
-  if (!archive || !archive->is_available()) {
-    PyErr_SetString(comp_Error, "Archive backend not available");
-    return -1;
-  }
-
-  void *writer = archive->create_writer(output_path, compression_level);
-  if (!writer)
-    return -1;
-
+// Write every input path into an already-open writer
+static int add_paths_to_writer(const CArchive *archive, void *writer,
+                               const char **input_paths, size_t num_paths) {
   for (size_t i = 0; i < num_paths; i++) {
     struct stat st;
     if (stat(input_paths[i], &st) != 0) {
-      archive->close_writer(writer);
       PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_paths[i]);
       return -1;
     }
 
     if (S_ISDIR(st.st_mode)) {
       if (add_directory_recursive(writer, archive, input_paths[i],
-                                  input_paths[i]) != 0) {
-        archive->close_writer(writer);
+                                  input_paths[i]) != 0)
         return -1;
-      }
     } else {
       ArchiveEntry *entry = create_entry_from_path(input_paths[i], NULL);
-      if (!entry) {
-        archive->close_writer(writer);
+      if (!entry)
         return -1;
-      }
 
       FILE *f = fopen(input_paths[i], "rb");
       if (!f) {
         entry_free(entry);
-        archive->close_writer(writer);
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_paths[i]);
         return -1;
       }
@@ -292,45 +298,74 @@ int create_archive(const char *output_path, Format format,
       fclose(f);
       entry_free(entry);
 
-      if (ret != 0) {
-        archive->close_writer(writer);
+      if (ret != 0)
         return -1;
-      }
     }
   }
 
-  return archive->close_writer(writer);
+  return 0;
 }
 
-int extract_archive(const char *archive_path, const char *output_dir,
-                    const char **files, size_t num_files) {
-  const ExtractionPolicy *policy = &EXTRACTION_POLICY_DEFAULT;
+// ---- Archive Operations ----
 
-  Format format = detect_format_from_path(archive_path);
-
-  const CArchive *archive = NULL;
-
-  if (format == FORMAT_TAR || format_is_combined(format)) {
-    archive = get_tar_archive();
-  } else if (format == FORMAT_ZIP) {
-    archive = get_zip_archive();
-  } else {
-    PyErr_SetString(PyExc_ValueError, "Not an archive format");
+int create_archive(const char *output_path, const CompressionPipeline *pipeline,
+                   const char **input_paths, size_t num_paths) {
+  if (!pipeline_is_valid(pipeline) || pipeline->archive == ARCHIVE_NONE) {
+    char name[32];
+    pipeline_display_name(pipeline, name, sizeof(name));
+    PyErr_Format(PyExc_ValueError, "Format does not support archives: %s",
+                 name);
     return -1;
   }
 
+  int level = pipeline->compression_level;
+
+  const CArchive *archive = find_archive_by_id(pipeline->archive);
   if (!archive || !archive->is_available()) {
     PyErr_SetString(comp_Error, "Archive backend not available");
     return -1;
   }
 
-  void *reader = archive->create_reader(archive_path);
-  if (!reader)
+  // Write archive to a temp file, then compress via the standalone codec
+  char *tmp_path = NULL;
+  const char *write_path = output_path;
+  if (pipeline->codec != FORMAT_UNKNOWN) {
+    tmp_path = make_temp_path(output_path);
+    if (!tmp_path)
+      return -1;
+    write_path = tmp_path;
+  }
+
+  void *writer = archive->create_writer(write_path, level);
+  if (!writer) {
+    if (tmp_path) {
+      unlink(tmp_path);
+      free(tmp_path);
+    }
     return -1;
+  }
 
-  mkdir(output_dir, 0755);
+  int ret = add_paths_to_writer(archive, writer, input_paths, num_paths);
+  if (archive->close_writer(writer) != 0)
+    ret = -1;
 
-  ArchiveEntry entry;
+  if (ret == 0 && pipeline->codec != FORMAT_UNKNOWN) {
+    const StandaloneFormat *codec = find_standalone_format(pipeline->codec);
+    ret = codec->compress_file(tmp_path, output_path, level);
+  }
+
+  if (tmp_path) {
+    unlink(tmp_path);
+    free(tmp_path);
+  }
+  return ret;
+}
+
+// Read and write each entry from an already-open reader
+static int extract_entries(const CArchive *archive, void *reader,
+                           const char *output_dir, const char **files,
+                           size_t num_files, const ExtractionPolicy *policy) {
+  ArchiveEntry entry = {0};
   int ret;
 
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
@@ -343,7 +378,6 @@ int extract_archive(const char *archive_path, const char *output_dir,
         check_entry_policy(&entry, policy) != 0) {
       free(entry.path);
       free(entry.symlink_target);
-      archive->close_reader(reader);
       return -1;
     }
 
@@ -380,7 +414,6 @@ int extract_archive(const char *archive_path, const char *output_dir,
       if (!f) {
         free(entry.path);
         free(entry.symlink_target);
-        archive->close_reader(reader);
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
         return -1;
       }
@@ -389,7 +422,6 @@ int extract_archive(const char *archive_path, const char *output_dir,
         fclose(f);
         free(entry.path);
         free(entry.symlink_target);
-        archive->close_reader(reader);
         return -1;
       }
 
@@ -401,74 +433,144 @@ int extract_archive(const char *archive_path, const char *output_dir,
     free(entry.symlink_target);
   }
 
-  if (ret < 0) {
-    archive->close_reader(reader);
+  return ret < 0 ? -1 : 0;
+}
+
+int extract_archive(const char *archive_path, const char *output_dir,
+                    const char **files, size_t num_files) {
+  const ExtractionPolicy *policy = &EXTRACTION_POLICY_DEFAULT;
+
+  CompressionPipeline pipe = detect_pipeline_from_path(archive_path);
+  if (!pipeline_is_valid(&pipe) || pipe.archive == ARCHIVE_NONE) {
+    PyErr_SetString(PyExc_ValueError, "Not an archive format");
     return -1;
   }
 
-  return archive->close_reader(reader);
-}
-
-PyObject *list_archive_contents(const char *archive_path) {
-  Format format = detect_format_from_path(archive_path);
-
-  const CArchive *archive = NULL;
-
-  if (format == FORMAT_TAR || format_is_combined(format)) {
-    archive = get_tar_archive();
-  } else if (format == FORMAT_ZIP) {
-    archive = get_zip_archive();
-  } else {
-    PyErr_SetString(PyExc_ValueError, "Not an archive format");
-    return NULL;
-  }
-
+  const CArchive *archive = find_archive_by_id(pipe.archive);
   if (!archive || !archive->is_available()) {
     PyErr_SetString(comp_Error, "Archive backend not available");
-    return NULL;
+    return -1;
   }
 
-  void *reader = archive->create_reader(archive_path);
-  if (!reader)
-    return NULL;
+  // Decode the codec stage to a temporary archive first, if present
+  char *tmp_path = NULL;
+  const char *read_path = archive_path;
+  if (pipe.codec != FORMAT_UNKNOWN) {
+    const StandaloneFormat *codec = find_standalone_format(pipe.codec);
+    tmp_path = make_temp_path(archive_path);
+    if (!tmp_path)
+      return -1;
+    if (codec->decompress_file(archive_path, tmp_path) != 0) {
+      unlink(tmp_path);
+      free(tmp_path);
+      return -1;
+    }
+    read_path = tmp_path;
+  }
 
+  void *reader = archive->create_reader(read_path);
+  if (!reader) {
+    if (tmp_path) {
+      unlink(tmp_path);
+      free(tmp_path);
+    }
+    return -1;
+  }
+
+  mkdir(output_dir, 0755);
+
+  int ret =
+      extract_entries(archive, reader, output_dir, files, num_files, policy);
+  if (archive->close_reader(reader) != 0)
+    ret = -1;
+
+  if (tmp_path) {
+    unlink(tmp_path);
+    free(tmp_path);
+  }
+  return ret;
+}
+
+// Collect entry paths from an already-open reader into a new Python list
+static PyObject *read_archive_names(const CArchive *archive, void *reader) {
   PyObject *list = PyList_New(0);
-  if (!list) {
-    archive->close_reader(reader);
+  if (!list)
     return NULL;
-  }
 
-  ArchiveEntry entry;
+  ArchiveEntry entry = {0};
   int ret;
 
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
-    PyObject *item =
-        PyUnicode_FromString(entry.path ? entry.path : "");
+    PyObject *item = PyUnicode_FromString(entry.path ? entry.path : "");
     free(entry.path);
     free(entry.symlink_target);
 
     if (!item) {
       Py_DECREF(list);
-      archive->close_reader(reader);
       return NULL;
     }
     if (PyList_Append(list, item) < 0) {
       Py_DECREF(item);
       Py_DECREF(list);
-      archive->close_reader(reader);
       return NULL;
     }
     Py_DECREF(item);
     archive->skip_entry_data(reader);
   }
 
-  archive->close_reader(reader);
-
   if (ret < 0) {
     Py_DECREF(list);
     return NULL;
   }
 
+  return list;
+}
+
+PyObject *list_archive_contents(const char *archive_path) {
+  CompressionPipeline pipe = detect_pipeline_from_path(archive_path);
+  if (!pipeline_is_valid(&pipe) || pipe.archive == ARCHIVE_NONE) {
+    PyErr_SetString(PyExc_ValueError, "Not an archive format");
+    return NULL;
+  }
+
+  const CArchive *archive = find_archive_by_id(pipe.archive);
+  if (!archive || !archive->is_available()) {
+    PyErr_SetString(comp_Error, "Archive backend not available");
+    return NULL;
+  }
+
+  // Decode the codec stage to a temporary archive first, if present
+  char *tmp_path = NULL;
+  const char *read_path = archive_path;
+  if (pipe.codec != FORMAT_UNKNOWN) {
+    const StandaloneFormat *codec = find_standalone_format(pipe.codec);
+    tmp_path = make_temp_path(archive_path);
+    if (!tmp_path)
+      return NULL;
+    if (codec->decompress_file(archive_path, tmp_path) != 0) {
+      unlink(tmp_path);
+      free(tmp_path);
+      return NULL;
+    }
+    read_path = tmp_path;
+  }
+
+  void *reader = archive->create_reader(read_path);
+  if (!reader) {
+    if (tmp_path) {
+      unlink(tmp_path);
+      free(tmp_path);
+    }
+    return NULL;
+  }
+
+  PyObject *list = read_archive_names(archive, reader);
+  archive->close_reader(reader);
+
+  if (tmp_path) {
+    unlink(tmp_path);
+    free(tmp_path);
+  }
   return list;
 }
 
@@ -497,8 +599,7 @@ PyObject *get_archive_capabilities(void) {
     PyObject *streaming = a->supports_streaming() ? Py_True : Py_False;
     PyObject *compression = a->supports_compression() ? Py_True : Py_False;
 
-    if (!name ||
-        PyDict_SetItemString(dict, "name", name) < 0 ||
+    if (!name || PyDict_SetItemString(dict, "name", name) < 0 ||
         PyDict_SetItemString(dict, "streaming", streaming) < 0 ||
         PyDict_SetItemString(dict, "compression", compression) < 0) {
       Py_XDECREF(name);

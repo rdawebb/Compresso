@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
+#include "standalone.h"
 #include <Python.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -113,31 +114,7 @@ Format detect_format_from_path(const char *path) {
   Format format = detect_format_from_magic_bytes(magic, bytes_read);
   if (format != FORMAT_UNKNOWN) {
     fclose(f);
-
-    // Check for combined formats
-    if (format == FORMAT_GZIP || format == FORMAT_BZIP2 ||
-        format == FORMAT_XZ || format == FORMAT_ZSTD || format == FORMAT_LZ4) {
-      const char *ext = strrchr(path, '.');
-      if (ext && ext > path + 4) {
-        // Check for tar combined formats
-        const char *prev = ext - 1;
-        while (prev > path && *prev != '.')
-          prev--;
-
-        if (prev > path && strncmp(prev, ".tar", 4) == 0) {
-          if (format == FORMAT_GZIP)
-            return FORMAT_TAR_GZ;
-          if (format == FORMAT_BZIP2)
-            return FORMAT_TAR_BZ2;
-          if (format == FORMAT_XZ)
-            return FORMAT_TAR_XZ;
-          if (format == FORMAT_ZSTD)
-            return FORMAT_TAR_ZST;
-          if (format == FORMAT_LZ4)
-            return FORMAT_TAR_LZ4;
-        }
-      }
-    }
+    // Single/base format
     return format;
   }
   // Check for TAR format
@@ -194,127 +171,239 @@ Format detect_format_from_extension(const char *path) {
   if (strcmp(lower_ext, "tar") == 0)
     return FORMAT_TAR;
 
-  // Combined formats
+  // Combined-archive shorthands map to their codec
   if (strcmp(lower_ext, "tgz") == 0)
-    return FORMAT_TAR_GZ;
-
-  const char *prev = ext - 1;
-  while (prev > path && *prev != '.')
-    prev--;
-
-  if (prev > path) {
-    size_t prev_len = strlen(prev);
-    if (prev_len == 3 && strncmp(prev + 1, "tar", 3) == 0) {
-      if (strcmp(lower_ext, "gz") == 0)
-        return FORMAT_TAR_GZ;
-      if (strcmp(lower_ext, "bz2") == 0)
-        return FORMAT_TAR_BZ2;
-      if (strcmp(lower_ext, "xz") == 0)
-        return FORMAT_TAR_XZ;
-      if (strcmp(lower_ext, "zst") == 0 || strcmp(lower_ext, "zstd") == 0)
-        return FORMAT_TAR_ZST;
-      if (strcmp(lower_ext, "lz4") == 0)
-        return FORMAT_TAR_LZ4;
-    }
-  }
+    return FORMAT_GZIP;
+  if (strcmp(lower_ext, "tbz2") == 0)
+    return FORMAT_BZIP2;
+  if (strcmp(lower_ext, "txz") == 0)
+    return FORMAT_XZ;
+  if (strcmp(lower_ext, "tzst") == 0)
+    return FORMAT_ZSTD;
+  if (strcmp(lower_ext, "tlz4") == 0)
+    return FORMAT_LZ4;
 
   return FORMAT_UNKNOWN;
 }
 
 // ---- Format Information ----
 
-const char *format_name(Format format) {
-  switch (format) {
-  case FORMAT_COMPRESSO:
-    return "compresso";
-  case FORMAT_GZIP:
-    return "gzip";
-  case FORMAT_BZIP2:
-    return "bzip2";
-  case FORMAT_XZ:
-    return "xz";
-  case FORMAT_ZSTD:
-    return "zstd";
-  case FORMAT_LZ4:
-    return "lz4";
-  case FORMAT_ZIP:
-    return "zip";
-  case FORMAT_7Z:
-    return "7z";
-  case FORMAT_TAR:
-    return "tar";
-  case FORMAT_TAR_GZ:
-    return "tar.gz";
-  case FORMAT_TAR_BZ2:
-    return "tar.bz2";
-  case FORMAT_TAR_XZ:
-    return "tar.xz";
-  case FORMAT_TAR_ZST:
-    return "tar.zst";
-  case FORMAT_TAR_LZ4:
-    return "tar.lz4";
-  default:
-    return "unknown";
-  }
-}
-
 int format_is_archive(Format format) {
   switch (format) {
   case FORMAT_ZIP:
   case FORMAT_7Z:
   case FORMAT_TAR:
-  case FORMAT_TAR_GZ:
-  case FORMAT_TAR_BZ2:
-  case FORMAT_TAR_XZ:
-  case FORMAT_TAR_ZST:
-  case FORMAT_TAR_LZ4:
     return 1;
   default:
     return 0;
   }
 }
 
-int format_is_combined(Format format) {
+// ---- Compression Pipeline ----
+
+ArchiveID archive_id_from_format(Format format) {
   switch (format) {
-  case FORMAT_TAR_GZ:
-  case FORMAT_TAR_BZ2:
-  case FORMAT_TAR_XZ:
-  case FORMAT_TAR_ZST:
-  case FORMAT_TAR_LZ4:
-    return 1;
+  case FORMAT_TAR:
+    return ARCHIVE_TAR;
+  case FORMAT_ZIP:
+    return ARCHIVE_ZIP;
+  case FORMAT_7Z:
+    return ARCHIVE_7Z;
   default:
+    return ARCHIVE_NONE;
+  }
+}
+
+// The extension token for a standalone codec Format, or NULL
+static const char *codec_extension(Format codec) {
+  switch (codec) {
+  case FORMAT_GZIP:
+    return "gz";
+  case FORMAT_BZIP2:
+    return "bz2";
+  case FORMAT_XZ:
+    return "xz";
+  case FORMAT_ZSTD:
+    return "zst";
+  case FORMAT_LZ4:
+    return "lz4";
+  default:
+    return NULL;
+  }
+}
+
+// The name token for an archive container, or NULL
+static const char *archive_token(ArchiveID archive) {
+  switch (archive) {
+  case ARCHIVE_TAR:
+    return "tar";
+  case ARCHIVE_ZIP:
+    return "zip";
+  case ARCHIVE_7Z:
+    return "7z";
+  default:
+    return NULL;
+  }
+}
+
+// Return ARCHIVE_TAR if the path's extension indicates a tar container wrapping
+// a codec, otherwise ARCHIVE_NONE
+static ArchiveID tar_archive_from_extension(const char *path) {
+  const char *ext = strrchr(path, '.');
+  if (!ext)
+    return ARCHIVE_NONE;
+
+  char last[16];
+  size_t i;
+  for (i = 0; i < sizeof(last) - 1 && ext[i + 1]; i++)
+    last[i] = tolower(ext[i + 1]);
+  last[i] = '\0';
+
+  // Combined shorthands
+  if (strcmp(last, "tgz") == 0 || strcmp(last, "tbz2") == 0 ||
+      strcmp(last, "txz") == 0 || strcmp(last, "tzst") == 0 ||
+      strcmp(last, "tlz4") == 0)
+    return ARCHIVE_TAR;
+
+  // Dotted form: the component before the final extension is "tar"
+  const char *prev = ext - 1;
+  while (prev > path && *prev != '.')
+    prev--;
+  if (prev > path && strncmp(prev, ".tar", 4) == 0 &&
+      (prev[4] == '.' || prev[4] == '\0'))
+    return ARCHIVE_TAR;
+
+  return ARCHIVE_NONE;
+}
+
+CompressionPipeline pipeline_from_name(const char *name, int level) {
+  CompressionPipeline p;
+  p.archive = ARCHIVE_NONE;
+  p.codec = FORMAT_UNKNOWN;
+  p.compression_level = level;
+
+  if (!name)
+    return p;
+
+  // Combined dotted form
+  const char *dot = strchr(name, '.');
+  if (dot) {
+    char base[16];
+    size_t blen = (size_t)(dot - name);
+    if (blen < sizeof(base)) {
+      memcpy(base, name, blen);
+      base[blen] = '\0';
+      ArchiveID arch = archive_id_from_format(format_from_name(base));
+      Format codec = format_from_name(dot + 1);
+      if (arch != ARCHIVE_NONE && find_standalone_format(codec) != NULL) {
+        p.archive = arch;
+        p.codec = codec;
+        return p;
+      }
+    }
+  } else {
+    // Combined shorthands
+    if (strcmp(name, "tgz") == 0) {
+      p.archive = ARCHIVE_TAR;
+      p.codec = FORMAT_GZIP;
+      return p;
+    }
+    if (strcmp(name, "tbz2") == 0) {
+      p.archive = ARCHIVE_TAR;
+      p.codec = FORMAT_BZIP2;
+      return p;
+    }
+    if (strcmp(name, "txz") == 0) {
+      p.archive = ARCHIVE_TAR;
+      p.codec = FORMAT_XZ;
+      return p;
+    }
+    if (strcmp(name, "tzst") == 0) {
+      p.archive = ARCHIVE_TAR;
+      p.codec = FORMAT_ZSTD;
+      return p;
+    }
+    if (strcmp(name, "tlz4") == 0) {
+      p.archive = ARCHIVE_TAR;
+      p.codec = FORMAT_LZ4;
+      return p;
+    }
+  }
+
+  // Single format: an archive container, or a standalone codec / compresso
+  Format f = format_from_name(name);
+  ArchiveID arch = archive_id_from_format(f);
+  if (arch != ARCHIVE_NONE)
+    p.archive = arch;
+  else
+    p.codec = f;
+  return p;
+}
+
+CompressionPipeline detect_pipeline_from_path(const char *path) {
+  CompressionPipeline p;
+  p.archive = ARCHIVE_NONE;
+  p.codec = FORMAT_UNKNOWN;
+  p.compression_level = -1;
+
+  if (!path)
+    return p;
+
+  Format f = detect_format_from_path(path);
+  ArchiveID arch = archive_id_from_format(f);
+  if (arch != ARCHIVE_NONE) {
+    // A plain archive container
+    p.archive = arch;
+    return p;
+  }
+
+  // Standalone codec, compresso, or unknown
+  p.codec = f;
+  if (find_standalone_format(f) != NULL &&
+      tar_archive_from_extension(path) == ARCHIVE_TAR)
+    p.archive = ARCHIVE_TAR;
+  return p;
+}
+
+void pipeline_display_name(const CompressionPipeline *p, char *buf,
+                           size_t buflen) {
+  if (buflen == 0)
+    return;
+  if (!p) {
+    snprintf(buf, buflen, "unknown");
+    return;
+  }
+
+  const char *arch = archive_token(p->archive);
+  const char *cext = codec_extension(p->codec);
+
+  if (arch && cext)
+    snprintf(buf, buflen, "%s.%s", arch, cext); // e.g. tar.gz
+  else if (arch)
+    snprintf(buf, buflen, "%s", arch); // e.g. tar, zip
+  else if (p->codec != FORMAT_UNKNOWN)
+    snprintf(buf, buflen, "%s", format_name_string(p->codec)); // e.g. gzip
+  else
+    snprintf(buf, buflen, "unknown");
+}
+
+int pipeline_is_valid(const CompressionPipeline *p) {
+  if (!p)
     return 0;
-  }
-}
 
-Format format_get_archive(Format format) {
-  switch (format) {
-  case FORMAT_TAR_GZ:
-  case FORMAT_TAR_BZ2:
-  case FORMAT_TAR_XZ:
-  case FORMAT_TAR_ZST:
-  case FORMAT_TAR_LZ4:
-    return FORMAT_TAR;
-  default:
-    return FORMAT_UNKNOWN;
-  }
-}
+  // The pipeline must do something
+  if (p->archive == ARCHIVE_NONE && p->codec == FORMAT_UNKNOWN)
+    return 0;
 
-Format format_get_compression(Format format) {
-  switch (format) {
-  case FORMAT_TAR_GZ:
-    return FORMAT_GZIP;
-  case FORMAT_TAR_BZ2:
-    return FORMAT_BZIP2;
-  case FORMAT_TAR_XZ:
-    return FORMAT_XZ;
-  case FORMAT_TAR_ZST:
-    return FORMAT_ZSTD;
-  case FORMAT_TAR_LZ4:
-    return FORMAT_LZ4;
-  default:
-    return FORMAT_UNKNOWN;
-  }
+  // ZIP has built-in compression, external codec stage is not allowed
+  if (p->archive == ARCHIVE_ZIP && p->codec != FORMAT_UNKNOWN)
+    return 0;
+
+  // A codec, when present, must resolve to a real standalone format
+  if (p->codec != FORMAT_UNKNOWN && find_standalone_format(p->codec) == NULL)
+    return 0;
+
+  return 1;
 }
 
 const char *format_name_string(Format format) {
@@ -337,16 +426,6 @@ const char *format_name_string(Format format) {
     return "7z";
   case FORMAT_TAR:
     return "tar";
-  case FORMAT_TAR_GZ:
-    return "tar.gz";
-  case FORMAT_TAR_BZ2:
-    return "tar.bz2";
-  case FORMAT_TAR_XZ:
-    return "tar.xz";
-  case FORMAT_TAR_ZST:
-    return "tar.zst";
-  case FORMAT_TAR_LZ4:
-    return "tar.lz4";
   default:
     return "unknown";
   }
@@ -374,16 +453,6 @@ Format format_from_name(const char *name) {
     return FORMAT_7Z;
   if (strcmp(name, "tar") == 0)
     return FORMAT_TAR;
-  if (strcmp(name, "tar.gz") == 0 || strcmp(name, "tgz") == 0)
-    return FORMAT_TAR_GZ;
-  if (strcmp(name, "tar.bz2") == 0 || strcmp(name, "tbz2") == 0)
-    return FORMAT_TAR_BZ2;
-  if (strcmp(name, "tar.xz") == 0 || strcmp(name, "txz") == 0)
-    return FORMAT_TAR_XZ;
-  if (strcmp(name, "tar.zst") == 0 || strcmp(name, "tzst") == 0)
-    return FORMAT_TAR_ZST;
-  if (strcmp(name, "tar.lz4") == 0 || strcmp(name, "tlz4") == 0)
-    return FORMAT_TAR_LZ4;
 
   return FORMAT_UNKNOWN;
 }
