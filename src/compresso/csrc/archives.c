@@ -1,4 +1,5 @@
 #include <dirent.h>
+#include <errno.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -55,6 +56,30 @@ static void entry_free(ArchiveEntry *e) {
 }
 
 // ---- Helpers ----
+
+// Create a directory and any missing parents (like `mkdir -p`).
+static int mkdir_p(const char *path, mode_t mode) {
+  char tmp[PATH_MAX];
+  size_t len = strlen(path);
+  if (len == 0 || len >= sizeof(tmp))
+    return -1;
+
+  memcpy(tmp, path, len + 1);
+
+  for (char *p = tmp + 1; *p; p++) {
+    if (*p == '/') {
+      *p = '\0';
+      if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+        return -1;
+      *p = '/';
+    }
+  }
+
+  if (mkdir(tmp, mode) != 0 && errno != EEXIST)
+    return -1;
+
+  return 0;
+}
 
 static ArchiveEntry *create_entry_from_path(const char *path,
                                             const char *base_path) {
@@ -279,8 +304,33 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
     }
 
     if (S_ISDIR(st.st_mode)) {
-      if (add_directory_recursive(writer, archive, input_paths[i],
-                                  input_paths[i]) != 0)
+      // Strip only the source's *parent* so the source directory's own name is
+      // preserved in stored entry paths (e.g. "sub/nested.txt", not
+      // "nested.txt"). Passing the source as its own base would flatten it.
+      char base[PATH_MAX];
+      const char *slash = strrchr(input_paths[i], '/');
+      if (slash) {
+        size_t base_len = (size_t)(slash - input_paths[i]);
+        if (base_len >= sizeof(base)) {
+          PyErr_SetString(PyExc_ValueError, "Source path too long");
+          return -1;
+        }
+        memcpy(base, input_paths[i], base_len);
+        base[base_len] = '\0';
+      } else {
+        base[0] = '\0';
+      }
+
+      // Record the directory itself so empty directories are preserved.
+      ArchiveEntry *dir_entry = create_entry_from_path(input_paths[i], base);
+      if (!dir_entry)
+        return -1;
+      int dir_ret = archive->add_entry(writer, dir_entry, NULL);
+      entry_free(dir_entry);
+      if (dir_ret != 0)
+        return -1;
+
+      if (add_directory_recursive(writer, archive, input_paths[i], base) != 0)
         return -1;
     } else {
       ArchiveEntry *entry = create_entry_from_path(input_paths[i], NULL);
@@ -401,12 +451,12 @@ static int extract_entries(const CArchive *archive, void *reader,
     snprintf(out_path, sizeof(out_path), "%s/%s", output_dir, entry.path);
 
     if (entry.type == ENTRY_DIR) {
-      mkdir(out_path, entry.mode);
+      mkdir_p(out_path, entry.mode);
     } else if (entry.type == ENTRY_FILE) {
       char *last_slash = strrchr(out_path, '/');
       if (last_slash) {
         *last_slash = '\0';
-        mkdir(out_path, 0755);
+        mkdir_p(out_path, 0755);
         *last_slash = '/';
       }
 
@@ -425,8 +475,11 @@ static int extract_entries(const CArchive *archive, void *reader,
         return -1;
       }
 
+      int file_fd = fileno(f);
+      if (file_fd >= 0) {
+        fchmod(file_fd, entry.mode);
+      }
       fclose(f);
-      chmod(out_path, entry.mode);
     }
 
     free(entry.path);

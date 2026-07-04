@@ -12,6 +12,14 @@ from .frontend.api import (
     DecompressionJob,
     DecompressionPlan,
 )
+from .frontend.archive_api import (
+    ArchiveEntry,
+    ArchiveJob,
+    ArchiveOptions,
+    ArchivePlan,
+    ExtractJob,
+    ExtractPlan,
+)
 
 __all__: list[str] = [
     "compress_file",
@@ -30,4 +38,10 @@ __all__: list[str] = [
     "DecompressionPlan",
     "CompressionJob",
     "DecompressionJob",
+    "ArchiveOptions",
+    "ArchivePlan",
+    "ExtractPlan",
+    "ArchiveEntry",
+    "ArchiveJob",
+    "ExtractJob",
 ]

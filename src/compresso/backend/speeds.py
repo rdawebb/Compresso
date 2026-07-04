@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Iterable
 
 _DEFAULT_COMP_MB_S = {
     "zlib": 200.0,
@@ -46,7 +46,7 @@ class AlgoSpeeds:
     samples: int
 
 
-def _load_raw() -> Dict[str, AlgoSpeeds]:
+def _load_raw() -> dict[str, AlgoSpeeds]:
     """Load raw speed data from the speeds file.
 
     Returns:
@@ -57,10 +57,11 @@ def _load_raw() -> Dict[str, AlgoSpeeds]:
 
     try:
         data = json.loads(s=_SPEEDS_FILE.read_text(encoding="utf-8"))
+
     except (OSError, json.JSONDecodeError):
         return {}
 
-    result: Dict[str, AlgoSpeeds] = {}
+    result: dict[str, AlgoSpeeds] = {}
     for algo, entry in data.items():
         try:
             result[algo] = AlgoSpeeds(
@@ -69,13 +70,14 @@ def _load_raw() -> Dict[str, AlgoSpeeds]:
                 decomp_mb_s=float(entry.get("decomp_mb_s", 0.0)),
                 samples=int(entry.get("samples", 0)),
             )
+
         except (TypeError, ValueError):
             continue
 
     return result
 
 
-def _save_raw(entries: Dict[str, AlgoSpeeds]) -> None:
+def _save_raw(entries: dict[str, AlgoSpeeds]) -> None:
     """Save raw speed data to the speeds file.
 
     Args:
@@ -104,11 +106,12 @@ def update_from_benchmarks(results: Iterable[object]) -> None:
     """
     existing: dict[str, AlgoSpeeds] = _load_raw()
 
-    accumulated: Dict[str, dict] = {}
+    accumulated: dict[str, dict[str, float | int]] = {}
     for result in results:
         algo: str | None = getattr(result, "algo", None)
         if not algo:
             continue
+
         comp = float(getattr(result, "comp_mb_s", None) or 0.0)
         decomp = float(getattr(result, "decomp_mb_s", None) or 0.0)
 
@@ -126,7 +129,7 @@ def update_from_benchmarks(results: Iterable[object]) -> None:
         return
 
     for algo, stats in accumulated.items():
-        new_count: int = stats["count"]
+        new_count: int = int(stats["count"])
         new_comp_avg: float = stats["comp_sum"] / new_count
         new_decomp_avg: float = stats["decomp_sum"] / new_count
 
@@ -138,6 +141,7 @@ def update_from_benchmarks(results: Iterable[object]) -> None:
                 decomp_mb_s=new_decomp_avg,
                 samples=new_count,
             )
+
         else:
             total_samples: int = old.samples + new_count
             combined_comp: float = (
@@ -174,11 +178,13 @@ def get_estimated_speeds(algo: str, *, operation: str = "decompress") -> float:
         if operation == "compress":
             if entry.comp_mb_s > 0.0:
                 return entry.comp_mb_s
+
         else:
             if entry.decomp_mb_s > 0.0:
                 return entry.decomp_mb_s
 
     if operation == "compress":
         return _DEFAULT_COMP_MB_S.get(algo, 200.0)
+
     else:
         return _DEFAULT_DECOMP_MB_S.get(algo, 200.0)

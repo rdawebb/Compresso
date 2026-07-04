@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from typing import List, Union
 
 from typer_extensions import ExtendedTyper
 
@@ -14,17 +13,18 @@ from ._core import (
     Error,
     HeaderError,
 )
-from .backend.benchmark import BenchmarkResult, benchmark_file, print_results
-from .backend.capabilities import BackendCapabilities, list_capabilities
-from .backend.file_inspect import InspectResult
+from .backend.benchmark import benchmark_file, print_results
+from .backend.capabilities import list_capabilities
 from .backend.file_inspect import inspect as inspect_file
 from .frontend.api import (
     CompressionJob,
     CompressionOptions,
-    CompressionPlan,
     DecompressionJob,
-    DecompressionPlan,
-    JobResult,
+)
+from .frontend.archive_api import (
+    ArchiveJob,
+    ArchiveOptions,
+    ExtractJob,
 )
 
 app = ExtendedTyper(help="Compresso - Fast file compression and decompression tool")
@@ -73,10 +73,10 @@ def format_time(seconds: float) -> str:
 @app.command(aliases=["c", "comp"])
 def compress(
     file: Path = app.Argument(default=..., help="File to compress"),
-    output: Union[Path, None] = app.Option(
+    output: Path | None = app.Option(
         None, "--output", "-o", help="Output file path (default: input.comp)"
     ),
-    algo: Union[str, None] = app.Option(
+    algo: str | None = app.Option(
         "auto",
         "--algo",
         "-a",
@@ -90,11 +90,11 @@ def compress(
         case_sensitive=False,
         help="Compression strategy to use (fast/balanced/max_ratio)",
     ),
-    level: Union[int, None] = app.Option(
+    level: int | None = app.Option(
         None, "--level", "-l", min=0, max=9, help="Compression level (0-9)"
     ),
     quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress all output"),
-):
+) -> None:
     """Compress a file using the specified algorithm and strategy.
 
     Args:
@@ -113,10 +113,8 @@ def compress(
             level=level,
         )
 
-        job: CompressionJob = CompressionJob.from_file(
-            src=file, dest=output, options=options
-        )
-        plan: CompressionPlan = job.plan
+        job = CompressionJob.from_file(src=file, dest=output, options=options)
+        plan = job.plan
 
         if not plan.can_compress:
             app.echo(
@@ -149,10 +147,10 @@ def compress(
                 def progress_callback(fraction, current, total):
                     bar.update(n_steps=current - bar.pos)
 
-                result: JobResult = job.run(progress=progress_callback)
+                result = job.run(progress=progress_callback)
 
         else:
-            result: JobResult = job.run()
+            result = job.run()
 
         elapsed: float = time.time() - start_time
 
@@ -203,14 +201,14 @@ def compress(
 @app.command(aliases=["d", "decomp"])
 def decompress(
     file: Path = app.Argument(..., help="File to decompress"),
-    output: Union[Path, None] = app.Option(
+    output: Path | None = app.Option(
         None,
         "--output",
         "-o",
         help="Output file path (default: remove .comp extension)",
     ),
     quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress progress output"),
-):
+) -> None:
     """Decompress a Compresso compressed file.
 
     Args:
@@ -219,9 +217,9 @@ def decompress(
         quiet: If True, suppress progress output.
     """
     try:
-        job: DecompressionJob = DecompressionJob.from_file(src=file, dest=output)
-        plan: DecompressionPlan = job.plan
-        insp: InspectResult = plan.inspection
+        job = DecompressionJob.from_file(src=file, dest=output)
+        plan = job.plan
+        insp = plan.inspection
 
         if not insp.is_compresso:
             app.echo(
@@ -276,10 +274,10 @@ def decompress(
                 def progress_callback(fraction, current, total):
                     bar.update(n_steps=current - bar.pos)
 
-                result: JobResult = job.run(progress=progress_callback)
+                result = job.run(progress=progress_callback)
 
         else:
-            result: JobResult = job.run()
+            result = job.run()
 
         elapsed: float = time.time() - start_time
 
@@ -321,11 +319,182 @@ def decompress(
         sys.exit(1)
 
 
+@app.command(aliases=["a", "ar"])
+def archive(
+    output: Path = app.Argument(default=..., help="Output archive path"),
+    sources: list[str] = app.Argument(
+        default=..., help="Files and directories to archive"
+    ),
+    format: str = app.Option(
+        "tar.zst",
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Archive format (e.g. tar.zst, tar.gz, tar)",
+    ),
+    level: int | None = app.Option(
+        None, "--level", "-l", min=0, max=9, help="Compression level (0-9)"
+    ),
+    quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress all output"),
+) -> None:
+    """Create an archive from multiple files and directories.
+
+    Args:
+        output: The path to the output archive file.
+        sources: The files and directories to include in the archive.
+        format: The archive format (default: "tar.zst").
+        level: The compression level to use (default: None).
+        quiet: If True, suppress all output (default: False).
+    """
+    try:
+        options = ArchiveOptions(format=format.lower(), compression_level=level)
+        job = ArchiveJob.from_paths(sources=sources, output=output, options=options)
+        plan = job.plan
+
+        if not plan.can_run:
+            app.echo(
+                message=app.style(
+                    text=f"✗ Error: {plan.reason_if_unavailable}", fg="red"
+                ),
+                err=True,
+            )
+            sys.exit(1)
+
+        if not quiet:
+            app.echo(message=f"Archiving:   {plan.entry_count} source(s)")
+            app.echo(message=f"Output:      {plan.output}")
+            app.echo(message=f"Format:      {plan.options.format}")
+            app.echo(
+                message=f"Input size:  {format_size(size_bytes=plan.total_input_size)}"
+            )
+            app.echo()
+
+        start_time: float = time.time()
+
+        if not quiet and plan.total_input_size > 1024 * 1024:
+            with app.progressbar(
+                length=plan.total_input_size,
+                label="Archiving",
+                show_eta=True,
+                show_percent=True,
+            ) as bar:
+
+                def progress_callback(fraction, current, total):
+                    bar.update(n_steps=current - bar.pos)
+
+                result = job.run(progress=progress_callback)
+
+        else:
+            result = job.run()
+
+        elapsed: float = time.time() - start_time
+
+        if not result.ok:
+            app.echo(
+                message=app.style(text=f"\n✗ Archive failed: {result.error}", fg="red"),
+                err=True,
+            )
+            sys.exit(1)
+
+        archive_size: int = plan.output.stat().st_size
+
+        if not quiet:
+            app.echo(message=app.style(text="✓ Archive created!", fg="green"))
+            app.echo(
+                message=f"  Input size:   {format_size(size_bytes=plan.total_input_size)}"
+            )
+            app.echo(message=f"  Archive size: {format_size(size_bytes=archive_size)}")
+            app.echo(message=f"  Time:         {format_time(seconds=elapsed)}")
+            app.echo()
+
+    except (Error, HeaderError, BackendError) as e:
+        app.echo(message=app.style(text=f"✗ Archive error: {e}", fg="red"), err=True)
+        sys.exit(1)
+
+    except Exception as e:
+        app.echo(message=app.style(text=f"✗ Unexpected error: {e}", fg="red"), err=True)
+        sys.exit(1)
+
+
+@app.command(aliases=["x", "ex"])
+def extract(
+    archive: Path = app.Argument(default=..., help="Archive to extract"),
+    output_dir: Path | None = app.Option(
+        None,
+        "--output-dir",
+        "-o",
+        help="Directory to extract into (default: current directory)",
+    ),
+    list_only: bool = app.Option(
+        False, "--list", help="List archive contents without extracting"
+    ),
+    quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress all output"),
+) -> None:
+    """Extract an archive, or list its contents.
+
+    Args:
+        archive: The path to the archive file.
+        output_dir: Directory to extract into (default: current directory).
+        list_only: If True, list contents without extracting.
+        quiet: If True, suppress all output (default: False).
+    """
+    try:
+        job = ExtractJob.from_archive(archive=archive, output_dir=output_dir)
+        plan = job.plan
+
+        if not plan.can_run:
+            app.echo(
+                message=app.style(
+                    text=f"✗ Error: {plan.reason_if_unavailable}", fg="red"
+                ),
+                err=True,
+            )
+            sys.exit(1)
+
+        if list_only:
+            for entry in job.list_contents():
+                app.echo(message=entry.path)
+            return
+
+        if not quiet:
+            app.echo(message=f"Extracting: {plan.archive}")
+            app.echo(message=f"Output dir: {plan.output_dir}")
+            app.echo(message=f"Entries:    {len(plan.entries)}")
+            app.echo()
+
+        start_time: float = time.time()
+        result = job.run()
+        elapsed: float = time.time() - start_time
+
+        if not result.ok:
+            app.echo(
+                message=app.style(
+                    text=f"\n✗ Extraction failed: {result.error}", fg="red"
+                ),
+                err=True,
+            )
+            sys.exit(1)
+
+        if not quiet:
+            app.echo(message=app.style(text="✓ Extraction successful!", fg="green"))
+            app.echo(message=f"  Entries: {len(plan.entries)}")
+            app.echo(message=f"  Time:    {format_time(seconds=elapsed)}")
+            app.echo()
+
+    except (Error, HeaderError, BackendError) as e:
+        app.echo(message=app.style(text=f"✗ Extraction error: {e}", fg="red"), err=True)
+        sys.exit(1)
+
+    except Exception as e:
+        app.echo(message=app.style(text=f"✗ Unexpected error: {e}", fg="red"), err=True)
+        sys.exit(1)
+
+
 @app.command(aliases=["i", "info"])
 def inspect(
     file: Path = app.Argument(..., help="File to inspect"),
     output_json: bool = app.Option(False, "--json", help="Output in JSON format"),
-):
+) -> None:
     """Inspect a compressed file and show metadata.
 
     Args:
@@ -333,7 +502,7 @@ def inspect(
         output_json: If True, output metadata in JSON format.
     """
     try:
-        result: InspectResult = inspect_file(path=file)
+        result = inspect_file(path=file)
 
         if output_json:
             import json
@@ -429,19 +598,19 @@ def inspect(
 @app.command(aliases=["b", "bench"])
 def benchmark(
     file: Path = app.Argument(..., help="File to benchmark"),
-    algos: Union[str, None] = app.Option(
+    algos: str | None = app.Option(
         "all", "--algos", help="Comma-separated list of algorithms"
     ),
-    strategies: Union[str, None] = app.Option(
+    strategies: str | None = app.Option(
         "all", "--strategies", help="Comma-separated list of strategies"
     ),
-    levels: Union[str, None] = app.Option(
+    levels: str | None = app.Option(
         "auto", "--levels", help="Comma-separated list of levels (0-9)"
     ),
     repeats: int = app.Option(
         1, "--repeats", help="Number of times to repeat each benchmark"
     ),
-    temp_dir: Union[Path, None] = app.Option(
+    temp_dir: Path | None = app.Option(
         None, "--temp-dir", help="Temporary directory for benchmark files"
     ),
     update_cache: bool = app.Option(
@@ -449,7 +618,7 @@ def benchmark(
         "--update-cache",
         help="Update speed estimates cache with benchmark results",
     ),
-):
+) -> None:
     """Run compression benchmarks on a file.
 
     Args:
@@ -462,17 +631,16 @@ def benchmark(
         update_cache: If True, update the speed estimates cache with benchmark results (default: False).
     """
     try:
-        algo_list: List[str] = []
+        algo_list: list[str] = []
         if algos and algos.lower() != "all":
             algo_list = [a.strip() for a in algos.split(",") if a.strip()]
 
-        strategy_list: List[str] = []
+        strategy_list: list[str] = []
         if strategies and strategies.lower() != "all":
             strategy_list = [s.strip() for s in strategies.split(",") if s.strip()]
 
-        level_list: List[Union[int, None]] = []
+        level_list: list[int | None] = []
         if levels:
-            level_list: List[Union[int, None]] = []
             for level in levels.split(sep=","):
                 level: str = level.strip()
                 if not level:
@@ -511,7 +679,7 @@ def benchmark(
             app.echo(message=f"Levels: {level_str}")
         app.echo()
 
-        results: List[BenchmarkResult] = benchmark_file(
+        results = benchmark_file(
             src=file,
             algos=algo_list or None,
             strategies=strategy_list or None,
@@ -546,11 +714,11 @@ def benchmark(
         sys.exit(1)
 
 
-@app.command(aliases=["l", "ls"])
-def list():
+@app.command(name="list", aliases=["l", "ls"])
+def list_algos():
     """List all available compression algorithms."""
     try:
-        caps: List[BackendCapabilities] = list_capabilities()
+        caps = list_capabilities()
 
         if not caps:
             app.echo(

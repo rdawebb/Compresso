@@ -7,7 +7,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Union
+from typing import Iterable
 
 from tabulate import tabulate
 
@@ -16,8 +16,26 @@ from .speeds import update_from_benchmarks
 
 
 # C extension wrappers for compression and decompression
-def compress(src_path, dest_path, *, algo=None, strategy="balanced", level=None):
-    """Compress a file using the specified algorithm and strategy."""
+def compress(
+    src_path: str,
+    dest_path: str,
+    *,
+    algo: str | None = None,
+    strategy: str = "balanced",
+    level: int | None = None,
+) -> int:
+    """Compress a file using the specified algorithm and strategy.
+
+    Args:
+        src_path: Path to the input file
+        dest_path: Path to the output file
+        algo: Compression algorithm to use (default: None)
+        strategy: Compression strategy to use (default: "balanced")
+        level: Compression level to use (default: None)
+
+    Returns:
+        The number of bytes written to the output file
+    """
     lvl: int = -1 if level is None else int(level)
     return compress_file(
         src_path=src_path,
@@ -28,8 +46,17 @@ def compress(src_path, dest_path, *, algo=None, strategy="balanced", level=None)
     )
 
 
-def decompress(src_path, dest_path, *, algo=None):
-    """Decompress a file using the specified algorithm."""
+def decompress(src_path: str, dest_path: str, *, algo: str | None = None) -> int:
+    """Decompress a file using the specified algorithm.
+
+    Args:
+        src_path: Path to the input file
+        dest_path: Path to the output file
+        algo: Compression algorithm to use (default: None)
+
+    Returns:
+        The number of bytes written to the output file
+    """
     return decompress_file(src_path=src_path, dst_path=dest_path, algo=algo or "")
 
 
@@ -49,7 +76,7 @@ class BenchmarkResult:
 
     algo: str
     strategy: str
-    level: Optional[int]
+    level: int | None
     compress_time: float
     decompress_time: float
     input_size: int
@@ -105,15 +132,15 @@ def _safe_unlink(path: Path) -> None:
 
 
 def benchmark_file(
-    src: Union[str, Path],
+    src: str | Path,
     *,
-    algos: Union[Iterable[str], None] = None,
-    strategies: Union[Iterable[str], None] = None,
-    levels: Union[Iterable[Optional[int]], None] = None,
+    algos: Iterable[str] | None = None,
+    strategies: Iterable[str] | None = None,
+    levels: Iterable[int | None] | None = None,
     repeats: int = 1,
-    temp_dir: Union[str, Path, None] = None,
+    temp_dir: str | Path | None = None,
     update_cache: bool = False,
-) -> List[BenchmarkResult]:
+) -> list[BenchmarkResult]:
     """Benchmark compression and decompression on a single file
 
     Args:
@@ -141,19 +168,19 @@ def benchmark_file(
         strategies: list[str] = ["fast", "balanced", "max_ratio"]
 
     if levels is None:
-        levels: list[None | int] = [None, 1, 3, 6, 9]
+        levels: list[int | None] = [None, 1, 3, 6, 9]
 
     temp_base: Path = Path(temp_dir) if temp_dir else src.parent
     input_size: int = src.stat().st_size
 
-    results: List[BenchmarkResult] = []
+    results: list[BenchmarkResult] = []
 
     for algo in algos:
         for strategy in strategies:
             for level in levels:
-                comp_times: List[float] = []
-                decomp_times: List[float] = []
-                compressed_size: Optional[int] = None
+                comp_times: list[float] = []
+                decomp_times: list[float] = []
+                compressed_size: int | None = None
 
                 for _ in range(repeats):
                     with (
@@ -230,7 +257,7 @@ def benchmark_file(
     return results
 
 
-def print_results(results: List[BenchmarkResult]) -> None:
+def print_results(results: list[BenchmarkResult]) -> None:
     """Print benchmark results in a tabular format
 
     Args:

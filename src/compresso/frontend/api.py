@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Union
 
 from .._core import compress_file, decompress_file
 from .._core import get_default_backend_for_strategy as default_backend
 from ..backend.file_inspect import InspectResult
 from ..backend.file_inspect import inspect as inspect_file
 from ..backend.speeds import get_estimated_speeds
+from ._job import JobResult, ProgressCallback
 
 MB = 1024 * 1024
 
@@ -25,9 +25,9 @@ class CompressionOptions:
         level: Compression level (0-9), or None for auto.
     """
 
-    algo: Optional[str] = None
+    algo: str | None = None
     strategy: str = "balanced"
-    level: Optional[int] = None
+    level: int | None = None
 
 
 @dataclass(frozen=True)
@@ -50,10 +50,10 @@ class CompressionPlan:
     options: CompressionOptions
 
     input_size: int
-    backend_name: Optional[str]
-    estimated_seconds: Optional[float]
+    backend_name: str | None
+    estimated_seconds: float | None
     can_compress: bool
-    reason_if_unavailable: Optional[str]
+    reason_if_unavailable: str | None
 
 
 @dataclass(frozen=True)
@@ -71,13 +71,13 @@ class DecompressionPlan:
     dest: Path
 
     inspection: InspectResult
-    estimated_seconds: Optional[float]
+    estimated_seconds: float | None
 
 
 def plan_compression(
-    src: Union[str, Path],
-    dest: Optional[Union[str, Path]] = None,
-    options: Optional[CompressionOptions] = None,
+    src: str | Path,
+    dest: str | Path | None = None,
+    options: CompressionOptions | None = None,
 ) -> CompressionPlan:
     """Plan a compression operation based on user options and file characteristics.
 
@@ -147,7 +147,7 @@ def plan_compression(
 
 
 def plan_decompression(
-    src: Union[str, Path], dest: Optional[Union[str, Path]] = None
+    src: str | Path, dest: str | Path | None = None
 ) -> DecompressionPlan:
     """Plan a decompression operation based on file inspection.
 
@@ -181,37 +181,23 @@ def plan_decompression(
     )
 
 
-@dataclass
-class JobResult:
-    """Holds the result of a compression or decompression job.
-
-    Attributes:
-        ok (bool): Indicates if the job was successful.
-        error (Optional[BaseException]): The error encountered, if any.
-        plan (CompressionPlan | DecompressionPlan): The associated plan.
-    """
-
-    ok: bool
-    error: Optional[BaseException]
-    plan: Union[CompressionPlan, DecompressionPlan]
-
-
-ProgressCallback = Callable[[float, int, int], None]
-
-
 class CompressionJob:
     """Compression job high-level wrapper."""
 
-    def __init__(self, plan: CompressionPlan):
-        """Initialise the compression job."""
+    def __init__(self, plan: CompressionPlan) -> None:
+        """Initialise the compression job.
+
+        Args:
+            plan: The compression plan to execute.
+        """
         self.plan: CompressionPlan = plan
 
     @classmethod
     def from_file(
         cls,
-        src: Union[str, Path],
-        dest: Optional[Union[str, Path]] = None,
-        options: Optional[CompressionOptions] = None,
+        src: str | Path,
+        dest: str | Path | None = None,
+        options: CompressionOptions | None = None,
     ) -> CompressionJob:
         """Create a CompressionJob from file paths and options.
 
@@ -225,7 +211,7 @@ class CompressionJob:
         """
         return cls(plan=plan_compression(src, dest, options))
 
-    def run(self, progress: Optional[ProgressCallback] = None) -> JobResult:
+    def run(self, progress: ProgressCallback | None = None) -> JobResult:
         """Run the compression job.
 
         Args:
@@ -280,13 +266,17 @@ class CompressionJob:
 class DecompressionJob:
     """Decompression job high-level wrapper."""
 
-    def __init__(self, plan: DecompressionPlan):
-        """Initialise the decompression job."""
+    def __init__(self, plan: DecompressionPlan) -> None:
+        """Initialise the decompression job.
+
+        Args:
+            plan: The decompression plan to execute.
+        """
         self.plan: DecompressionPlan = plan
 
     @classmethod
     def from_file(
-        cls, src: Union[str, Path], dest: Optional[Union[str, Path]] = None
+        cls, src: str | Path, dest: str | Path | None = None
     ) -> DecompressionJob:
         """Create a DecompressionJob from file paths.
 
@@ -299,7 +289,7 @@ class DecompressionJob:
         """
         return cls(plan=plan_decompression(src, dest))
 
-    def run(self, progress: Optional[ProgressCallback] = None) -> JobResult:
+    def run(self, progress: ProgressCallback | None = None) -> JobResult:
         """Run the decompression job.
 
         Args:

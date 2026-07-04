@@ -5,7 +5,6 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
 
 from .capabilities import get_by_id
 from .speeds import get_estimated_speeds
@@ -43,15 +42,15 @@ class InspectResult:
     # File recognition
     is_compresso: bool
     header_ok: bool
-    reason: Optional[str]
+    reason: str | None
 
     # Header fields (if is_compresso)
-    version: Optional[int]
-    algo_id: Optional[int]
-    algo_name: Optional[str]
-    level: Optional[int]  # None is 'auto' or 'unspecified'
-    flags: Optional[int]
-    orig_size: Optional[int]  # Original uncompressed bytes
+    version: int | None
+    algo_id: int | None
+    algo_name: str | None
+    level: int | None  # None is 'auto' or 'unspecified'
+    flags: int | None
+    orig_size: int | None  # Original uncompressed bytes
 
     # Backend info
     backend_available: bool
@@ -59,7 +58,7 @@ class InspectResult:
 
     # UI helpers
     can_decompress: bool
-    estimated_decomp_s: Optional[float]  # in seconds
+    estimated_decomp_s: float | None  # in seconds
 
 
 def _failed_inspection(
@@ -93,7 +92,7 @@ def _failed_inspection(
     )
 
 
-def inspect(path: Union[str, Path]) -> InspectResult:
+def inspect(path: str | Path) -> InspectResult:
     """Inspect a compressed file and extract metadata
 
     Args:
@@ -109,6 +108,7 @@ def inspect(path: Union[str, Path]) -> InspectResult:
     try:
         with path.open(mode="rb") as f:
             data: bytes = f.read(COMP_HEADER_STRUCT.size)
+
     except OSError as e:
         return _failed_inspection(path, reason=f"Failed to read file: {e}")
 
@@ -142,7 +142,7 @@ def inspect(path: Union[str, Path]) -> InspectResult:
     has_streaming: bool = cap.has_stream if cap else False
 
     can_decompress: bool = backend_available
-    reason: Optional[str] = None
+    reason: str | None = None
     if not can_decompress:
         reason = "No available backend for this algorithm"
 
@@ -152,6 +152,7 @@ def inspect(path: Union[str, Path]) -> InspectResult:
             mb_s: int | float = get_estimated_speeds(
                 algo=algo_name, operation="decompress"
             )
+
         else:
             mb_s = 200.0
         est_time: float | None = orig_size / (mb_s * 1024 * 1024)
