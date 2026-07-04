@@ -4,7 +4,6 @@
 #include <Python.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 #include <zlib.h>
 
 #define GZIP_CHUNK 65536
@@ -60,24 +59,13 @@ static int gzip_compress_file(const char *input_path, const char *output_path,
   header.magic[0] = 0x1f;
   header.magic[1] = 0x8b;
   header.method = 0x08; // DEFLATE
-  header.flags = FNAME; // Include original filename
-  header.mtime = (uint32_t)time(NULL);
+  header.flags = 0;
+  header.mtime = 0;
   header.xfl = 0;
   header.os = 0x03; // Unix
 
   if (fwrite(&header, sizeof(header), 1, output) != 1) {
     PyErr_SetString(PyExc_IOError, "Failed to write GZIP header");
-    fclose(input);
-    fclose(output);
-    return -1;
-  }
-
-  // Write original filename
-  const char *basename = strrchr(input_path, '/');
-  basename = basename ? basename + 1 : input_path;
-  size_t name_len = strlen(basename) + 1; // +1 for null terminator
-  if (fwrite(basename, 1, name_len, output) != name_len) {
-    PyErr_SetString(PyExc_IOError, "Failed to write filename");
     fclose(input);
     fclose(output);
     return -1;

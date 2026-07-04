@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,7 +96,7 @@ def _format_supports_archive(fmt: str) -> bool:
 
 
 def plan_archive(
-    sources: list[str | Path],
+    sources: Sequence[str | Path],
     output: str | Path,
     options: ArchiveOptions | None = None,
 ) -> ArchivePlan:
@@ -247,7 +248,7 @@ class ArchiveJob:
     @classmethod
     def from_paths(
         cls,
-        sources: list[str | Path],
+        sources: Sequence[str | Path],
         output: str | Path,
         options: ArchiveOptions | None = None,
     ) -> ArchiveJob:
