@@ -1,11 +1,34 @@
 #include "fsutil.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 // Split-and-create helper shared by both platforms
 static int fs_mkdir_one(const char *path, uint32_t mode);
+
+int fs_is_absolute(const char *path) {
+  // Deliberately tests both separators on every platform - see fsutil.h
+  if (path[0] == '/' || path[0] == '\\')
+    return 1;
+
+  int is_drive_letter =
+      (path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z');
+
+  return is_drive_letter && path[1] == ':';
+}
+
+int fs_is_stream_path(const char *path) {
+#if defined(_WIN32) || defined(_WIN64)
+  // Callers run this after fs_is_absolute, so a surviving colon is a stream
+  // separator rather than a drive qualifier
+  return strchr(path, ':') != NULL;
+#else
+  (void)path;
+  return 0;
+#endif
+}
 
 int fs_mkdir_p(const char *path, uint32_t mode) {
   char tmp[FS_PATH_MAX];
@@ -72,7 +95,8 @@ int fs_readlink(const char *path, char *buf, size_t buf_size) {
 struct fs_dir {
   HANDLE handle;
   WIN32_FIND_DATAA data;
-  int pending; // 1 while `data` holds an unconsumed entry
+  char name[MAX_PATH]; // Current entry, stable across the FindNextFileA below
+  int pending;         // 1 while `data` holds an unconsumed entry
 };
 
 fs_dir *fs_opendir(const char *path) {
@@ -101,15 +125,15 @@ fs_dir *fs_opendir(const char *path) {
 
 const char *fs_readdir(fs_dir *dir) {
   while (dir->pending) {
-    const char *name = dir->data.cFileName;
-    int skip = (strcmp(name, ".") == 0 || strcmp(name, "..") == 0);
+    // Copy the name out first, as advancing overwrites `data` in place
+    memcpy(dir->name, dir->data.cFileName, sizeof(dir->name));
 
     // Advance to the next entry for the following call
     if (!FindNextFileA(dir->handle, &dir->data))
       dir->pending = 0;
 
-    if (!skip)
-      return name;
+    if (strcmp(dir->name, ".") != 0 && strcmp(dir->name, "..") != 0)
+      return dir->name;
   }
   return NULL;
 }

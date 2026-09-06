@@ -99,7 +99,7 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
     Py_BEGIN_ALLOW_THREADS
 
         while ((bytes_read = fread(buffer, 1, sizeof(buffer), data)) > 0) {
-      ssize_t bytes_written =
+      la_ssize_t bytes_written =
           archive_write_data(writer->archive, buffer, bytes_read);
       if (bytes_written < 0) {
         Py_BLOCK_THREADS PyErr_Format(PyExc_IOError, "Failed to write data: %s",
@@ -240,7 +240,8 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output) {
   }
 
   char buffer[65536];
-  ssize_t bytes_read;
+  // la_ssize_t, not ssize_t: see the note in tar_add_entry
+  la_ssize_t bytes_read;
 
   Py_BEGIN_ALLOW_THREADS
 

@@ -1,6 +1,11 @@
 """Tests for the frontend archive API module."""
 
+import io
+import sys
+import tarfile
 from pathlib import Path
+
+import pytest
 
 from compresso.frontend._job import JobResult
 from compresso.frontend.archive_api import (
@@ -114,7 +119,7 @@ class TestExtractJob:
 
 
 class TestArchiveRoundTrip:
-    """End-to-end archive -> extract round-trip."""
+    """Test end-to-end archive -> extract round-trip."""
 
     def test_round_trip(self, temp_dir: Path, monkeypatch):
         """Test that archiving then extracting restores the original file contents.
@@ -166,3 +171,122 @@ class TestArchiveRoundTrip:
         assert (
             temp_dir / "out" / "tree" / "deep" / "leaf.txt"
         ).read_bytes() == b"leaf content"
+
+
+def _tar_with_entry(archive_path: Path, entry_name: str) -> None:
+    """Write a tar holding one regular file stored verbatim under `entry_name`.
+
+    Goes through `tarfile` rather than `ArchiveJob` because the point is to
+    store names the archiver itself would never produce.
+
+    Args:
+        archive_path: Where to write the tar.
+        entry_name: The entry name to store, used exactly as given.
+    """
+    payload = b"pwned"
+    with tarfile.open(archive_path, "w", format=tarfile.GNU_FORMAT) as tf:
+        info = tarfile.TarInfo(entry_name)
+        info.size = len(payload)
+        tf.addfile(info, io.BytesIO(payload))
+
+
+class TestExtractionRefusesUnsafePaths:
+    """Test that extraction refuses entry names that escape the output directory.
+
+    The Windows-absolute forms are rejected on POSIX too, so every case here
+    runs on all platforms rather than only on the Windows CI leg.
+    """
+
+    @pytest.mark.parametrize(
+        "entry_name",
+        [
+            "/etc/passwd",  # POSIX absolute
+            "\\evil.txt",  # Windows root-relative
+            "C:\\Windows\\evil.txt",  # Windows drive-absolute
+            "C:/Windows/evil.txt",  # ... with the other separator
+            "C:evil.txt",  # Windows drive-relative
+            "\\\\server\\share\\evil.txt",  # UNC
+            "\\\\?\\C:\\evil.txt",  # Extended-length prefix
+        ],
+    )
+    def test_rejects_absolute_entry(self, temp_dir: Path, entry_name: str):
+        """Test that an absolute or drive-qualified entry name fails extraction."""
+        archive_path = temp_dir / "evil.tar"
+        _tar_with_entry(archive_path, entry_name)
+
+        result = ExtractJob.from_archive(archive_path, temp_dir / "out").run()
+
+        assert result.ok is False
+        assert "absolute path" in str(result.error)
+
+    @pytest.mark.parametrize("entry_name", ["../escape.txt", "sub/../../escape.txt"])
+    def test_rejects_parent_traversal(self, temp_dir: Path, entry_name: str):
+        """Test that an entry climbing out of the output directory is refused."""
+        archive_path = temp_dir / "evil.tar"
+        _tar_with_entry(archive_path, entry_name)
+
+        result = ExtractJob.from_archive(archive_path, temp_dir / "out").run()
+
+        assert result.ok is False
+        assert "traversal" in str(result.error)
+        assert not (temp_dir / "escape.txt").exists()
+
+    def test_backslash_traversal_stays_contained(self, temp_dir: Path):
+        """Test that a backslash-separated traversal cannot escape on any platform.
+
+        On Windows `..\\..\\escape.txt` is a real traversal and is refused; on
+        POSIX it is an oddly-named file; both outcomes are safe, so assert
+        containment rather than a specific verdict.
+        """
+        archive_path = temp_dir / "evil.tar"
+        _tar_with_entry(archive_path, "..\\..\\escape.txt")
+        out_dir = temp_dir / "out"
+
+        ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert not (temp_dir / "escape.txt").exists()
+        assert not (temp_dir.parent / "escape.txt").exists()
+
+    @pytest.mark.parametrize(
+        "entry_name", ["notes.txt:evil.exe", "notes.txt:evil.exe:$DATA"]
+    )
+    def test_alternate_data_stream_writes_no_stream(
+        self, temp_dir: Path, entry_name: str
+    ):
+        """Test that an NTFS stream entry never attaches content to a real file.
+
+        On Windows the colon is a stream separator and the entry is refused; on
+        POSIX it is an ordinary filename character, so the entry extracts as one
+        literally-named file; assert the property that holds on both, then the
+        rejection only where it applies.
+        """
+        archive_path = temp_dir / "evil.tar"
+        _tar_with_entry(archive_path, entry_name)
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert not (out_dir / "notes.txt").exists()
+
+        if sys.platform == "win32":
+            assert result.ok is False
+            assert "alternate data stream" in str(result.error)
+
+        else:
+            assert result.ok, result.error
+            assert (out_dir / entry_name).read_bytes() == b"pwned"
+
+    def test_accepts_nested_entry(self, temp_dir: Path):
+        """Test that a legitimate nested entry is still extracted.
+
+        Guards the containment check against over-rejecting: it compares the
+        byte after the resolved root prefix, which is a backslash on Windows.
+        """
+        archive_path = temp_dir / "nested.tar"
+        _tar_with_entry(archive_path, "sub/deep/leaf.txt")
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "sub" / "deep" / "leaf.txt").read_bytes() == b"pwned"

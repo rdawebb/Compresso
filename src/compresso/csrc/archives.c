@@ -151,8 +151,15 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
 
 static int validate_entry_path(const char *output_dir, const char *entry_path,
                                uint32_t depth, const ExtractionPolicy *policy) {
-  if (entry_path[0] == '/') {
+  if (fs_is_absolute(entry_path)) {
     PyErr_Format(PyExc_ValueError, "Archive entry has an absolute path: %s",
+                 entry_path);
+    return -1;
+  }
+
+  if (fs_is_stream_path(entry_path)) {
+    PyErr_Format(PyExc_ValueError,
+                 "Archive entry names an alternate data stream: %s",
                  entry_path);
     return -1;
   }
@@ -188,8 +195,11 @@ static int validate_entry_path(const char *output_dir, const char *entry_path,
       return -1;
     }
     size_t root_len = strlen(resolved_root);
+    // The character after the prefix must end a component, otherwise
+    // "/out-evil" would pass as a child of "/out"
     if (strncmp(resolved_dir, resolved_root, root_len) != 0 ||
-        (resolved_dir[root_len] != '/' && resolved_dir[root_len] != '\0')) {
+        (!FS_IS_SEP(resolved_dir[root_len]) &&
+         resolved_dir[root_len] != '\0')) {
       PyErr_Format(PyExc_ValueError, "Path traversal detected in entry: %s",
                    entry_path);
       return -1;

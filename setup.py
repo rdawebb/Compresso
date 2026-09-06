@@ -145,7 +145,7 @@ if sys.platform == "win32":
     extra_compile_args = ["/O2"]
 else:
     libraries = ["z", "bz2", "lzma", "zstd", "lz4", "snappy", "zip", "archive"]
-    extra_compile_args = ["-O2", "-std=c11"]
+    extra_compile_args = ["-O2", "-std=gnu11"]
 
 setup(
     name="compresso",

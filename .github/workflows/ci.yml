@@ -16,6 +16,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install C libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libarchive-dev \
+            libzip-dev \
+            zlib1g-dev \
+            libbz2-dev \
+            liblzma-dev \
+            libzstd-dev \
+            liblz4-dev \
+            libsnappy-dev
+
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
 
@@ -102,9 +116,8 @@ jobs:
       - name: Run Python tests
         run: uv run pytest
 
-  # Windows is intentionally absent: the Unity/rake harness hard-codes gcc and
-  # links libpython the POSIX way, neither of which maps onto MSVC. On Windows
-  # the same C code is exercised through the extension by the test-python job.
+  # Windows is intentionally absent; the sources under test are portable and
+  # are exercised on Windows through the extension by the test-python job
   test-c:
     name: C tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -139,8 +152,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The Linux runner's system gem dir is not writable by the build user
       - name: Install rake
-        run: gem install rake
+        run: ${{ runner.os == 'Linux' && 'sudo gem install rake' || 'gem install rake' }}
 
       - name: Run C tests
         working-directory: tests/c
