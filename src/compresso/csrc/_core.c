@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "common.h"
+#include "standalone.h"
 #include "validate.h"
 #include <Python.h>
 
@@ -8,10 +9,70 @@ PyObject *comp_Error;
 PyObject *comp_HeaderError;
 PyObject *comp_BackendError;
 
+// ---- Path Encoding Helpers ----
+
+// Encode a Python str into filesystem-encoded bytes, the way every file-based
+// entry point hands OS paths to the C layer. Returns a new bytes reference
+// (caller Py_DECREFs) with *out pointing into its buffer, or NULL with an
+// exception set. Routing all paths through PyUnicode_EncodeFSDefault keeps path
+// handling consistent and honours the configured filesystem encoding rather
+// than assuming UTF-8.
+static PyObject *encode_fs_path(PyObject *obj, const char **out) {
+  PyObject *bytes = PyUnicode_EncodeFSDefault(obj);
+  if (!bytes)
+    return NULL;
+  *out = PyBytes_AsString(bytes);
+  return bytes;
+}
+
+// Encode a Python list of str paths into a C array of filesystem-encoded
+// C-strings. Returns a Python list holding the backing bytes objects, which the
+// caller must keep alive for the duration of the C call and then Py_DECREF;
+// *out_paths (caller frees) and *out_count are filled on success. NULL on
+// error.
+static PyObject *encode_fs_path_list(PyObject *list, const char ***out_paths,
+                                     size_t *out_count) {
+  Py_ssize_t n = PyList_Size(list);
+  const char **paths = NULL;
+  if (n > 0) {
+    paths = safe_malloc((size_t)n * sizeof(char *));
+    if (!paths)
+      return NULL;
+  }
+
+  PyObject *keepalive = PyList_New(n);
+  if (!keepalive) {
+    free(paths);
+    return NULL;
+  }
+
+  for (Py_ssize_t i = 0; i < n; i++) {
+    PyObject *item = PyList_GetItem(list, i); // borrowed
+    if (!PyUnicode_Check(item)) {
+      PyErr_SetString(PyExc_TypeError, "input_paths must be a list of strings");
+      Py_DECREF(keepalive);
+      free(paths);
+      return NULL;
+    }
+    PyObject *bytes = PyUnicode_EncodeFSDefault(item);
+    if (!bytes) {
+      Py_DECREF(keepalive);
+      free(paths);
+      return NULL;
+    }
+    PyList_SET_ITEM(keepalive, i, bytes); // steals reference
+    paths[i] = PyBytes_AsString(bytes);
+  }
+
+  *out_paths = paths;
+  *out_count = (size_t)n;
+  return keepalive;
+}
+
 // ---- Module Methods ----
 
-static PyObject *py_compress_file(PyObject *self __attribute__((unused)),
-                                  PyObject *args, PyObject *kwargs) {
+static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
+                                  PyObject *kwargs) {
   static char *kwlist[] = {"src_path", "dst_path", "algo",
                            "strategy", "level",    NULL};
 
@@ -66,8 +127,8 @@ static PyObject *py_compress_file(PyObject *self __attribute__((unused)),
   return PyLong_FromLong(0);
 }
 
-static PyObject *py_decompress_file(PyObject *self __attribute__((unused)),
-                                    PyObject *args, PyObject *kwargs) {
+static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
+                                    PyObject *kwargs) {
   static char *kwlist[] = {"src_path", "dst_path", "algo", NULL};
 
   PyObject *src_path_obj;
@@ -113,19 +174,19 @@ static PyObject *py_decompress_file(PyObject *self __attribute__((unused)),
 
 // ---- Archive Operations ----
 
-static PyObject *py_create_archive(PyObject *self __attribute__((unused)),
-                                   PyObject *args, PyObject *kwargs) {
+static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
+                                   PyObject *kwargs) {
   static char *kwlist[] = {"output_path", "format", "input_paths",
                            "compression_level", NULL};
 
-  const char *output_path = NULL;
+  PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
   PyObject *input_paths_obj = NULL;
   int compression_level = -1;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ssO|i", kwlist, &output_path,
-                                   &format_name, &input_paths_obj,
-                                   &compression_level)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OsO|i", kwlist,
+                                   &output_path_obj, &format_name,
+                                   &input_paths_obj, &compression_level)) {
     return NULL; // Error already set
   }
 
@@ -145,24 +206,26 @@ static PyObject *py_create_archive(PyObject *self __attribute__((unused)),
     return NULL;
   }
 
-  Py_ssize_t num_paths = PyList_Size(input_paths_obj);
-  const char **input_paths = safe_malloc(num_paths * sizeof(char *));
-  if (!input_paths) {
-    return NULL;
+  const char **input_paths = NULL;
+  size_t num_paths = 0;
+  PyObject *paths_keepalive =
+      encode_fs_path_list(input_paths_obj, &input_paths, &num_paths);
+  if (!paths_keepalive) {
+    return NULL; // Error already set
   }
 
-  for (Py_ssize_t i = 0; i < num_paths; i++) {
-    PyObject *item = PyList_GetItem(input_paths_obj, i);
-    if (!PyUnicode_Check(item)) {
-      free(input_paths);
-      PyErr_SetString(PyExc_TypeError, "input_paths must be a list of strings");
-      return NULL;
-    }
-    input_paths[i] = PyUnicode_AsUTF8(item);
+  const char *output_path = NULL;
+  PyObject *output_path_bytes = encode_fs_path(output_path_obj, &output_path);
+  if (!output_path_bytes) {
+    Py_DECREF(paths_keepalive);
+    free(input_paths);
+    return NULL; // Error already set
   }
 
-  int result =
-      create_archive(output_path, &pipe, input_paths, (size_t)num_paths);
+  int result = create_archive(output_path, &pipe, input_paths, num_paths);
+
+  Py_DECREF(output_path_bytes);
+  Py_DECREF(paths_keepalive);
   free(input_paths);
   if (result != 0) {
     return NULL; // Error already set
@@ -171,22 +234,25 @@ static PyObject *py_create_archive(PyObject *self __attribute__((unused)),
   Py_RETURN_NONE;
 }
 
-static PyObject *py_extract_archive(PyObject *self __attribute__((unused)),
-                                    PyObject *args, PyObject *kwargs) {
+static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
+                                    PyObject *kwargs) {
   static char *kwlist[] = {"archive_path", "output_dir", "files", NULL};
 
-  const char *archive_path = NULL;
-  const char *output_dir = NULL;
+  PyObject *archive_path_obj = NULL;
+  PyObject *output_dir_obj = NULL;
   PyObject *files_obj = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ssO", kwlist, &archive_path,
-                                   &output_dir, &files_obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOO", kwlist,
+                                   &archive_path_obj, &output_dir_obj,
+                                   &files_obj)) {
     return NULL; // Error already set
   }
 
   const char **files = NULL;
   size_t num_files = 0;
 
+  // `files` are archive-internal entry names matched against the stored (UTF-8)
+  // paths, so they are decoded as UTF-8 rather than fs-encoded
   if (files_obj && PyList_Check(files_obj)) {
     num_files = PyList_Size(files_obj);
     if (num_files > 0) {
@@ -202,9 +268,23 @@ static PyObject *py_extract_archive(PyObject *self __attribute__((unused)),
     }
   }
 
-  int result = extract_archive(archive_path, output_dir, files, num_files);
-  if (files)
+  const char *archive_path = NULL;
+  const char *output_dir = NULL;
+  PyObject *archive_path_bytes =
+      encode_fs_path(archive_path_obj, &archive_path);
+  PyObject *output_dir_bytes = encode_fs_path(output_dir_obj, &output_dir);
+  if (!archive_path_bytes || !output_dir_bytes) {
+    Py_XDECREF(archive_path_bytes);
+    Py_XDECREF(output_dir_bytes);
     free(files);
+    return NULL; // Error already set
+  }
+
+  int result = extract_archive(archive_path, output_dir, files, num_files);
+
+  Py_DECREF(archive_path_bytes);
+  Py_DECREF(output_dir_bytes);
+  free(files);
   if (result != 0) {
     return NULL; // Error already set
   }
@@ -212,38 +292,41 @@ static PyObject *py_extract_archive(PyObject *self __attribute__((unused)),
   Py_RETURN_NONE;
 }
 
-static PyObject *py_list_archive_contents(PyObject *self
-                                          __attribute__((unused)),
+static PyObject *py_list_archive_contents(PyObject *self UNUSED,
                                           PyObject *args) {
-  const char *archive_path = NULL;
+  PyObject *archive_path_obj = NULL;
 
-  if (!PyArg_ParseTuple(args, "s", &archive_path)) {
+  if (!PyArg_ParseTuple(args, "O", &archive_path_obj)) {
+    return NULL; // Error already set
+  }
+
+  const char *archive_path = NULL;
+  PyObject *archive_path_bytes =
+      encode_fs_path(archive_path_obj, &archive_path);
+  if (!archive_path_bytes) {
     return NULL; // Error already set
   }
 
   PyObject *file_list = list_archive_contents(archive_path);
-  if (!file_list) {
-    return NULL; // Error already set
-  }
-
-  return file_list;
+  Py_DECREF(archive_path_bytes);
+  return file_list; // NULL propagates the already-set exception
 }
 
 // ---- Standalone Methods ----
 
-static PyObject *py_compress_standalone(PyObject *self __attribute__((unused)),
-                                        PyObject *args, PyObject *kwargs) {
+static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
+                                        PyObject *kwargs) {
   static char *kwlist[] = {"input_path", "output_path", "format",
                            "compression_level", NULL};
 
-  const char *input_path = NULL;
-  const char *output_path = NULL;
+  PyObject *input_path_obj = NULL;
+  PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
   int compression_level = -1;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sss|i", kwlist, &input_path,
-                                   &output_path, &format_name,
-                                   &compression_level)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOs|i", kwlist,
+                                   &input_path_obj, &output_path_obj,
+                                   &format_name, &compression_level)) {
     return NULL; // Error already set
   }
 
@@ -260,27 +343,48 @@ static PyObject *py_compress_standalone(PyObject *self __attribute__((unused)),
     return NULL;
   }
 
-  if (fmt->compress_file(input_path, output_path, compression_level) != 0) {
+  const char *input_path = NULL;
+  const char *output_path = NULL;
+  PyObject *input_path_bytes = encode_fs_path(input_path_obj, &input_path);
+  PyObject *output_path_bytes = encode_fs_path(output_path_obj, &output_path);
+  if (!input_path_bytes || !output_path_bytes) {
+    Py_XDECREF(input_path_bytes);
+    Py_XDECREF(output_path_bytes);
+    return NULL; // Error already set
+  }
+
+  int rc = fmt->compress_file(input_path, output_path, compression_level);
+  Py_DECREF(input_path_bytes);
+  Py_DECREF(output_path_bytes);
+  if (rc != 0) {
     return NULL; // Error already set
   }
 
   Py_RETURN_NONE;
 }
 
-static PyObject *py_decompress_standalone(PyObject *self
-                                          __attribute__((unused)),
-                                          PyObject *args, PyObject *kwargs) {
+static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
+                                          PyObject *kwargs) {
   static char *kwlist[] = {"input_path", "output_path", "format", NULL};
 
-  const char *input_path = NULL;
-  const char *output_path = NULL;
+  PyObject *input_path_obj = NULL;
+  PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
 
   Format format = FORMAT_UNKNOWN;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|s", kwlist, &input_path,
-                                   &output_path, &format_name)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|s", kwlist,
+                                   &input_path_obj, &output_path_obj,
+                                   &format_name)) {
     return NULL; // Error already set
+  }
+
+  const char *input_path = NULL;
+  const char *output_path = NULL;
+  PyObject *input_path_bytes = encode_fs_path(input_path_obj, &input_path);
+  PyObject *output_path_bytes = encode_fs_path(output_path_obj, &output_path);
+  if (!input_path_bytes || !output_path_bytes) {
+    goto fail; // Error already set
   }
 
   if (format_name) {
@@ -288,7 +392,7 @@ static PyObject *py_decompress_standalone(PyObject *self
 
     if (format == FORMAT_UNKNOWN) {
       PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
-      return NULL;
+      goto fail;
     }
   } else {
     format = detect_format_from_path(input_path);
@@ -296,7 +400,7 @@ static PyObject *py_decompress_standalone(PyObject *self
     if (format == FORMAT_UNKNOWN) {
       PyErr_Format(PyExc_ValueError, "Could not detect format for: %s",
                    input_path);
-      return NULL;
+      goto fail;
     }
   }
 
@@ -304,23 +408,35 @@ static PyObject *py_decompress_standalone(PyObject *self
 
   if (!fmt) {
     PyErr_Format(PyExc_ValueError, "Unsupported format: %s", format);
-    return NULL;
+    goto fail;
   }
 
   if (fmt->decompress_file(input_path, output_path) != 0) {
-    return NULL; // Error already set
+    goto fail; // Error already set
   }
 
+  Py_DECREF(input_path_bytes);
+  Py_DECREF(output_path_bytes);
   Py_RETURN_NONE;
+
+fail:
+  Py_XDECREF(input_path_bytes);
+  Py_XDECREF(output_path_bytes);
+  return NULL;
 }
 
 // ---- Format Detection Methods ----
 
-static PyObject *py_detect_format(PyObject *self __attribute__((unused)),
-                                  PyObject *args) {
-  const char *file_path = NULL;
+static PyObject *py_detect_format(PyObject *self UNUSED, PyObject *args) {
+  PyObject *file_path_obj = NULL;
 
-  if (!PyArg_ParseTuple(args, "s", &file_path)) {
+  if (!PyArg_ParseTuple(args, "O", &file_path_obj)) {
+    return NULL; // Error already set
+  }
+
+  const char *file_path = NULL;
+  PyObject *file_path_bytes = encode_fs_path(file_path_obj, &file_path);
+  if (!file_path_bytes) {
     return NULL; // Error already set
   }
 
@@ -328,11 +444,11 @@ static PyObject *py_detect_format(PyObject *self __attribute__((unused)),
   char name[32];
   pipeline_display_name(&pipe, name, sizeof(name));
 
+  Py_DECREF(file_path_bytes);
   return PyUnicode_FromString(name);
 }
 
-static PyObject *py_format_is_archive(PyObject *self __attribute__((unused)),
-                                      PyObject *args) {
+static PyObject *py_format_is_archive(PyObject *self UNUSED, PyObject *args) {
   const char *format_name = NULL;
 
   if (!PyArg_ParseTuple(args, "s", &format_name)) {
@@ -350,19 +466,17 @@ static PyObject *py_format_is_archive(PyObject *self __attribute__((unused)),
 
 // ---- Capabilities Methods ----
 
-static PyObject *py_get_capabilities(PyObject *self __attribute__((unused)),
+static PyObject *py_get_capabilities(PyObject *self UNUSED,
                                      PyObject *Py_UNUSED(ignored)) {
   return get_capabilities();
 }
 
-static PyObject *py_get_archive_capabilities(PyObject *self
-                                             __attribute__((unused)),
+static PyObject *py_get_archive_capabilities(PyObject *self UNUSED,
                                              PyObject *Py_UNUSED(ignored)) {
   return get_archive_capabilities();
 }
 
-static PyObject *py_get_default_backend_for_strategy(PyObject *self
-                                                     __attribute__((unused)),
+static PyObject *py_get_default_backend_for_strategy(PyObject *self UNUSED,
                                                      PyObject *args) {
   const char *strategy_name = NULL;
 

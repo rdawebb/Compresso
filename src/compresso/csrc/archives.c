@@ -1,16 +1,12 @@
-#include <dirent.h>
-#include <errno.h>
-#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
 #include "common.h"
+#include "fsutil.h"
 #include "standalone.h"
 #include <Python.h>
 
@@ -57,34 +53,10 @@ static void entry_free(ArchiveEntry *e) {
 
 // ---- Helpers ----
 
-// Create a directory and any missing parents (like `mkdir -p`).
-static int mkdir_p(const char *path, mode_t mode) {
-  char tmp[PATH_MAX];
-  size_t len = strlen(path);
-  if (len == 0 || len >= sizeof(tmp))
-    return -1;
-
-  memcpy(tmp, path, len + 1);
-
-  for (char *p = tmp + 1; *p; p++) {
-    if (*p == '/') {
-      *p = '\0';
-      if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
-        return -1;
-      *p = '/';
-    }
-  }
-
-  if (mkdir(tmp, mode) != 0 && errno != EEXIST)
-    return -1;
-
-  return 0;
-}
-
 static ArchiveEntry *create_entry_from_path(const char *path,
                                             const char *base_path) {
-  struct stat st;
-  if (stat(path, &st) != 0) {
+  fs_stat st;
+  if (fs_stat_path(path, &st) != 0) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
     return NULL;
   }
@@ -106,18 +78,16 @@ static ArchiveEntry *create_entry_from_path(const char *path,
     return NULL;
   }
 
-  entry->size = (uint64_t)st.st_size;
-  entry->mtime = st.st_mtime;
-  entry->mode = st.st_mode & 0777;
+  entry->size = st.size;
+  entry->mtime = st.mtime;
+  entry->mode = st.mode;
 
-  if (S_ISDIR(st.st_mode)) {
+  if (st.type == FS_TYPE_DIR) {
     entry->type = ENTRY_DIR;
-  } else if (S_ISLNK(st.st_mode)) {
+  } else if (st.type == FS_TYPE_SYMLINK) {
     entry->type = ENTRY_SYMLINK;
-    char target[PATH_MAX];
-    ssize_t len = readlink(path, target, sizeof(target) - 1);
-    if (len > 0) {
-      target[len] = '\0';
+    char target[FS_PATH_MAX];
+    if (fs_readlink(path, target, sizeof(target)) == 0) {
       entry->symlink_target = strdup(target);
     }
   } else {
@@ -130,23 +100,20 @@ static ArchiveEntry *create_entry_from_path(const char *path,
 static int add_directory_recursive(void *writer, const CArchive *archive,
                                    const char *dir_path,
                                    const char *base_path) {
-  DIR *dir = opendir(dir_path);
+  fs_dir *dir = fs_opendir(dir_path);
   if (!dir) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir_path);
     return -1;
   }
 
-  struct dirent *dent;
-  while ((dent = readdir(dir)) != NULL) {
-    if (strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..") == 0)
-      continue;
-
-    char full_path[PATH_MAX];
-    snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, dent->d_name);
+  const char *name;
+  while ((name = fs_readdir(dir)) != NULL) {
+    char full_path[FS_PATH_MAX];
+    snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
 
     ArchiveEntry *ae = create_entry_from_path(full_path, base_path);
     if (!ae) {
-      closedir(dir);
+      fs_closedir(dir);
       return -1;
     }
 
@@ -154,7 +121,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
       FILE *f = fopen(full_path, "rb");
       if (!f) {
         entry_free(ae);
-        closedir(dir);
+        fs_closedir(dir);
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, full_path);
         return -1;
       }
@@ -162,14 +129,14 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
       fclose(f);
       entry_free(ae);
       if (ret != 0) {
-        closedir(dir);
+        fs_closedir(dir);
         return -1;
       }
     } else if (ae->type == ENTRY_DIR) {
       archive->add_entry(writer, ae, NULL);
       entry_free(ae);
       if (add_directory_recursive(writer, archive, full_path, base_path) != 0) {
-        closedir(dir);
+        fs_closedir(dir);
         return -1;
       }
     } else {
@@ -178,7 +145,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
     }
   }
 
-  closedir(dir);
+  fs_closedir(dir);
   return 0;
 }
 
@@ -196,27 +163,27 @@ static int validate_entry_path(const char *output_dir, const char *entry_path,
     return -1;
   }
 
-  char candidate[PATH_MAX];
+  char candidate[FS_PATH_MAX];
   if (snprintf(candidate, sizeof(candidate), "%s/%s", output_dir, entry_path) >=
       (int)sizeof(candidate)) {
     PyErr_SetString(PyExc_ValueError, "Archive entry path too long");
     return -1;
   }
 
-  char resolved_dir[PATH_MAX];
+  char resolved_dir[FS_PATH_MAX];
   char *last_sep = strrchr(candidate, '/');
   if (last_sep)
     *last_sep = '\0';
 
-  if (!realpath(candidate, resolved_dir)) {
+  if (fs_realpath(candidate, resolved_dir) != 0) {
     if (strstr(candidate, "..") != NULL) {
       PyErr_Format(PyExc_ValueError, "Path traversal detected in entry: %s",
                    entry_path);
       return -1;
     }
   } else {
-    char resolved_root[PATH_MAX];
-    if (!realpath(output_dir, resolved_root)) {
+    char resolved_root[FS_PATH_MAX];
+    if (fs_realpath(output_dir, resolved_root) != 0) {
       PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_dir);
       return -1;
     }
@@ -283,13 +250,11 @@ static char *make_temp_path(const char *final_path) {
     memcpy(tmpl, final_path, dir_len);
   memcpy(tmpl + dir_len, SUFFIX, sizeof(SUFFIX));
 
-  int fd = mkstemp(tmpl);
-  if (fd < 0) {
+  if (fs_mkstemp(tmpl) != 0) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, tmpl);
     free(tmpl);
     return NULL;
   }
-  close(fd);
   return tmpl;
 }
 
@@ -297,17 +262,16 @@ static char *make_temp_path(const char *final_path) {
 static int add_paths_to_writer(const CArchive *archive, void *writer,
                                const char **input_paths, size_t num_paths) {
   for (size_t i = 0; i < num_paths; i++) {
-    struct stat st;
-    if (stat(input_paths[i], &st) != 0) {
+    fs_stat st;
+    if (fs_stat_path(input_paths[i], &st) != 0) {
       PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_paths[i]);
       return -1;
     }
 
-    if (S_ISDIR(st.st_mode)) {
-      // Strip only the source's *parent* so the source directory's own name is
-      // preserved in stored entry paths (e.g. "sub/nested.txt", not
-      // "nested.txt"). Passing the source as its own base would flatten it.
-      char base[PATH_MAX];
+    if (st.type == FS_TYPE_DIR) {
+      // Strip only the source's parent, so the source directory's own name is
+      // preserved in stored entry paths
+      char base[FS_PATH_MAX];
       const char *slash = strrchr(input_paths[i], '/');
       if (slash) {
         size_t base_len = (size_t)(slash - input_paths[i]);
@@ -321,7 +285,7 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
         base[0] = '\0';
       }
 
-      // Record the directory itself so empty directories are preserved.
+      // Record the directory itself so empty directories are preserved
       ArchiveEntry *dir_entry = create_entry_from_path(input_paths[i], base);
       if (!dir_entry)
         return -1;
@@ -389,7 +353,7 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   void *writer = archive->create_writer(write_path, level);
   if (!writer) {
     if (tmp_path) {
-      unlink(tmp_path);
+      fs_unlink(tmp_path);
       free(tmp_path);
     }
     return -1;
@@ -405,7 +369,7 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   }
 
   if (tmp_path) {
-    unlink(tmp_path);
+    fs_unlink(tmp_path);
     free(tmp_path);
   }
   return ret;
@@ -447,16 +411,16 @@ static int extract_entries(const CArchive *archive, void *reader,
       }
     }
 
-    char out_path[PATH_MAX];
+    char out_path[FS_PATH_MAX];
     snprintf(out_path, sizeof(out_path), "%s/%s", output_dir, entry.path);
 
     if (entry.type == ENTRY_DIR) {
-      mkdir_p(out_path, entry.mode);
+      fs_mkdir_p(out_path, entry.mode);
     } else if (entry.type == ENTRY_FILE) {
       char *last_slash = strrchr(out_path, '/');
       if (last_slash) {
         *last_slash = '\0';
-        mkdir_p(out_path, 0755);
+        fs_mkdir_p(out_path, 0755);
         *last_slash = '/';
       }
 
@@ -475,11 +439,11 @@ static int extract_entries(const CArchive *archive, void *reader,
         return -1;
       }
 
-      int file_fd = fileno(f);
-      if (file_fd >= 0) {
-        fchmod(file_fd, entry.mode);
-      }
       fclose(f);
+      // Apply the recorded permission bits once the file is closed
+      // Best-effort: a chmod failure must not fail extraction of
+      // otherwise-valid data
+      fs_chmod(out_path, entry.mode);
     }
 
     free(entry.path);
@@ -514,7 +478,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
     if (!tmp_path)
       return -1;
     if (codec->decompress_file(archive_path, tmp_path) != 0) {
-      unlink(tmp_path);
+      fs_unlink(tmp_path);
       free(tmp_path);
       return -1;
     }
@@ -524,13 +488,13 @@ int extract_archive(const char *archive_path, const char *output_dir,
   void *reader = archive->create_reader(read_path);
   if (!reader) {
     if (tmp_path) {
-      unlink(tmp_path);
+      fs_unlink(tmp_path);
       free(tmp_path);
     }
     return -1;
   }
 
-  mkdir(output_dir, 0755);
+  fs_mkdir_p(output_dir, 0755);
 
   int ret =
       extract_entries(archive, reader, output_dir, files, num_files, policy);
@@ -538,7 +502,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
     ret = -1;
 
   if (tmp_path) {
-    unlink(tmp_path);
+    fs_unlink(tmp_path);
     free(tmp_path);
   }
   return ret;
@@ -601,7 +565,7 @@ PyObject *list_archive_contents(const char *archive_path) {
     if (!tmp_path)
       return NULL;
     if (codec->decompress_file(archive_path, tmp_path) != 0) {
-      unlink(tmp_path);
+      fs_unlink(tmp_path);
       free(tmp_path);
       return NULL;
     }
@@ -611,7 +575,7 @@ PyObject *list_archive_contents(const char *archive_path) {
   void *reader = archive->create_reader(read_path);
   if (!reader) {
     if (tmp_path) {
-      unlink(tmp_path);
+      fs_unlink(tmp_path);
       free(tmp_path);
     }
     return NULL;
@@ -621,7 +585,7 @@ PyObject *list_archive_contents(const char *archive_path) {
   archive->close_reader(reader);
 
   if (tmp_path) {
-    unlink(tmp_path);
+    fs_unlink(tmp_path);
     free(tmp_path);
   }
   return list;

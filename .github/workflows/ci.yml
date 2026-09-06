@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+
+      - name: Sync dependencies
+        run: uv sync --all-extras
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run ty check src tests
+
+  test-python:
+    name: Python tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install C libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libarchive-dev \
+            libzip-dev \
+            zlib1g-dev \
+            libbz2-dev \
+            liblzma-dev \
+            libzstd-dev \
+            liblz4-dev \
+            libsnappy-dev
+
+      - name: Install C libraries (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install libarchive libzip zstd lz4 snappy xz
+          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+
+      # Windows has no pkg-config/Homebrew, so provision the libraries with the
+      # runner's preinstalled vcpkg and hand setup.py the include/lib dirs via
+      # its COMPRESSO_EXTRA_* override (the x64-windows import-lib names match
+      # the Windows `libraries` list in setup.py).
+      - name: Install C libraries (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          vcpkg install `
+            zlib bzip2 liblzma zstd lz4 snappy libzip libarchive `
+            --triplet x64-windows
+          $root = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          "COMPRESSO_EXTRA_INCLUDE_DIRS=$root\include" >> $env:GITHUB_ENV
+          "COMPRESSO_EXTRA_LIBRARY_DIRS=$root\lib" >> $env:GITHUB_ENV
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Sync dependencies
+        run: uv sync --all-extras
+
+      - name: Build extension
+        run: uv pip install -e .
+
+      # Since Python 3.8 an extension's dependent DLLs are not resolved via PATH,
+      # but the loader does search the directory holding the .pyd, so drop the
+      # vcpkg runtime DLLs next to the built _core extension.
+      - name: Bundle dependent DLLs next to the extension (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin"
+          Copy-Item "$bin\*.dll" "src\compresso\" -Force
+
+      - name: Run Python tests
+        run: uv run pytest
+
+  # Windows is intentionally absent: the Unity/rake harness hard-codes gcc and
+  # links libpython the POSIX way, neither of which maps onto MSVC. On Windows
+  # the same C code is exercised through the extension by the test-python job.
+  test-c:
+    name: C tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install C libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            zlib1g-dev \
+            libbz2-dev \
+            liblzma-dev \
+            libzstd-dev \
+            liblz4-dev \
+            libsnappy-dev
+
+      - name: Install C libraries (macOS)
+        if: runner.os == 'macOS'
+        run: brew install zstd lz4 snappy xz
+
+      # The Unity harness links libpython resolved from the `python3`, so
+      # actions/setup-python ships a linkable libpython plus dev headers
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install rake
+        run: gem install rake
+
+      - name: Run C tests
+        working-directory: tests/c
+        run: rake test:all

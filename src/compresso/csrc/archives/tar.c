@@ -211,12 +211,13 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
   entry->mode = archive_entry_perm(reader->current_entry);
 
   // Determine entry type
-  mode_t filetype = archive_entry_filetype(reader->current_entry);
-  if (S_ISREG(filetype)) {
+  unsigned int filetype =
+      (unsigned int)archive_entry_filetype(reader->current_entry);
+  if (filetype == AE_IFREG) {
     entry->type = ENTRY_FILE;
-  } else if (S_ISDIR(filetype)) {
+  } else if (filetype == AE_IFDIR) {
     entry->type = ENTRY_DIR;
-  } else if (S_ISLNK(filetype)) {
+  } else if (filetype == AE_IFLNK) {
     entry->type = ENTRY_SYMLINK;
     const char *link = archive_entry_symlink(reader->current_entry);
     if (link) {

@@ -1,26 +1,15 @@
-/**
- * test_standalone.c - Tests for the standalone single-file formats
- * (gzip, bzip2, xz, zstd, lz4).
- *
- * Each format is exercised through the StandaloneFormat interface:
- *   - getter returns a populated descriptor (name / extension / callbacks)
- *   - is_format() matches the format's magic bytes and rejects others
- *   - a file round-trips byte-for-byte through compress_file/decompress_file
- *   - a single-byte corruption of the compressed file is detected on decompress
- *     (this validates the library's built-in CRC/checksum verification)
- */
-
-#include "../unity.h"
 #include "../../../src/compresso/csrc/common.h"
+#include "../../../src/compresso/csrc/standalone.h"
+#include "../unity.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define TEST_INPUT "../fixtures/alice29.txt"
 
-// The comp_* exception objects live in _core.c in the real extension and are
-// defined (as NULL) by the test harness stub. Create them once so error paths
-// that call PyErr_SetString() have a valid exception type.
+// The comp_* exception objects are defined (as NULL) by the test harness stub
+// Create them once so error paths that call PyErr_SetString() have a valid
+// exception type
 static void ensure_comp_exceptions(void) {
   if (!comp_Error)
     comp_Error = PyErr_NewException("compresso.Error", NULL, NULL);
@@ -66,7 +55,7 @@ static int files_equal(const char *a, const char *b) {
       break;
     }
     if (ca == EOF) {
-      break; // both reached EOF together
+      break; // Both reached EOF together
     }
   }
 
@@ -97,7 +86,7 @@ static void detect_corruption(const StandaloneFormat *fmt) {
   TEST_ASSERT_EQUAL_INT_MESSAGE(0, fmt->compress_file(TEST_INPUT, comp, 6),
                                 fmt->name);
 
-  // Flip a byte in the middle of the compressed payload.
+  // Flip a byte in the middle of the compressed payload
   FILE *f = fopen(comp, "rb+");
   TEST_ASSERT_NOT_NULL(f);
   fseek(f, 0, SEEK_END);
@@ -109,7 +98,7 @@ static void detect_corruption(const StandaloneFormat *fmt) {
   fputc(c ^ 0xFF, f);
   fclose(f);
 
-  // Decompression must fail (CRC/checksum or structural error).
+  // Decompression must fail (CRC/checksum or structural error)
   TEST_ASSERT_EQUAL_INT_MESSAGE(-1, fmt->decompress_file(comp, out), fmt->name);
   PyErr_Clear();
 
@@ -223,7 +212,7 @@ void test_lz4_is_format(void) {
 void test_lz4_round_trip(void) { round_trip(get_lz4_format()); }
 void test_lz4_detect_corruption(void) { detect_corruption(get_lz4_format()); }
 
-// ---- registry ----
+// ---- Registry ----
 
 void test_registry_resolves_all_standalone_formats(void) {
   TEST_ASSERT_NOT_NULL(find_standalone_format(FORMAT_GZIP));

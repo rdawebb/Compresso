@@ -3,11 +3,25 @@
 
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
-#include "standalone.h"
 #include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+
+// ---- Compiler Portability ----
+
+// Wrapper macros for compiler-specific attribute names
+#if defined(_MSC_VER)
+#define UNUSED
+#define PACKED
+#define PACKED_BEGIN __pragma(pack(push, 1))
+#define PACKED_END __pragma(pack(pop))
+#else
+#define UNUSED __attribute__((unused))
+#define PACKED __attribute__((packed))
+#define PACKED_BEGIN
+#define PACKED_END
+#endif
 
 // ---- Header ----
 
@@ -112,47 +126,14 @@ PyObject *get_capabilities(void);
 #define MAX_DECOMPRESSED_SIZE (10ULL * 1024 * 1024 * 1024) // 10 GB
 #define MAX_COMPRESSED_SIZE (12ULL * 1024 * 1024 * 1024)   // 12 GB
 
-static inline int validate_size(uint64_t size, uint64_t max_size,
-                                const char *name) {
-  if (size == 0) {
-    PyErr_Format(PyExc_ValueError, "%s is zero", name);
-    return -1;
-  }
-  if (size > max_size) {
-    PyErr_Format(PyExc_ValueError,
-                 "%s (%llu bytes) exceeds maximum size (%llu bytes)", name,
-                 (unsigned long long)size, (unsigned long long)max_size);
-    return -1;
-  }
-  return 0;
-}
+int validate_size(uint64_t size, uint64_t max_size, const char *name);
 
-static inline void *safe_malloc(size_t size) {
-  if (size == 0) {
-    PyErr_SetString(PyExc_ValueError, "Cannot allocate zero bytes");
-    return NULL;
-  }
-  if (size > SIZE_MAX / 2) {
-    PyErr_Format(PyExc_MemoryError, "Allocation size (%zu bytes) is too large",
-                 size);
-    return NULL;
-  }
-
-  void *ptr = malloc(size);
-  if (!ptr) {
-    PyErr_NoMemory();
-  }
-  return ptr;
-}
+void *safe_malloc(size_t size);
 
 // ---- Backend Error Helper ----
 
-static inline void set_backend_error(const CBackend *backend, const char *op,
-                                     const char *context) {
-  PyErr_Format(comp_BackendError, "Backend '%s' %s failed (%s)",
-               backend && backend->name ? backend->name : "unknown", op,
-               context);
-}
+void set_backend_error(const CBackend *backend, const char *op,
+                       const char *context);
 
 // ---- Public API ----
 

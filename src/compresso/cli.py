@@ -173,6 +173,7 @@ def compress(
 
         if not quiet:
             app.echo(message=app.style(text="✓ Compression successful!", fg="green"))
+            app.echo()
             app.echo(
                 message=f"  Original size:   {format_size(size_bytes=plan.input_size)}"
             )
@@ -298,6 +299,7 @@ def decompress(
 
         if not quiet:
             app.echo(message=app.style(text="✓ Decompression successful!", fg="green"))
+            app.echo()
             app.echo(
                 message=f"  Compressed size:   {format_size(size_bytes=compressed_size)}"
             )

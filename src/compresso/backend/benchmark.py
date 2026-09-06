@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import time
 from dataclasses import dataclass
@@ -159,7 +158,7 @@ def benchmark_file(
         raise FileNotFoundError(f"Source file {src} does not exist or is not a file")
 
     if temp_dir is None:
-        temp_dir = Path(os.getenv(key="TMPDIR", default="/tmp"))
+        temp_dir = Path(tempfile.gettempdir())
 
     if algos is None:
         algos: list[str] = ["zlib", "bzip2", "lzma", "zstd", "lz4", "snappy"]

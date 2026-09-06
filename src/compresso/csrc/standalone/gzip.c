@@ -8,7 +8,9 @@
 
 #define GZIP_CHUNK 65536
 
-// GZIP header structure (RFC 1952)
+// GZIP header structure (RFC 1952); serialised directly via fwrite/fread, so
+// the packed 10-byte layout is load-bearing on every compiler
+PACKED_BEGIN
 typedef struct {
   uint8_t magic[2]; // 0x1f, 0x8b
   uint8_t method;   // 0x08 for DEFLATE
@@ -16,7 +18,8 @@ typedef struct {
   uint32_t mtime;   // Modification time
   uint8_t xfl;      // Extra flags
   uint8_t os;       // Operating system
-} __attribute__((packed)) GzipHeader;
+} PACKED GzipHeader;
+PACKED_END
 
 // GZIP flags
 #define FTEXT 0x01

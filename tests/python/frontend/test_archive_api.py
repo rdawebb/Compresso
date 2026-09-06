@@ -11,7 +11,6 @@ from compresso.frontend.archive_api import (
     ExtractJob,
     ExtractPlan,
     plan_archive,
-    plan_extraction,
 )
 
 
@@ -38,7 +37,7 @@ class TestPlanArchive:
     """Test the plan_archive planner."""
 
     def test_plan_archive_valid(self, sample_text_file: Path, temp_dir: Path):
-        """A plan over existing sources can run and sums input size."""
+        """Test that a plan over existing sources can run and sums input size."""
         out = temp_dir / "out.tar.zst"
         plan = plan_archive([sample_text_file], out)
 
@@ -49,42 +48,44 @@ class TestPlanArchive:
         assert plan.total_input_size == sample_text_file.stat().st_size
 
     def test_plan_archive_no_sources(self, temp_dir: Path):
-        """A plan with no sources cannot run."""
+        """Test that a plan with no sources cannot run."""
         plan = plan_archive([], temp_dir / "out.tar.zst")
 
         assert plan.can_run is False
         assert plan.reason_if_unavailable is not None
 
     def test_plan_archive_missing_source(self, temp_dir: Path):
-        """A plan referencing a missing source cannot run."""
+        """Test that a plan referencing a missing source cannot run."""
         plan = plan_archive([temp_dir / "nope.txt"], temp_dir / "out.tar.zst")
 
         assert plan.can_run is False
-        assert "does not exist" in plan.reason_if_unavailable
+        if plan.reason_if_unavailable is not None:
+            assert "does not exist" in plan.reason_if_unavailable
 
     def test_plan_archive_non_archive_format(
         self, sample_text_file: Path, temp_dir: Path
     ):
-        """A single-file codec format cannot be used to build an archive."""
+        """Test that a single-file codec format cannot be used to build an archive."""
         opts = ArchiveOptions(format="gz")
         plan = plan_archive([sample_text_file], temp_dir / "out.gz", opts)
 
         assert plan.can_run is False
-        assert "does not support archives" in plan.reason_if_unavailable
+        if plan.reason_if_unavailable is not None:
+            assert "does not support archives" in plan.reason_if_unavailable
 
 
 class TestArchiveJob:
     """Test the ArchiveJob class."""
 
     def test_from_paths_builds_plan(self, sample_text_file: Path, temp_dir: Path):
-        """from_paths runs the planner and exposes the plan."""
+        """Test that from_paths runs the planner and exposes the plan."""
         job = ArchiveJob.from_paths([sample_text_file], temp_dir / "out.tar.zst")
 
         assert isinstance(job.plan, ArchivePlan)
         assert job.plan.can_run is True
 
     def test_run_on_unavailable_plan_returns_failed_result(self, temp_dir: Path):
-        """run() never raises: an unrunnable plan yields a failed JobResult."""
+        """Test that run() never raises: an unrunnable plan yields a failed JobResult."""
         job = ArchiveJob.from_paths([], temp_dir / "out.tar.zst")
         result = job.run()
 
@@ -97,14 +98,14 @@ class TestExtractJob:
     """Test the ExtractJob class."""
 
     def test_from_archive_missing_returns_unavailable_plan(self, temp_dir: Path):
-        """A missing archive produces a plan that cannot run."""
+        """Test that a missing archive produces a plan that cannot run."""
         job = ExtractJob.from_archive(temp_dir / "missing.tar.zst")
 
         assert isinstance(job.plan, ExtractPlan)
         assert job.plan.can_run is False
 
     def test_run_on_unavailable_plan_returns_failed_result(self, temp_dir: Path):
-        """run() never raises on a missing archive."""
+        """Test that run() never raises on a missing archive."""
         job = ExtractJob.from_archive(temp_dir / "missing.tar.zst")
         result = job.run()
 
@@ -116,7 +117,7 @@ class TestArchiveRoundTrip:
     """End-to-end archive -> extract round-trip."""
 
     def test_round_trip(self, temp_dir: Path, monkeypatch):
-        """Archiving then extracting restores the original file contents.
+        """Test that archiving then extracting restores the original file contents.
 
         Archives store source paths verbatim and extraction refuses absolute
         paths, so archive from within the working directory using a relative
@@ -144,7 +145,7 @@ class TestArchiveRoundTrip:
         assert restored.read_bytes() == src.read_bytes()
 
     def test_directory_round_trip(self, temp_dir: Path, monkeypatch):
-        """Archiving a directory preserves its nested structure on extraction."""
+        """Test that archiving a directory preserves its nested structure on extraction."""
         monkeypatch.chdir(temp_dir)
         src = Path("tree")
         (src / "deep").mkdir(parents=True)
@@ -158,9 +159,7 @@ class TestArchiveRoundTrip:
         assert "tree/top.txt" in names
         assert "tree/deep/leaf.txt" in names
 
-        extract_result = ExtractJob.from_archive(
-            archive_path, temp_dir / "out"
-        ).run()
+        extract_result = ExtractJob.from_archive(archive_path, temp_dir / "out").run()
         assert extract_result.ok, extract_result.error
 
         assert (temp_dir / "out" / "tree" / "top.txt").read_bytes() == b"top level"

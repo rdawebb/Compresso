@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
 #include "common.h"
+#include "standalone.h"
 #include <Python.h>
 #include <string.h>
 
@@ -9,8 +10,8 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
 
 // ---- I/O Helpers ----
 
-static unsigned char *__attribute__((unused))
-read_file_to_memory(const char *path, size_t *out_size) {
+static unsigned char *UNUSED read_file_to_memory(const char *path,
+                                                 size_t *out_size) {
   FILE *f = fopen(path, "rb");
   if (!f) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
@@ -97,8 +98,8 @@ read_file_to_memory(const char *path, size_t *out_size) {
   return buffer;
 }
 
-static int __attribute__((unused))
-write_memory_to_file(const char *path, const unsigned char *data, size_t size) {
+static int UNUSED write_memory_to_file(const char *path,
+                                       const unsigned char *data, size_t size) {
   FILE *f = fopen(path, "wb");
   if (!f) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);

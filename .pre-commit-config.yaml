@@ -49,16 +49,3 @@ repos:
         entry: uv run sh -c 'gcc $(python3-config --includes) -fsyntax-only "$@"'
         language: system
         types: [c]
-
-      - id: run-python-tests
-        name: Run Python tests
-        entry: uv run pytest tests/
-        language: system
-        types: [python]
-        pass_filenames: false
-
-      - id: run-c-tests
-        name: Run C tests
-        entry: uv run cd tests/c && rake test:all
-        language: system
-        types: [c]
