@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 // ---- Compiler Portability ----
 
@@ -35,10 +36,52 @@ static inline int add_overflow_size(size_t a, size_t b, size_t *out) {
 #endif
 }
 
+// ---- Byte Order ----
+
+// Both on-disk formats are little-endian by definition (RFC 1952 for gzip, the
+// Compresso header below), so multi-byte fields go through these rather than
+// being copied from a struct in host order
+
+static inline void write_le16(uint8_t *buf, uint16_t val) {
+  buf[0] = (uint8_t)(val & 0xFF);
+  buf[1] = (uint8_t)((val >> 8) & 0xFF);
+}
+
+static inline uint16_t read_le16(const uint8_t *buf) {
+  return (uint16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
+}
+
+static inline void write_le32(uint8_t *buf, uint32_t val) {
+  buf[0] = (uint8_t)(val & 0xFF);
+  buf[1] = (uint8_t)((val >> 8) & 0xFF);
+  buf[2] = (uint8_t)((val >> 16) & 0xFF);
+  buf[3] = (uint8_t)((val >> 24) & 0xFF);
+}
+
+static inline uint32_t read_le32(const uint8_t *buf) {
+  return (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16) |
+         ((uint32_t)buf[3] << 24);
+}
+
+static inline void write_le64(uint8_t *buf, uint64_t val) {
+  for (int i = 0; i < 8; i++)
+    buf[i] = (uint8_t)((val >> (i * 8)) & 0xFF);
+}
+
+static inline uint64_t read_le64(const uint8_t *buf) {
+  uint64_t val = 0;
+  for (int i = 0; i < 8; i++)
+    val |= (uint64_t)buf[i] << (i * 8);
+  return val;
+}
+
 // ---- Header ----
 
 #define C_MAGIC "COMP"
 #define C_MAGIC_LEN 4
+
+// Size on disk: CHeader is never written or read directly
+#define C_HEADER_SIZE 16
 
 typedef struct {
   uint8_t magic[C_MAGIC_LEN];
@@ -49,10 +92,26 @@ typedef struct {
   uint64_t orig_size;
 } CHeader;
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(sizeof(CHeader) == 16,
-               "CHeader must be exactly 16 bytes with no padding");
-#endif
+// Defines the on-disk layout
+static inline void c_header_pack(const CHeader *header,
+                                 uint8_t buf[C_HEADER_SIZE]) {
+  memcpy(buf, header->magic, C_MAGIC_LEN);
+  buf[4] = header->version;
+  buf[5] = header->algo;
+  buf[6] = header->level;
+  buf[7] = header->flags;
+  write_le64(buf + 8, header->orig_size);
+}
+
+static inline void c_header_unpack(const uint8_t buf[C_HEADER_SIZE],
+                                   CHeader *header) {
+  memcpy(header->magic, buf, C_MAGIC_LEN);
+  header->version = buf[4];
+  header->algo = buf[5];
+  header->level = buf[6];
+  header->flags = buf[7];
+  header->orig_size = read_le64(buf + 8);
+}
 
 // ---- Algorithms ----
 

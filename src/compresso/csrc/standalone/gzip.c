@@ -8,18 +8,17 @@
 
 #define GZIP_CHUNK 65536
 
-// GZIP header structure (RFC 1952); serialised directly via fwrite/fread, so
-// the packed 10-byte layout is load-bearing on every compiler
-PACKED_BEGIN
-typedef struct {
-  uint8_t magic[2]; // 0x1f, 0x8b
-  uint8_t method;   // 0x08 for DEFLATE
-  uint8_t flags;    // FLG
-  uint32_t mtime;   // Modification time
-  uint8_t xfl;      // Extra flags
-  uint8_t os;       // Operating system
-} PACKED GzipHeader;
-PACKED_END
+// GZIP header (RFC 1952): a fixed 10-byte record, addressed by byte offset
+// rather than declared as a struct so that padding can't reach the file.
+// MTIME is the only multi-byte field; write it with write_le32
+#define GZIP_HEADER_SIZE 10
+#define GZIP_OFF_MAGIC0 0
+#define GZIP_OFF_MAGIC1 1
+#define GZIP_OFF_METHOD 2
+#define GZIP_OFF_FLAGS 3
+#define GZIP_OFF_MTIME 4
+#define GZIP_OFF_XFL 8
+#define GZIP_OFF_OS 9
 
 // GZIP flags
 #define FTEXT 0x01
@@ -27,20 +26,6 @@ PACKED_END
 #define FEXTRA 0x04
 #define FNAME 0x08
 #define FCOMMENT 0x10
-
-// Write little-endian uint32
-static void write_le32(uint8_t *buf, uint32_t val) {
-  buf[0] = val & 0xFF;
-  buf[1] = (val >> 8) & 0xFF;
-  buf[2] = (val >> 16) & 0xFF;
-  buf[3] = (val >> 24) & 0xFF;
-}
-
-// Read little-endian uint32
-static uint32_t read_le32(const uint8_t *buf) {
-  return (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16) |
-         ((uint32_t)buf[3] << 24);
-}
 
 static int gzip_compress_file(const char *input_path, const char *output_path,
                               int level) {
@@ -58,16 +43,16 @@ static int gzip_compress_file(const char *input_path, const char *output_path,
   }
 
   // Write GZIP header
-  GzipHeader header;
-  header.magic[0] = 0x1f;
-  header.magic[1] = 0x8b;
-  header.method = 0x08; // DEFLATE
-  header.flags = 0;
-  header.mtime = 0;
-  header.xfl = 0;
-  header.os = 0x03; // Unix
+  uint8_t header[GZIP_HEADER_SIZE];
+  header[GZIP_OFF_MAGIC0] = 0x1f;
+  header[GZIP_OFF_MAGIC1] = 0x8b;
+  header[GZIP_OFF_METHOD] = 0x08; // DEFLATE
+  header[GZIP_OFF_FLAGS] = 0;
+  write_le32(header + GZIP_OFF_MTIME, 0); // Zeroed for reproducible output
+  header[GZIP_OFF_XFL] = 0;
+  header[GZIP_OFF_OS] = 0x03; // Unix
 
-  if (fwrite(&header, sizeof(header), 1, output) != 1) {
+  if (fwrite(header, sizeof(header), 1, output) != 1) {
     PyErr_SetString(PyExc_IOError, "Failed to write GZIP header");
     fclose(input);
     fclose(output);
@@ -170,51 +155,53 @@ static int gzip_decompress_file(const char *input_path,
   }
 
   // Read and validate GZIP header
-  GzipHeader header;
-  if (fread(&header, sizeof(header), 1, input) != 1) {
+  uint8_t header[GZIP_HEADER_SIZE];
+  if (fread(header, sizeof(header), 1, input) != 1) {
     PyErr_SetString(comp_HeaderError, "Failed to read GZIP header");
     fclose(input);
     return -1;
   }
 
-  if (header.magic[0] != 0x1f || header.magic[1] != 0x8b) {
+  if (header[GZIP_OFF_MAGIC0] != 0x1f || header[GZIP_OFF_MAGIC1] != 0x8b) {
     PyErr_SetString(comp_HeaderError, "Invalid GZIP magic number");
     fclose(input);
     return -1;
   }
 
-  if (header.method != 0x08) {
+  if (header[GZIP_OFF_METHOD] != 0x08) {
     PyErr_SetString(comp_HeaderError, "Unsupported compression method");
     fclose(input);
     return -1;
   }
 
+  uint8_t flags = header[GZIP_OFF_FLAGS];
+
   // Skip optional fields
-  if (header.flags & FEXTRA) {
-    uint16_t xlen;
-    if (fread(&xlen, 2, 1, input) != 1) {
+  if (flags & FEXTRA) {
+    uint8_t xlen_buf[2];
+    if (fread(xlen_buf, sizeof(xlen_buf), 1, input) != 1) {
       PyErr_SetString(comp_HeaderError, "Failed to read extra field length");
       fclose(input);
       return -1;
     }
-    fseek(input, xlen, SEEK_CUR);
+    fseek(input, read_le16(xlen_buf), SEEK_CUR);
   }
 
-  if (header.flags & FNAME) {
+  if (flags & FNAME) {
     // Skip original filename
     int c;
     while ((c = fgetc(input)) != 0 && c != EOF)
       ;
   }
 
-  if (header.flags & FCOMMENT) {
+  if (flags & FCOMMENT) {
     // Skip comment
     int c;
     while ((c = fgetc(input)) != 0 && c != EOF)
       ;
   }
 
-  if (header.flags & FHCRC) {
+  if (flags & FHCRC) {
     // Skip header CRC
     fseek(input, 2, SEEK_CUR);
   }
@@ -350,25 +337,27 @@ static char *gzip_get_original_name(const char *compressed_path) {
   if (!f)
     return NULL;
 
-  GzipHeader header;
-  if (fread(&header, sizeof(header), 1, f) != 1) {
+  uint8_t header[GZIP_HEADER_SIZE];
+  if (fread(header, sizeof(header), 1, f) != 1) {
     fclose(f);
     return NULL;
   }
 
-  if (!(header.flags & FNAME)) {
+  uint8_t flags = header[GZIP_OFF_FLAGS];
+
+  if (!(flags & FNAME)) {
     fclose(f);
     return NULL;
   }
 
   // Skip extra field if present
-  if (header.flags & FEXTRA) {
-    uint16_t xlen;
-    if (fread(&xlen, 2, 1, f) != 1) {
+  if (flags & FEXTRA) {
+    uint8_t xlen_buf[2];
+    if (fread(xlen_buf, sizeof(xlen_buf), 1, f) != 1) {
       fclose(f);
       return NULL;
     }
-    fseek(f, xlen, SEEK_CUR);
+    fseek(f, read_le16(xlen_buf), SEEK_CUR);
   }
 
   // Read filename

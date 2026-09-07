@@ -149,8 +149,85 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
   return 0;
 }
 
-static int validate_entry_path(const char *output_dir, const char *entry_path,
-                               uint32_t depth, const ExtractionPolicy *policy) {
+// Returns 1 if contained, 0 if it escapes, -1 if `dir` could not be resolved
+// `resolved_root` must already have been through fs_realpath
+static int dir_is_contained(const char *resolved_root, const char *dir) {
+  char resolved_dir[FS_PATH_MAX];
+  if (fs_realpath(dir, resolved_dir) != 0)
+    return -1;
+
+  size_t root_len = strlen(resolved_root);
+  if (strncmp(resolved_dir, resolved_root, root_len) != 0)
+    return 0;
+
+  // A filesystem root ("/", "C:\") ends in a separator, so has no boundary byte
+  if (root_len > 0 && FS_IS_SEP(resolved_root[root_len - 1]))
+    return 1;
+
+  // Otherwise require a component boundary, so "/out-evil" fails against "/out"
+  return FS_IS_SEP(resolved_dir[root_len]) || resolved_dir[root_len] == '\0';
+}
+
+// Whether the deepest already-existing ancestor of `dir` is inside the root
+// Only an existing component can redirect the path; anything still missing is
+// about to be created rather than followed
+static int existing_ancestor_is_contained(const char *resolved_root,
+                                          const char *dir) {
+  char probe[FS_PATH_MAX];
+  size_t len = strlen(dir);
+  if (len >= sizeof(probe))
+    return 0;
+  memcpy(probe, dir, len + 1);
+
+  for (;;) {
+    int contained = dir_is_contained(resolved_root, probe);
+    if (contained >= 0)
+      return contained;
+
+    char *sep = fs_last_sep(probe);
+    if (!sep || sep == probe)
+      return 1; // Nothing left to trim; mkdir will report its own failure
+    *sep = '\0';
+  }
+}
+
+// Ensure `dir` exists and is inside the extraction root, creating it if needed
+static int prepare_output_dir(const char *resolved_root, const char *dir,
+                              uint32_t mode, const char *entry_path) {
+  int contained = dir_is_contained(resolved_root, dir);
+
+  if (contained < 0) {
+    // Check before creating: mkdir first would already have made directories
+    // through any symlink
+    if (existing_ancestor_is_contained(resolved_root, dir) != 1) {
+      PyErr_Format(PyExc_ValueError, "Path traversal detected in entry: %s",
+                   entry_path);
+      return -1;
+    }
+
+    if (fs_mkdir_p(dir, mode) != 0) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir);
+      return -1;
+    }
+
+    // Re-check now that it exists, closing the window in which a component
+    // could have been swapped for a symlink since the check above
+    contained = dir_is_contained(resolved_root, dir);
+  }
+
+  if (contained != 1) {
+    PyErr_Format(PyExc_ValueError, "Path traversal detected in entry: %s",
+                 entry_path);
+    return -1;
+  }
+
+  return 0;
+}
+
+static int validate_entry_path(const char *output_dir,
+                               const char *resolved_root,
+                               const char *entry_path, uint32_t depth,
+                               const ExtractionPolicy *policy) {
   if (fs_is_absolute(entry_path)) {
     PyErr_Format(PyExc_ValueError, "Archive entry has an absolute path: %s",
                  entry_path);
@@ -177,8 +254,6 @@ static int validate_entry_path(const char *output_dir, const char *entry_path,
     return -1;
   }
 
-  // Trim to the parent directory so it can be resolved
-  char resolved_dir[FS_PATH_MAX];
   char *last_sep = fs_last_sep(candidate);
   char saved_sep = '\0';
   if (last_sep) {
@@ -186,31 +261,20 @@ static int validate_entry_path(const char *output_dir, const char *entry_path,
     *last_sep = '\0';
   }
 
-  if (fs_realpath(candidate, resolved_dir) != 0) {
-    if (strstr(candidate, "..") != NULL) {
-      PyErr_Format(PyExc_ValueError, "Path traversal detected in entry: %s",
-                   entry_path);
-      return -1;
-    }
-  } else {
-    char resolved_root[FS_PATH_MAX];
-    if (fs_realpath(output_dir, resolved_root) != 0) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_dir);
-      return -1;
-    }
-    size_t root_len = strlen(resolved_root);
-
-    if (strncmp(resolved_dir, resolved_root, root_len) != 0 ||
-        (!FS_IS_SEP(resolved_dir[root_len]) &&
-         resolved_dir[root_len] != '\0')) {
-      PyErr_Format(PyExc_ValueError, "Path traversal detected in entry: %s",
-                   entry_path);
-      return -1;
-    }
-  }
+  // The parent usually does not exist yet, leaving only the textual check;
+  // prepare_output_dir repeats it against the filesystem after creating it
+  int contained = dir_is_contained(resolved_root, candidate);
+  int traversal =
+      (contained == 0) || (contained < 0 && strstr(candidate, "..") != NULL);
 
   if (last_sep)
     *last_sep = saved_sep;
+
+  if (traversal) {
+    PyErr_Format(PyExc_ValueError, "Path traversal detected in entry: %s",
+                 entry_path);
+    return -1;
+  }
 
   return 0;
 }
@@ -249,7 +313,7 @@ const CArchive *find_archive_by_id(uint8_t id) {
 
 // ---- Pipeline Helpers ----
 
-// Build a writable temporary path alongside final_path
+// Create a temp file in final_path's directory, which is known writable
 static char *make_temp_path(const char *final_path) {
   static const char SUFFIX[] = ".compresso-XXXXXX";
   const char *slash = fs_last_sep(final_path);
@@ -395,13 +459,21 @@ static int extract_entries(const CArchive *archive, void *reader,
   ArchiveEntry entry = {0};
   int ret;
 
+  // Canonicalised once rather than per entry; the caller has already created it
+  char resolved_root[FS_PATH_MAX];
+  if (fs_realpath(output_dir, resolved_root) != 0) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_dir);
+    return -1;
+  }
+
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
     if (!entry.path) {
       archive->skip_entry_data(reader);
       continue;
     }
 
-    if (validate_entry_path(output_dir, entry.path, 0, policy) != 0 ||
+    if (validate_entry_path(output_dir, resolved_root, entry.path, 0, policy) !=
+            0 ||
         check_entry_policy(&entry, policy) != 0) {
       free(entry.path);
       free(entry.symlink_target);
@@ -428,14 +500,24 @@ static int extract_entries(const CArchive *archive, void *reader,
     snprintf(out_path, sizeof(out_path), "%s/%s", output_dir, entry.path);
 
     if (entry.type == ENTRY_DIR) {
-      fs_mkdir_p(out_path, entry.mode);
+      if (prepare_output_dir(resolved_root, out_path, entry.mode, entry.path) !=
+          0) {
+        free(entry.path);
+        free(entry.symlink_target);
+        return -1;
+      }
     } else if (entry.type == ENTRY_FILE) {
       char *last_slash = fs_last_sep(out_path);
       if (last_slash) {
         char saved = *last_slash;
         *last_slash = '\0';
-        fs_mkdir_p(out_path, 0755);
+        int rc = prepare_output_dir(resolved_root, out_path, 0755, entry.path);
         *last_slash = saved;
+        if (rc != 0) {
+          free(entry.path);
+          free(entry.symlink_target);
+          return -1;
+        }
       }
 
       FILE *f = fopen(out_path, "wb");
@@ -454,7 +536,6 @@ static int extract_entries(const CArchive *archive, void *reader,
       }
 
       fclose(f);
-      // Apply the recorded permission bits once the file is closed
       // Best-effort: a chmod failure must not fail extraction of
       // otherwise-valid data
       fs_chmod(out_path, entry.mode);

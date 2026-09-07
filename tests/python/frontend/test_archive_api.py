@@ -284,6 +284,27 @@ class TestExtractionRefusesUnsafePaths:
             assert result.ok, result.error
             assert (out_dir / entry_name).read_bytes() == b"pwned"
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="symlink creation needs privilege on Windows"
+    )
+    def test_rejects_entry_writing_through_a_symlinked_component(self, temp_dir: Path):
+        """Test that an entry cannot write through a symlink already in the output."""
+        outside = temp_dir / "outside"
+        outside.mkdir()
+        out_dir = temp_dir / "out"
+        out_dir.mkdir()
+        (out_dir / "link").symlink_to(outside, target_is_directory=True)
+
+        archive_path = temp_dir / "evil.tar"
+        _tar_with_entry(archive_path, "link/sub/escape.txt")
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok is False
+        assert "traversal" in str(result.error)
+        assert not (outside / "sub" / "escape.txt").exists()
+        assert not (outside / "sub").exists()
+
     def test_accepts_nested_entry(self, temp_dir: Path):
         """Test that a legitimate nested entry is still extracted.
 

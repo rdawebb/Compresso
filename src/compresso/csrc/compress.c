@@ -223,7 +223,10 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   header.flags = 0;
   header.orig_size = (uint64_t)len;
 
-  if (fwrite(&header, 1, sizeof(header), dst) != sizeof(header) ||
+  uint8_t header_buf[C_HEADER_SIZE];
+  c_header_pack(&header, header_buf);
+
+  if (fwrite(header_buf, 1, sizeof(header_buf), dst) != sizeof(header_buf) ||
       ferror(dst)) {
     PyErr_SetString(comp_HeaderError, "Failed to write header to output file");
     return_code = -1;
@@ -378,12 +381,15 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
     goto done;
   }
 
-  CHeader header;
-  if (fread(&header, 1, sizeof(header), src) != sizeof(header)) {
+  uint8_t header_buf[C_HEADER_SIZE];
+  if (fread(header_buf, 1, sizeof(header_buf), src) != sizeof(header_buf)) {
     PyErr_SetString(comp_HeaderError, "Failed to read header from input file");
     return_code = -1;
     goto done;
   }
+
+  CHeader header;
+  c_header_unpack(header_buf, &header);
 
   if (memcmp(header.magic, C_MAGIC, C_MAGIC_LEN) != 0) {
     PyErr_SetString(comp_HeaderError, "Invalid file magic number");
@@ -446,7 +452,7 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
       goto done;
     }
 
-    __int64 payload_start = (__int64)sizeof(CHeader);
+    __int64 payload_start = (__int64)C_HEADER_SIZE;
     __int64 payload_len = end_pos - payload_start;
     if (payload_len <= 0) {
       PyErr_SetString(PyExc_ValueError, "No compressed data found in file");
@@ -481,7 +487,7 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
       goto done;
     }
 
-    off_t payload_start = (off_t)sizeof(CHeader);
+    off_t payload_start = (off_t)C_HEADER_SIZE;
     off_t payload_len = end_pos - payload_start;
     if (payload_len <= 0) {
       PyErr_SetString(PyExc_ValueError, "No compressed data found in file");
