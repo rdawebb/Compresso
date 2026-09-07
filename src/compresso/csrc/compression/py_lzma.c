@@ -14,8 +14,8 @@ static size_t lzma_max_compressed_size(size_t input_size) {
   size_t tmp, result;
   tmp = input_size / 3;
 
-  if (__builtin_add_overflow(input_size, tmp, &result) ||
-      __builtin_add_overflow(result, overhead, &result)) {
+  if (add_overflow_size(input_size, tmp, &result) ||
+      add_overflow_size(result, overhead, &result)) {
     return SIZE_MAX;
   }
   return result;

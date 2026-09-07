@@ -12,8 +12,8 @@ static size_t bzip2_max_compressed_size(size_t input_size) {
   size_t tmp, result;
   tmp = input_size / 100;
 
-  if (__builtin_add_overflow(input_size, tmp, &result) ||
-      __builtin_add_overflow(result, 600, &result)) {
+  if (add_overflow_size(input_size, tmp, &result) ||
+      add_overflow_size(result, 600, &result)) {
     return SIZE_MAX;
   }
   return result;

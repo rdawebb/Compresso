@@ -23,6 +23,18 @@
 #define PACKED_END
 #endif
 
+// Checked size_t addition: stores a + b in *out, returning 1 if it overflowed
+// MSVC has no __builtin_add_overflow; unsigned wraparound is well defined, so
+// the fallback detects it by testing the wrapped sum against an operand
+static inline int add_overflow_size(size_t a, size_t b, size_t *out) {
+#if defined(_MSC_VER)
+  *out = a + b;
+  return *out < a;
+#else
+  return __builtin_add_overflow(a, b, out);
+#endif
+}
+
 // ---- Header ----
 
 #define C_MAGIC "COMP"

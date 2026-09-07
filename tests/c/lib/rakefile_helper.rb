@@ -51,7 +51,11 @@ LDFLAGS << "-L#{BREW_PREFIX}/lib" unless BREW_PREFIX.empty?
 LDFLAGS << "-L#{py_libpl}" if py_libpl && !py_libpl.empty?
 LDFLAGS << "-L#{py_libdir}" if py_libdir && !py_libdir.empty?
 LDFLAGS << (py_ldversion && !py_ldversion.empty? ? "-lpython#{py_ldversion}" : '-lpython3')
+
+# libpython's own dependencies, which must follow it on the command line
 LDFLAGS << '-ldl'
+LDFLAGS << '-lm'
+LDFLAGS.concat(['-lutil', '-lpthread']) unless RUBY_PLATFORM.include?('darwin')
 
 # BUILD_DIR is set by rakefile before requiring this file
 SRC_DIR = File.join(__dir__, '..', '..', '..', 'src', 'compresso', 'csrc')

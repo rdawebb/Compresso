@@ -122,6 +122,61 @@ def _dedupe(dirs: list[str]) -> list[str]:
     return result
 
 
+# Windows import-library basenames, in preference order per library. vcpkg's
+# spellings do not match the Unix `-l` names and have changed across vcpkg
+# revisions, so the exact name is probed for on disk rather than hard-coded.
+WINDOWS_LIBRARY_CANDIDATES = (
+    ("zlib", "zlibstatic", "zlib1", "z"),
+    ("bz2", "libbz2", "bzip2"),
+    ("lzma", "liblzma"),
+    ("zstd", "libzstd", "zstd_static"),
+    ("lz4", "liblz4"),
+    ("snappy", "libsnappy"),
+    ("zip", "libzip"),
+    ("archive", "libarchive", "archive_static"),
+)
+
+
+def _windows_libraries(library_dirs: list[str]) -> list[str]:
+    """Pick each library's import-lib basename by probing `library_dirs`.
+
+    Args:
+        library_dirs: Directories to search for a matching `<name>.lib`.
+
+    Returns:
+        One basename per entry in `WINDOWS_LIBRARY_CANDIDATES`, preserving its
+        order. Falls back to the first candidate when none is found on disk, so
+        the linker reports a recognisable name instead of this silently
+        substituting a wrong one.
+    """
+    available = {
+        entry[:-4]
+        for d in library_dirs
+        if os.path.isdir(d)
+        for entry in os.listdir(d)
+        if entry.lower().endswith(".lib")
+    }
+
+    resolved: list[str] = []
+    missing: list[tuple[str, ...]] = []
+    for candidates in WINDOWS_LIBRARY_CANDIDATES:
+        found = next((name for name in candidates if name in available), None)
+        if found is None:
+            found = candidates[0]
+            missing.append(candidates)
+
+        resolved.append(found)
+
+    # A miss means the linker is about to fail, so say enough to diagnose it in
+    # one CI run: whether the directories were empty or just spelled otherwise
+    if missing:
+        print(f"setup.py: searched {library_dirs}")
+        print(f"setup.py: found .lib files {sorted(available)}")
+        print(f"setup.py: no match for {missing}, falling back to first candidate")
+
+    return resolved
+
+
 def resolve_dirs() -> tuple[list[str], list[str]]:
     """Resolve include/library dirs: pkg-config, then Homebrew, then env overrides.
 
@@ -141,7 +196,7 @@ include_dirs, library_dirs = resolve_dirs()
 
 # Per-platform link names
 if sys.platform == "win32":
-    libraries = ["zlib", "bz2", "lzma", "zstd", "lz4", "snappy", "zip", "archive"]
+    libraries = _windows_libraries(library_dirs)
     extra_compile_args = ["/O2"]
 else:
     libraries = ["z", "bz2", "lzma", "zstd", "lz4", "snappy", "zip", "archive"]
