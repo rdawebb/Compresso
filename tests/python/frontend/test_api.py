@@ -1,14 +1,15 @@
 """Tests for the frontend API module."""
 
-import pytest
 from pathlib import Path
 
+import pytest
+
 from compresso.frontend.api import (
+    CompressionJob,
     CompressionOptions,
     CompressionPlan,
-    DecompressionPlan,
-    CompressionJob,
     DecompressionJob,
+    DecompressionPlan,
 )
 
 

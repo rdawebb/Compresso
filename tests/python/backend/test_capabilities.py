@@ -4,9 +4,9 @@ import pytest
 
 from compresso.backend.capabilities import (
     BackendCapabilities,
-    list_capabilities,
-    get_by_name,
     get_by_id,
+    get_by_name,
+    list_capabilities,
 )
 
 

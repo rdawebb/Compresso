@@ -1,8 +1,9 @@
 """Tests for the speeds module."""
 
-import pytest
-from pathlib import Path
 import json
+from pathlib import Path
+
+import pytest
 
 from compresso.backend.speeds import (
     AlgoSpeeds,

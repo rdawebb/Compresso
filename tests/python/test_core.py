@@ -1,14 +1,15 @@
 """Tests for the core compression/decompression functionality."""
 
-import pytest
 from pathlib import Path
 
+import pytest
+
 from compresso import (
-    compress_file,
-    decompress_file,
+    BackendError,
     Error,
     HeaderError,
-    BackendError,
+    compress_file,
+    decompress_file,
 )
 from compresso._core import get_capabilities
 

@@ -19,6 +19,20 @@ int fs_is_absolute(const char *path) {
   return is_drive_letter && path[1] == ':';
 }
 
+char *fs_last_sep(const char *path) {
+  char *fwd = strrchr(path, '/');
+#if defined(_WIN32) || defined(_WIN64)
+  char *back = strrchr(path, '\\');
+  if (!fwd)
+    return back;
+  if (!back)
+    return fwd;
+  return fwd > back ? fwd : back;
+#else
+  return fwd;
+#endif
+}
+
 int fs_is_stream_path(const char *path) {
 #if defined(_WIN32) || defined(_WIN64)
   // Callers run this after fs_is_absolute, so a surviving colon is a stream

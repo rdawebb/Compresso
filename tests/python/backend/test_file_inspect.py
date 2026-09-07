@@ -1,14 +1,15 @@
 """Tests for the file_inspect module."""
 
-import pytest
 from pathlib import Path
 
+import pytest
+
+from compresso import compress_file
 from compresso.backend.file_inspect import (
+    COMP_HEADER_STRUCT,
     InspectResult,
     inspect,
-    COMP_HEADER_STRUCT,
 )
-from compresso import compress_file
 
 
 class TestInspectResult:

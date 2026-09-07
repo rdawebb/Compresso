@@ -177,10 +177,14 @@ static int validate_entry_path(const char *output_dir, const char *entry_path,
     return -1;
   }
 
+  // Trim to the parent directory so it can be resolved
   char resolved_dir[FS_PATH_MAX];
-  char *last_sep = strrchr(candidate, '/');
-  if (last_sep)
+  char *last_sep = fs_last_sep(candidate);
+  char saved_sep = '\0';
+  if (last_sep) {
+    saved_sep = *last_sep;
     *last_sep = '\0';
+  }
 
   if (fs_realpath(candidate, resolved_dir) != 0) {
     if (strstr(candidate, "..") != NULL) {
@@ -195,8 +199,7 @@ static int validate_entry_path(const char *output_dir, const char *entry_path,
       return -1;
     }
     size_t root_len = strlen(resolved_root);
-    // The character after the prefix must end a component, otherwise
-    // "/out-evil" would pass as a child of "/out"
+
     if (strncmp(resolved_dir, resolved_root, root_len) != 0 ||
         (!FS_IS_SEP(resolved_dir[root_len]) &&
          resolved_dir[root_len] != '\0')) {
@@ -207,7 +210,7 @@ static int validate_entry_path(const char *output_dir, const char *entry_path,
   }
 
   if (last_sep)
-    *last_sep = '/';
+    *last_sep = saved_sep;
 
   return 0;
 }
@@ -249,7 +252,7 @@ const CArchive *find_archive_by_id(uint8_t id) {
 // Build a writable temporary path alongside final_path
 static char *make_temp_path(const char *final_path) {
   static const char SUFFIX[] = ".compresso-XXXXXX";
-  const char *slash = strrchr(final_path, '/');
+  const char *slash = fs_last_sep(final_path);
   size_t dir_len = slash ? (size_t)(slash - final_path + 1) : 0;
   size_t len = dir_len + sizeof(SUFFIX); // sizeof includes the NUL
 
@@ -282,7 +285,7 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
       // Strip only the source's parent, so the source directory's own name is
       // preserved in stored entry paths
       char base[FS_PATH_MAX];
-      const char *slash = strrchr(input_paths[i], '/');
+      const char *slash = fs_last_sep(input_paths[i]);
       if (slash) {
         size_t base_len = (size_t)(slash - input_paths[i]);
         if (base_len >= sizeof(base)) {
@@ -427,11 +430,12 @@ static int extract_entries(const CArchive *archive, void *reader,
     if (entry.type == ENTRY_DIR) {
       fs_mkdir_p(out_path, entry.mode);
     } else if (entry.type == ENTRY_FILE) {
-      char *last_slash = strrchr(out_path, '/');
+      char *last_slash = fs_last_sep(out_path);
       if (last_slash) {
+        char saved = *last_slash;
         *last_slash = '\0';
         fs_mkdir_p(out_path, 0755);
-        *last_slash = '/';
+        *last_slash = saved;
       }
 
       FILE *f = fopen(out_path, "wb");

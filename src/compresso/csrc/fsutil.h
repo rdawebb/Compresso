@@ -44,6 +44,9 @@ int fs_is_absolute(const char *path);
 // Windows-only: on POSIX ':' is an ordinary filename character
 int fs_is_stream_path(const char *path);
 
+// Locate the last path separator in `path`, or NULL if it has none
+char *fs_last_sep(const char *path);
+
 // Stat `path`, following symlinks (like POSIX stat(2))
 int fs_stat_path(const char *path, fs_stat *out);
 

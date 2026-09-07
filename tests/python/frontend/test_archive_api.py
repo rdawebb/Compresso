@@ -235,17 +235,25 @@ class TestExtractionRefusesUnsafePaths:
         """Test that a backslash-separated traversal cannot escape on any platform.
 
         On Windows `..\\..\\escape.txt` is a real traversal and is refused; on
-        POSIX it is an oddly-named file; both outcomes are safe, so assert
-        containment rather than a specific verdict.
+        POSIX it is one oddly-named file; assert containment first, then each
+        platform's verdict.
         """
         archive_path = temp_dir / "evil.tar"
         _tar_with_entry(archive_path, "..\\..\\escape.txt")
         out_dir = temp_dir / "out"
 
-        ExtractJob.from_archive(archive_path, out_dir).run()
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
 
         assert not (temp_dir / "escape.txt").exists()
         assert not (temp_dir.parent / "escape.txt").exists()
+
+        if sys.platform == "win32":
+            assert result.ok is False
+            assert "traversal" in str(result.error)
+
+        else:
+            assert result.ok, result.error
+            assert (out_dir / "..\\..\\escape.txt").read_bytes() == b"pwned"
 
     @pytest.mark.parametrize(
         "entry_name", ["notes.txt:evil.exe", "notes.txt:evil.exe:$DATA"]
