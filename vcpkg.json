@@ -1,0 +1,16 @@
+{
+  "name": "compresso",
+  "version-string": "0.0.0",
+  "description": "C libraries the compresso._core extension links against on Windows",
+  "builtin-baseline": "04a9d8e5212d01ee1dd9478eadd9caade4f8b0d4",
+  "dependencies": [
+    "zlib",
+    "bzip2",
+    "liblzma",
+    "zstd",
+    "lz4",
+    "snappy",
+    "libzip",
+    "libarchive"
+  ]
+}
