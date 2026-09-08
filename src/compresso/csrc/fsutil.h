@@ -6,12 +6,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
-// Platform-independent path buffer size
 #define FS_PATH_MAX 4096
 
-// True if `c` separates path components; Windows accepts either separator and
-// fs_realpath there returns backslashes, so prefix comparisons must test both
+// Windows accepts either separator and fs_realpath there returns backslashes,
+// so prefix comparisons must test both
 #if defined(_WIN32) || defined(_WIN64)
 #define FS_IS_SEP(c) ((c) == '/' || (c) == '\\')
 #else
@@ -33,10 +33,8 @@ typedef struct {
 } fs_stat;
 
 // True if `path` is anything other than a plain relative path: a leading
-// separator ("/etc", "\evil", "\\host\share", "\\?\C:\..."), or a drive
-// qualifier, absolute ("C:\evil") or drive-relative ("C:evil", which resolves
-// against that drive's current directory, not the extraction root);
-// Windows forms are rejected on POSIX too, since archives are portable
+// separator, or a drive qualifier; Windows forms are rejected on POSIX too,
+// since archives are portable
 int fs_is_absolute(const char *path);
 
 // True if `path` names an NTFS alternate data stream, which attaches hidden
@@ -47,20 +45,28 @@ int fs_is_stream_path(const char *path);
 // Locate the last path separator in `path`, or NULL if it has none
 char *fs_last_sep(const char *path);
 
-// Stat `path`, following symlinks (like POSIX stat(2))
+// Stat `path` itself, without following symlinks (lstat(2)), so a symlink or
+// Windows reparse point reports FS_TYPE_SYMLINK rather than its target's type
 int fs_stat_path(const char *path, fs_stat *out);
 
 // Read a symlink's target into `buf` (NUL-terminated)
+// On Windows this is the resolved absolute target, not the literal link text
 int fs_readlink(const char *path, char *buf, size_t buf_size);
 
-// Directory iteration; fs_readdir skips "." and "..", returning NULL when the
-// directory is exhausted
+// Directory iteration; fs_readdir skips "." and ".."
+// A NULL return means the directory is exhausted or a name could not be
+// represented, which would otherwise silently shorten the listing
 typedef struct fs_dir fs_dir;
 fs_dir *fs_opendir(const char *path); // NULL with errno set on failure
 const char *fs_readdir(fs_dir *dir);
+int fs_dir_error(const fs_dir *dir); // Non-zero if iteration stopped on error
 void fs_closedir(fs_dir *dir);
 
-// Canonicalise `path` into `resolved` (must hold at least FS_PATH_MAX bytes)
+// Open `path` with fopen(3) semantics, returning NULL with errno set
+FILE *fs_fopen(const char *path, const char *mode);
+
+// Canonicalise `path` into `resolved` (at least FS_PATH_MAX bytes), resolving
+// symlinks and Windows reparse points; fails if `path` does not exist
 int fs_realpath(const char *path, char *resolved);
 
 // Create a unique temp file from a mkstemp-style template ending in "XXXXXX"

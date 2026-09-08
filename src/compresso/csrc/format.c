@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
+#include "fsutil.h"
 #include "standalone.h"
 #include <Python.h>
 #include <ctype.h>
@@ -98,7 +99,7 @@ Format detect_format_from_path(const char *path) {
     return FORMAT_UNKNOWN;
   }
 
-  FILE *f = fopen(path, "rb");
+  FILE *f = fs_fopen(path, "rb");
   if (!f) {
     return FORMAT_UNKNOWN;
   }

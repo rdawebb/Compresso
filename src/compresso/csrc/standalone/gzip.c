@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "../common.h"
+#include "../fsutil.h"
 #include "../standalone.h"
 #include <Python.h>
 #include <stdio.h>
@@ -29,13 +30,13 @@
 
 static int gzip_compress_file(const char *input_path, const char *output_path,
                               int level) {
-  FILE *input = fopen(input_path, "rb");
+  FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
 
-  FILE *output = fopen(output_path, "wb");
+  FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_path);
     fclose(input);
@@ -148,7 +149,7 @@ static int gzip_compress_file(const char *input_path, const char *output_path,
 
 static int gzip_decompress_file(const char *input_path,
                                 const char *output_path) {
-  FILE *input = fopen(input_path, "rb");
+  FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
@@ -206,7 +207,7 @@ static int gzip_decompress_file(const char *input_path,
     fseek(input, 2, SEEK_CUR);
   }
 
-  FILE *output = fopen(output_path, "wb");
+  FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_path);
     fclose(input);
@@ -333,7 +334,7 @@ static int gzip_decompress_file(const char *input_path,
 }
 
 static char *gzip_get_original_name(const char *compressed_path) {
-  FILE *f = fopen(compressed_path, "rb");
+  FILE *f = fs_fopen(compressed_path, "rb");
   if (!f)
     return NULL;
 

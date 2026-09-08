@@ -68,6 +68,7 @@ SOURCE_FILES = [
   File.join(__dir__, 'test_stubs.c'),
   File.join(SRC_DIR, 'common.c'),
   File.join(SRC_DIR, 'format.c'),
+  File.join(SRC_DIR, 'fsutil.c'),
   File.join(SRC_DIR, 'registry.c'),
   File.join(SRC_DIR, 'strategy.c'),
   File.join(SRC_DIR, 'compression', 'py_zlib.c'),

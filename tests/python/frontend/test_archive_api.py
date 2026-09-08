@@ -1,8 +1,10 @@
 """Tests for the frontend archive API module."""
 
 import io
+import subprocess
 import sys
 import tarfile
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -172,6 +174,80 @@ class TestArchiveRoundTrip:
             temp_dir / "out" / "tree" / "deep" / "leaf.txt"
         ).read_bytes() == b"leaf content"
 
+    def test_non_ascii_names_round_trip(self, temp_dir: Path, monkeypatch):
+        """Test that non-ASCII names survive as both a source path and an entry name.
+
+        Names are compared after NFC normalisation: macOS stores them decomposed,
+        so a name read back off the filesystem is not byte-identical to the
+        composed literal written here.
+        """
+        monkeypatch.chdir(temp_dir)
+        src = Path("données")
+        src.mkdir()
+        (src / "café.txt").write_bytes(b"contenu")
+        (src / "日本語.txt").write_bytes(b"content")
+        archive_path = Path("archivé.tar.zst")
+
+        assert ArchiveJob.from_paths([src], archive_path).run().ok
+
+        names = {
+            unicodedata.normalize("NFC", e.path)
+            for e in ExtractJob.from_archive(archive_path).list_contents()
+        }
+        assert "données/café.txt" in names
+        assert "données/日本語.txt" in names
+
+        out_dir = temp_dir / "sortie"
+        extract_result = ExtractJob.from_archive(archive_path, out_dir).run()
+        assert extract_result.ok, extract_result.error
+
+        assert (out_dir / "données" / "café.txt").read_bytes() == b"contenu"
+        assert (out_dir / "données" / "日本語.txt").read_bytes() == b"content"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink creation needs privilege on Windows"
+)
+class TestArchivingSymlinks:
+    """Test that a symlink is archived as a symlink, not as what it points at.
+
+    Written against an uncompressed tar read back by `tarfile`, because the
+    listing API reports entry names only and cannot show an entry's type.
+    """
+
+    def test_symlink_is_stored_as_a_link(self, temp_dir: Path, monkeypatch):
+        """Test that a symlink becomes a link entry rather than a copy of its target."""
+        monkeypatch.chdir(temp_dir)
+        src = Path("tree")
+        src.mkdir()
+        (src / "real.txt").write_bytes(b"real content")
+        (src / "alias.txt").symlink_to("real.txt")
+
+        archive_path = Path("tree.tar")
+        options = ArchiveOptions(format="tar")
+        assert ArchiveJob.from_paths([src], archive_path, options).run().ok
+
+        members = {m.name: m for m in tarfile.open(archive_path)}
+        assert members["tree/alias.txt"].issym()
+        assert members["tree/alias.txt"].linkname == "real.txt"
+        assert members["tree/real.txt"].isreg()
+
+    def test_symlink_loop_does_not_recurse(self, temp_dir: Path, monkeypatch):
+        """Test that a symlink pointing at its own parent terminates the walk."""
+        monkeypatch.chdir(temp_dir)
+        src = Path("tree")
+        src.mkdir()
+        (src / "a.txt").write_bytes(b"content")
+        (src / "loop").symlink_to("..", target_is_directory=True)
+
+        archive_path = Path("loop.tar")
+        options = ArchiveOptions(format="tar")
+        result = ArchiveJob.from_paths([src], archive_path, options).run()
+        assert result.ok, result.error
+
+        names = sorted(m.name for m in tarfile.open(archive_path))
+        assert names == ["tree", "tree/a.txt", "tree/loop"]
+
 
 def _tar_with_entry(archive_path: Path, entry_name: str) -> None:
     """Write a tar holding one regular file stored verbatim under `entry_name`.
@@ -294,6 +370,35 @@ class TestExtractionRefusesUnsafePaths:
         out_dir = temp_dir / "out"
         out_dir.mkdir()
         (out_dir / "link").symlink_to(outside, target_is_directory=True)
+
+        archive_path = temp_dir / "evil.tar"
+        _tar_with_entry(archive_path, "link/sub/escape.txt")
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok is False
+        assert "traversal" in str(result.error)
+        assert not (outside / "sub" / "escape.txt").exists()
+        assert not (outside / "sub").exists()
+
+    @pytest.mark.skipif(
+        sys.platform != "win32", reason="junctions are a Windows filesystem feature"
+    )
+    def test_rejects_entry_writing_through_a_junction(self, temp_dir: Path):
+        """Test the junction form of the symlinked-component escape.
+
+        The Windows equivalent of the test above; junctions are used rather than
+        `mklink /D` symlinks because creating one needs no admin rights.
+        """
+        outside = temp_dir / "outside"
+        outside.mkdir()
+        out_dir = temp_dir / "out"
+        out_dir.mkdir()
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(out_dir / "link"), str(outside)],
+            check=True,
+            capture_output=True,
+        )
 
         archive_path = temp_dir / "evil.tar"
         _tar_with_entry(archive_path, "link/sub/escape.txt")

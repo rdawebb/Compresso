@@ -118,7 +118,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
     }
 
     if (ae->type == ENTRY_FILE) {
-      FILE *f = fopen(full_path, "rb");
+      FILE *f = fs_fopen(full_path, "rb");
       if (!f) {
         entry_free(ae);
         fs_closedir(dir);
@@ -143,6 +143,14 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
       archive->add_entry(writer, ae, NULL);
       entry_free(ae);
     }
+  }
+
+  // A conversion failure ends iteration the same way exhaustion does, so
+  // without this the archive would quietly be missing files
+  if (fs_dir_error(dir)) {
+    fs_closedir(dir);
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir_path);
+    return -1;
   }
 
   fs_closedir(dir);
@@ -378,7 +386,7 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
       if (!entry)
         return -1;
 
-      FILE *f = fopen(input_paths[i], "rb");
+      FILE *f = fs_fopen(input_paths[i], "rb");
       if (!f) {
         entry_free(entry);
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_paths[i]);
@@ -520,7 +528,7 @@ static int extract_entries(const CArchive *archive, void *reader,
         }
       }
 
-      FILE *f = fopen(out_path, "wb");
+      FILE *f = fs_fopen(out_path, "wb");
       if (!f) {
         free(entry.path);
         free(entry.symlink_target);

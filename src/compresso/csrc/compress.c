@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
 #include "common.h"
+#include "fsutil.h"
 #include "standalone.h"
 #include <Python.h>
 #include <string.h>
@@ -12,7 +13,7 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
 
 static unsigned char *UNUSED read_file_to_memory(const char *path,
                                                  size_t *out_size) {
-  FILE *f = fopen(path, "rb");
+  FILE *f = fs_fopen(path, "rb");
   if (!f) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
     return NULL;
@@ -100,7 +101,7 @@ static unsigned char *UNUSED read_file_to_memory(const char *path,
 
 static int UNUSED write_memory_to_file(const char *path,
                                        const unsigned char *data, size_t size) {
-  FILE *f = fopen(path, "wb");
+  FILE *f = fs_fopen(path, "wb");
   if (!f) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
     return -1;
@@ -147,14 +148,14 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
     }
   }
 
-  src = fopen(src_path, "rb");
+  src = fs_fopen(src_path, "rb");
   if (!src) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
     return_code = -1;
     goto done;
   }
 
-  dst = fopen(dst_path, "wb");
+  dst = fs_fopen(dst_path, "wb");
   if (!dst) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, dst_path);
     return_code = -1;
@@ -367,14 +368,14 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
   FILE *src = NULL;
   FILE *dst = NULL;
 
-  src = fopen(src_path, "rb");
+  src = fs_fopen(src_path, "rb");
   if (!src) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
     return_code = -1;
     goto done;
   }
 
-  dst = fopen(dst_path, "wb");
+  dst = fs_fopen(dst_path, "wb");
   if (!dst) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, dst_path);
     return_code = -1;

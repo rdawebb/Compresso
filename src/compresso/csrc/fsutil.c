@@ -75,18 +75,71 @@ int fs_mkdir_p(const char *path, uint32_t mode) {
 #include <io.h>
 #include <share.h>
 #include <sys/stat.h>
+#include <wchar.h>
 #include <windows.h>
 
-int fs_stat_path(const char *path, fs_stat *out) {
-  struct __stat64 st;
-  if (_stat64(path, &st) != 0)
+// A UTF-8 byte never becomes more than one UTF-16 code unit, so FS_PATH_MAX
+// wide characters always hold the conversion of an FS_PATH_MAX-byte path
+static int fs_widen(const char *utf8, wchar_t *out, int out_count) {
+  // MB_ERR_INVALID_CHARS refuses malformed input instead of substituting U+FFFD
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, out,
+                          out_count) == 0) {
+    errno =
+        GetLastError() == ERROR_NO_UNICODE_TRANSLATION ? EILSEQ : ENAMETOOLONG;
     return -1;
+  }
+  return 0;
+}
+
+static int fs_narrow(const wchar_t *wide, char *out, int out_size) {
+  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, out,
+                          out_size, NULL, NULL) == 0) {
+    errno =
+        GetLastError() == ERROR_NO_UNICODE_TRANSLATION ? EILSEQ : ENAMETOOLONG;
+    return -1;
+  }
+  return 0;
+}
+
+// Access mask 0 needs no read permission, and FILE_FLAG_BACKUP_SEMANTICS is
+// what allows a directory to be opened
+//
+// FILE_FLAG_OPEN_REPARSE_POINT is deliberately absent, so a junction or symlink
+// resolves to whatever it really points at
+static HANDLE fs_open_for_metadata(const wchar_t *wpath) {
+  return CreateFileW(wpath, 0,
+                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                     NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+}
+
+int fs_stat_path(const char *path, fs_stat *out) {
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+
+  // _wstat64 follows reparse points and has no S_ISLNK equivalent, so without
+  // this archiver walks into any junction
+  DWORD attrs = GetFileAttributesW(wpath);
+  int is_reparse = attrs != INVALID_FILE_ATTRIBUTES &&
+                   (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+
+  struct __stat64 st;
+  if (_wstat64(wpath, &st) != 0) {
+    // A link is still a real entry when its target is missing
+    if (!is_reparse)
+      return -1;
+    memset(out, 0, sizeof(*out));
+    out->type = FS_TYPE_SYMLINK;
+    return 0;
+  }
 
   out->size = (uint64_t)st.st_size;
   out->mtime = (int64_t)st.st_mtime;
   out->mode = (uint32_t)(st.st_mode & 0777);
 
-  if (st.st_mode & _S_IFDIR)
+  if (is_reparse)
+    out->type = FS_TYPE_SYMLINK;
+  else if (st.st_mode & _S_IFDIR)
     out->type = FS_TYPE_DIR;
   else if (st.st_mode & _S_IFREG)
     out->type = FS_TYPE_FILE;
@@ -97,20 +150,37 @@ int fs_stat_path(const char *path, fs_stat *out) {
 }
 
 int fs_readlink(const char *path, char *buf, size_t buf_size) {
-  (void)path;
-  (void)buf;
-  (void)buf_size;
-  // Windows symlinks are reparse points requiring privileged handling; the
-  // default extraction policy denies symlinks, so this stays unimplemented
-  errno = ENOSYS;
-  return -1;
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+
+  // Reading the literal target would mean decoding the raw reparse buffer;
+  // resolving the link gives an absolute target
+  HANDLE handle = fs_open_for_metadata(wpath);
+  if (handle == INVALID_HANDLE_VALUE) {
+    errno = ENOENT;
+    return -1;
+  }
+
+  wchar_t wtarget[FS_PATH_MAX];
+  DWORD n = GetFinalPathNameByHandleW(handle, wtarget, FS_PATH_MAX,
+                                      FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  CloseHandle(handle);
+
+  if (n == 0 || n >= FS_PATH_MAX) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  return fs_narrow(wtarget, buf, (int)buf_size);
 }
 
 struct fs_dir {
   HANDLE handle;
-  WIN32_FIND_DATAA data;
-  char name[MAX_PATH]; // Current entry, stable across the FindNextFileA below
-  int pending;         // 1 while `data` holds an unconsumed entry
+  WIN32_FIND_DATAW data;
+  char name[FS_PATH_MAX]; // Current entry as UTF-8, stable across FindNextFileW
+  int pending;            // 1 while `data` holds an unconsumed entry
+  int failed;             // 1 if iteration stopped on a conversion failure
 };
 
 fs_dir *fs_opendir(const char *path) {
@@ -121,13 +191,17 @@ fs_dir *fs_opendir(const char *path) {
     return NULL;
   }
 
+  wchar_t wpattern[FS_PATH_MAX];
+  if (fs_widen(pattern, wpattern, FS_PATH_MAX) != 0)
+    return NULL;
+
   fs_dir *dir = calloc(1, sizeof(*dir));
   if (!dir) {
     errno = ENOMEM;
     return NULL;
   }
 
-  dir->handle = FindFirstFileA(pattern, &dir->data);
+  dir->handle = FindFirstFileW(wpattern, &dir->data);
   if (dir->handle == INVALID_HANDLE_VALUE) {
     free(dir);
     errno = ENOENT;
@@ -139,18 +213,25 @@ fs_dir *fs_opendir(const char *path) {
 
 const char *fs_readdir(fs_dir *dir) {
   while (dir->pending) {
-    // Copy the name out first, as advancing overwrites `data` in place
-    memcpy(dir->name, dir->data.cFileName, sizeof(dir->name));
+    // Convert the name out first, as advancing overwrites `data` in place
+    int converted = fs_narrow(dir->data.cFileName, dir->name, FS_PATH_MAX) == 0;
 
     // Advance to the next entry for the following call
-    if (!FindNextFileA(dir->handle, &dir->data))
+    if (!FindNextFileW(dir->handle, &dir->data))
       dir->pending = 0;
+
+    if (!converted) {
+      dir->failed = 1;
+      return NULL;
+    }
 
     if (strcmp(dir->name, ".") != 0 && strcmp(dir->name, "..") != 0)
       return dir->name;
   }
   return NULL;
 }
+
+int fs_dir_error(const fs_dir *dir) { return dir ? dir->failed : 0; }
 
 void fs_closedir(fs_dir *dir) {
   if (!dir)
@@ -160,46 +241,95 @@ void fs_closedir(fs_dir *dir) {
   free(dir);
 }
 
+FILE *fs_fopen(const char *path, const char *mode) {
+  wchar_t wpath[FS_PATH_MAX];
+  wchar_t wmode[16];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return NULL;
+  if (fs_widen(mode, wmode, (int)(sizeof(wmode) / sizeof(wmode[0]))) != 0)
+    return NULL;
+  return _wfopen(wpath, wmode);
+}
+
+// Resolves `path` to an absolute path, following reparse points if necessary
 int fs_realpath(const char *path, char *resolved) {
-  // GetFullPathName normalises "." and ".." without touching the filesystem
-  DWORD n = GetFullPathNameA(path, FS_PATH_MAX, resolved, NULL);
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+
+  HANDLE handle = fs_open_for_metadata(wpath);
+  if (handle == INVALID_HANDLE_VALUE) {
+    errno = ENOENT;
+    return -1;
+  }
+
+  wchar_t wresolved[FS_PATH_MAX];
+  DWORD n = GetFinalPathNameByHandleW(handle, wresolved, FS_PATH_MAX,
+                                      FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  CloseHandle(handle);
+
   if (n == 0 || n >= FS_PATH_MAX) {
     errno = EINVAL;
     return -1;
   }
-  return 0;
+
+  return fs_narrow(wresolved, resolved, FS_PATH_MAX);
 }
 
 int fs_mkstemp(char *template_path) {
-  if (_mktemp_s(template_path, strlen(template_path) + 1) != 0)
+  size_t narrow_size = strlen(template_path) + 1;
+
+  wchar_t wtemplate[FS_PATH_MAX];
+  if (fs_widen(template_path, wtemplate, FS_PATH_MAX) != 0)
+    return -1;
+
+  if (_wmktemp_s(wtemplate, wcslen(wtemplate) + 1) != 0)
     return -1;
 
   int fd;
   errno_t e =
-      _sopen_s(&fd, template_path, _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY,
-               _SH_DENYNO, _S_IREAD | _S_IWRITE);
+      _wsopen_s(&fd, wtemplate, _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY,
+                _SH_DENYNO, _S_IREAD | _S_IWRITE);
   if (e != 0) {
     errno = e;
     return -1;
   }
   _close(fd);
-  return 0;
+
+  // The substituted characters keep the name exactly as long as the template,
+  // so it still fits the caller's buffer
+  return fs_narrow(wtemplate, template_path, (int)narrow_size);
 }
 
 static int fs_mkdir_one(const char *path, uint32_t mode) {
   (void)mode; // Windows has no POSIX permission bits on directories
-  if (_mkdir(path) != 0 && errno != EEXIST)
+
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+
+  if (_wmkdir(wpath) != 0 && errno != EEXIST)
     return -1;
   return 0;
 }
 
 int fs_chmod(const char *path, uint32_t mode) {
-  // _chmod only distinguishes read-only from read/write
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+
+  // _wchmod only distinguishes read-only from read/write
   int win_mode = (mode & 0200) ? (_S_IREAD | _S_IWRITE) : _S_IREAD;
-  return _chmod(path, win_mode);
+  return _wchmod(wpath, win_mode);
 }
 
-int fs_unlink(const char *path) { return remove(path); }
+int fs_unlink(const char *path) {
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+
+  return _wremove(wpath);
+}
 
 #else
 
@@ -211,8 +341,8 @@ int fs_unlink(const char *path) { return remove(path); }
 
 int fs_stat_path(const char *path, fs_stat *out) {
   struct stat st;
-  // Follows symlinks
-  if (stat(path, &st) != 0)
+  // lstat to prevent the archiver walking into a symlinked directory
+  if (lstat(path, &st) != 0)
     return -1;
 
   out->size = (uint64_t)st.st_size;
@@ -242,6 +372,14 @@ int fs_readlink(const char *path, char *buf, size_t buf_size) {
 struct fs_dir {
   DIR *handle;
 };
+
+FILE *fs_fopen(const char *path, const char *mode) { return fopen(path, mode); }
+
+int fs_dir_error(const fs_dir *dir) {
+  (void)dir;
+  // Only the Windows branch can fail mid-iteration, on a name it cannot convert
+  return 0;
+}
 
 fs_dir *fs_opendir(const char *path) {
   DIR *handle = opendir(path);

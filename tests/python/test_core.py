@@ -239,3 +239,34 @@ class TestDecompressFile:
         decompress_file(str(compressed_file), str(decompressed_file), "")
 
         assert decompressed_file.read_text() == original_content
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "café-naïve",  # Latin-1 range, but not in every code page
+            "日本語のファイル",  # Outside any single-byte code page
+            "Ω-πυκνότητα",
+            "файл-данных",
+            "emoji-🗜️-file",  # Outside the BMP: a surrogate pair in UTF-16
+        ],
+    )
+    def test_round_trip_non_ascii_filename(self, temp_dir: Path, name: str):
+        """Test that paths outside ASCII survive a compress/decompress round trip.
+
+        Paths reach the C layer as UTF-8: on Windows the narrow CRT would read
+        those bytes in the active code page and open the wrong file, so this is the
+        check that the wide-character path handling works.
+        """
+        source = temp_dir / f"{name}.txt"
+        content = f"contents of {name}" * 50
+        source.write_text(content, encoding="utf-8")
+
+        compressed_file = temp_dir / f"{name}.comp"
+        decompressed_file = temp_dir / f"{name}-restored.txt"
+
+        compress_file(str(source), str(compressed_file), "zlib", "balanced", 6)
+        assert compressed_file.is_file()
+
+        decompress_file(str(compressed_file), str(decompressed_file), "")
+
+        assert decompressed_file.read_text(encoding="utf-8") == content
