@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install C libraries
+      - name: Install C libraries (Linux)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -48,13 +48,47 @@ jobs:
       - name: Type check
         run: uv run ty check
 
+  # Build C libraries once for use by the Windows test matrix
+  vcpkg-windows:
+    name: Build C libraries (Windows)
+    runs-on: windows-latest
+    env:
+      # Release-only; the default x64-windows triplet also builds debug, which
+      # doubles the build for artifacts the extension never links against
+      VCPKG_DEFAULT_TRIPLET: x64-windows-release
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install C libraries (Windows)
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 04a9d8e5212d01ee1dd9478eadd9caade4f8b0d4
+          runVcpkgInstall: true
+          runVcpkgFormatString: "[`install`, `--recurse`, `--clean-after-build`, `--x-install-root`, `$[env.VCPKG_INSTALLED_DIR]`, `--triplet`, `$[env.VCPKG_DEFAULT_TRIPLET]`]"
+
+      - name: Show installed tree
+        shell: pwsh
+        run: Get-ChildItem -Name "vcpkg_installed\x64-windows-release"
+
+      - name: Pack C libraries
+        shell: pwsh
+        run: tar -czf vcpkg-installed.tgz -C vcpkg_installed x64-windows-release
+
+      - name: Upload C libraries
+        uses: actions/upload-artifact@v7
+        with:
+          name: vcpkg-x64-windows-release
+          path: vcpkg-installed.tgz
+          retention-days: 1
+
   test-python:
     name: Python tests (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel]
         python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
@@ -80,20 +114,47 @@ jobs:
           brew install libarchive libzip zstd lz4 snappy xz
           echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
 
-      # Windows has no pkg-config/Homebrew, so provision the libraries with the
-      # runner's preinstalled vcpkg and hand setup.py the include/lib dirs via
-      # its COMPRESSO_EXTRA_* override (the x64-windows import-lib names match
-      # the Windows `libraries` list in setup.py).
-      - name: Install C libraries (Windows)
-        if: runner.os == 'Windows'
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Sync dependencies
+        run: uv sync --all-extras
+
+      - name: Build extension
+        run: uv pip install -e .
+
+      - name: Run Python tests
+        run: uv run pytest
+
+  test-python-windows:
+    name: Python tests (windows-latest, py${{ matrix.python }})
+    runs-on: windows-latest
+    needs: vcpkg-windows
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download C libraries
+        uses: actions/download-artifact@v8
+        with:
+          name: vcpkg-x64-windows-release
+          path: ${{ runner.temp }}/vcpkg-artifact
+
+      - name: Unpack C libraries
         shell: pwsh
         run: |
-          vcpkg install `
-            zlib bzip2 liblzma zstd lz4 snappy libzip libarchive `
-            --triplet x64-windows
-          $root = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          $dest = "$env:RUNNER_TEMP\vcpkg"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          tar -xzf "$env:RUNNER_TEMP\vcpkg-artifact\vcpkg-installed.tgz" -C $dest
+          $root = "$dest\x64-windows-release"
           "COMPRESSO_EXTRA_INCLUDE_DIRS=$root\include" >> $env:GITHUB_ENV
           "COMPRESSO_EXTRA_LIBRARY_DIRS=$root\lib" >> $env:GITHUB_ENV
+          "COMPRESSO_VCPKG_BIN_DIR=$root\bin" >> $env:GITHUB_ENV
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
@@ -106,21 +167,15 @@ jobs:
       - name: Build extension
         run: uv pip install -e .
 
-      # Since Python 3.8 an extension's dependent DLLs are not resolved via PATH,
-      # but the loader does search the directory holding the .pyd, so drop the
-      # vcpkg runtime DLLs next to the built _core extension.
-      - name: Bundle dependent DLLs next to the extension (Windows)
-        if: runner.os == 'Windows'
+      - name: Bundle dependent DLLs next to the extension
         shell: pwsh
-        run: |
-          $bin = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin"
-          Copy-Item "$bin\*.dll" "src\compresso\" -Force
+        run: Copy-Item "$env:COMPRESSO_VCPKG_BIN_DIR\*.dll" "src\compresso\" -Force
 
       - name: Run Python tests
         run: uv run pytest
 
   # Windows is intentionally absent; the sources under test are portable and
-  # are exercised on Windows through the extension by the test-python job
+  # are exercised on Windows through the extension by test-python-windows
   test-c:
     name: C tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
