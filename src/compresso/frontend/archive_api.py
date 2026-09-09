@@ -299,7 +299,9 @@ class ArchiveJob:
 
             return JobResult(ok=True, error=None, plan=self.plan)
 
-        except Exception as e:
+        # `run` reports failure through JobResult rather than raising; see the
+        # contract on `compresso.frontend._job.Job`.
+        except Exception as e:  # noqa: BLE001
             return JobResult(ok=False, error=e, plan=self.plan)
 
 
@@ -376,5 +378,7 @@ class ExtractJob:
 
             return JobResult(ok=True, error=None, plan=self.plan)
 
-        except Exception as e:
+        # `run` reports failure through JobResult rather than raising; see the
+        # contract on `compresso.frontend._job.Job`.
+        except Exception as e:  # noqa: BLE001
             return JobResult(ok=False, error=e, plan=self.plan)

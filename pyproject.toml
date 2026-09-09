@@ -28,3 +28,8 @@ dev = [
 [project.scripts]
 compresso = "compresso.cli:main"
 comp = "compresso.cli:main"
+
+[tool.ruff.lint.per-file-ignores]
+# Every function in cli.py deliberately ends in a last-resort `except Exception`,
+# so the blind-except rule is turned off here rather than annotated on each one
+"src/compresso/cli.py" = ["BLE001"]

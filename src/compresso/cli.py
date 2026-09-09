@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import Annotated
 
 from typer_extensions import ExtendedTyper
 
@@ -72,28 +73,36 @@ def format_time(seconds: float) -> str:
 
 @app.command(aliases=["c", "comp"])
 def compress(
-    file: Path = app.Argument(default=..., help="File to compress"),
-    output: Path | None = app.Option(
-        None, "--output", "-o", help="Output file path (default: input.comp)"
-    ),
-    algo: str | None = app.Option(
-        "auto",
-        "--algo",
-        "-a",
-        case_sensitive=False,
-        help="Compression algorithm to use",
-    ),
-    strategy: str = app.Option(
-        "balanced",
-        "--strategy",
-        "-s",
-        case_sensitive=False,
-        help="Compression strategy to use (fast/balanced/max_ratio)",
-    ),
-    level: int | None = app.Option(
-        None, "--level", "-l", min=0, max=9, help="Compression level (0-9)"
-    ),
-    quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress all output"),
+    file: Annotated[Path, app.Argument(help="File to compress")],
+    output: Annotated[
+        Path | None,
+        app.Option("--output", "-o", help="Output file path (default: input.comp)"),
+    ] = None,
+    algo: Annotated[
+        str | None,
+        app.Option(
+            "--algo",
+            "-a",
+            case_sensitive=False,
+            help="Compression algorithm to use",
+        ),
+    ] = "auto",
+    strategy: Annotated[
+        str,
+        app.Option(
+            "--strategy",
+            "-s",
+            case_sensitive=False,
+            help="Compression strategy to use (fast/balanced/max_ratio)",
+        ),
+    ] = "balanced",
+    level: Annotated[
+        int | None,
+        app.Option("--level", "-l", min=0, max=9, help="Compression level (0-9)"),
+    ] = None,
+    quiet: Annotated[
+        bool, app.Option("--quiet", "-q", help="Suppress all output")
+    ] = False,
 ) -> None:
     """Compress a file using the specified algorithm and strategy.
 
@@ -201,14 +210,18 @@ def compress(
 
 @app.command(aliases=["d", "decomp"])
 def decompress(
-    file: Path = app.Argument(..., help="File to decompress"),
-    output: Path | None = app.Option(
-        None,
-        "--output",
-        "-o",
-        help="Output file path (default: remove .comp extension)",
-    ),
-    quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress progress output"),
+    file: Annotated[Path, app.Argument(help="File to decompress")],
+    output: Annotated[
+        Path | None,
+        app.Option(
+            "--output",
+            "-o",
+            help="Output file path (default: remove .comp extension)",
+        ),
+    ] = None,
+    quiet: Annotated[
+        bool, app.Option("--quiet", "-q", help="Suppress progress output")
+    ] = False,
 ) -> None:
     """Decompress a Compresso compressed file.
 
@@ -323,21 +336,26 @@ def decompress(
 
 @app.command(aliases=["a", "ar"])
 def archive(
-    output: Path = app.Argument(default=..., help="Output archive path"),
-    sources: list[str] = app.Argument(
-        default=..., help="Files and directories to archive"
-    ),
-    format: str = app.Option(
-        "tar.zst",
-        "--format",
-        "-f",
-        case_sensitive=False,
-        help="Archive format (e.g. tar.zst, tar.gz, tar)",
-    ),
-    level: int | None = app.Option(
-        None, "--level", "-l", min=0, max=9, help="Compression level (0-9)"
-    ),
-    quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress all output"),
+    output: Annotated[Path, app.Argument(help="Output archive path")],
+    sources: Annotated[
+        list[str], app.Argument(help="Files and directories to archive")
+    ],
+    format: Annotated[
+        str,
+        app.Option(
+            "--format",
+            "-f",
+            case_sensitive=False,
+            help="Archive format (e.g. tar.zst, tar.gz, tar)",
+        ),
+    ] = "tar.zst",
+    level: Annotated[
+        int | None,
+        app.Option("--level", "-l", min=0, max=9, help="Compression level (0-9)"),
+    ] = None,
+    quiet: Annotated[
+        bool, app.Option("--quiet", "-q", help="Suppress all output")
+    ] = False,
 ) -> None:
     """Create an archive from multiple files and directories.
 
@@ -420,17 +438,21 @@ def archive(
 
 @app.command(aliases=["x", "ex"])
 def extract(
-    archive: Path = app.Argument(default=..., help="Archive to extract"),
-    output_dir: Path | None = app.Option(
-        None,
-        "--output-dir",
-        "-o",
-        help="Directory to extract into (default: current directory)",
-    ),
-    list_only: bool = app.Option(
-        False, "--list", help="List archive contents without extracting"
-    ),
-    quiet: bool = app.Option(False, "--quiet", "-q", help="Suppress all output"),
+    archive: Annotated[Path, app.Argument(help="Archive to extract")],
+    output_dir: Annotated[
+        Path | None,
+        app.Option(
+            "--output-dir",
+            "-o",
+            help="Directory to extract into (default: current directory)",
+        ),
+    ] = None,
+    list_only: Annotated[
+        bool, app.Option("--list", help="List archive contents without extracting")
+    ] = False,
+    quiet: Annotated[
+        bool, app.Option("--quiet", "-q", help="Suppress all output")
+    ] = False,
 ) -> None:
     """Extract an archive, or list its contents.
 
@@ -494,8 +516,10 @@ def extract(
 
 @app.command(aliases=["i", "info"])
 def inspect(
-    file: Path = app.Argument(..., help="File to inspect"),
-    output_json: bool = app.Option(False, "--json", help="Output in JSON format"),
+    file: Annotated[Path, app.Argument(help="File to inspect")],
+    output_json: Annotated[
+        bool, app.Option("--json", help="Output in JSON format")
+    ] = False,
 ) -> None:
     """Inspect a compressed file and show metadata.
 
@@ -599,27 +623,31 @@ def inspect(
 
 @app.command(aliases=["b", "bench"])
 def benchmark(
-    file: Path = app.Argument(..., help="File to benchmark"),
-    algos: str | None = app.Option(
-        "all", "--algos", help="Comma-separated list of algorithms"
-    ),
-    strategies: str | None = app.Option(
-        "all", "--strategies", help="Comma-separated list of strategies"
-    ),
-    levels: str | None = app.Option(
-        "auto", "--levels", help="Comma-separated list of levels (0-9)"
-    ),
-    repeats: int = app.Option(
-        1, "--repeats", help="Number of times to repeat each benchmark"
-    ),
-    temp_dir: Path | None = app.Option(
-        None, "--temp-dir", help="Temporary directory for benchmark files"
-    ),
-    update_cache: bool = app.Option(
-        False,
-        "--update-cache",
-        help="Update speed estimates cache with benchmark results",
-    ),
+    file: Annotated[Path, app.Argument(help="File to benchmark")],
+    algos: Annotated[
+        str | None, app.Option("--algos", help="Comma-separated list of algorithms")
+    ] = "all",
+    strategies: Annotated[
+        str | None,
+        app.Option("--strategies", help="Comma-separated list of strategies"),
+    ] = "all",
+    levels: Annotated[
+        str | None, app.Option("--levels", help="Comma-separated list of levels (0-9)")
+    ] = "auto",
+    repeats: Annotated[
+        int, app.Option("--repeats", help="Number of times to repeat each benchmark")
+    ] = 1,
+    temp_dir: Annotated[
+        Path | None,
+        app.Option("--temp-dir", help="Temporary directory for benchmark files"),
+    ] = None,
+    update_cache: Annotated[
+        bool,
+        app.Option(
+            "--update-cache",
+            help="Update speed estimates cache with benchmark results",
+        ),
+    ] = False,
 ) -> None:
     """Run compression benchmarks on a file.
 
