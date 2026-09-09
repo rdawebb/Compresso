@@ -34,7 +34,7 @@ repos:
 
       - id: ty-type-check
         name: Check type safety
-        entry: uv run ty check src tests
+        entry: uv run ty check
         language: system
         types: [python]
 
@@ -46,6 +46,6 @@ repos:
 
       - id: c-check-syntax
         name: Check for C syntax errors
-        entry: uv run sh -c 'gcc $(python3-config --includes) -fsyntax-only "$@"'
+        entry: uv run python scripts/check_c_syntax.py
         language: system
         types: [c]

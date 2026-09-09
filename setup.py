@@ -202,46 +202,51 @@ else:
     libraries = ["z", "bz2", "lzma", "zstd", "lz4", "snappy", "zip", "archive"]
     extra_compile_args = ["-O2", "-std=gnu11"]
 
-setup(
-    name="compresso",
-    packages=find_packages(where="src"),
-    package_dir={"": "src"},
-    ext_modules=[
-        Extension(
-            name="compresso._core",
-            sources=[
-                "src/compresso/csrc/_core.c",
-                "src/compresso/csrc/common.c",
-                "src/compresso/csrc/compress.c",
-                "src/compresso/csrc/format.c",
-                "src/compresso/csrc/registry.c",
-                "src/compresso/csrc/strategy.c",
-                "src/compresso/csrc/archives.c",
-                "src/compresso/csrc/validate.c",
-                "src/compresso/csrc/fsutil.c",
-                # Compression algorithms
-                "src/compresso/csrc/compression/py_zlib.c",
-                "src/compresso/csrc/compression/py_bzip2.c",
-                "src/compresso/csrc/compression/py_lzma.c",
-                "src/compresso/csrc/compression/py_zstd.c",
-                "src/compresso/csrc/compression/py_lz4.c",
-                "src/compresso/csrc/compression/py_snappy.c",
-                # Archive backends
-                "src/compresso/csrc/archives/tar.c",
-                "src/compresso/csrc/archives/zip.c",
-                # Standalone formats
-                "src/compresso/csrc/standalone/gzip.c",
-                "src/compresso/csrc/standalone/bzip2.c",
-                "src/compresso/csrc/standalone/xz.c",
-                "src/compresso/csrc/standalone/zstd.c",
-                "src/compresso/csrc/standalone/lz4.c",
-                "src/compresso/csrc/standalone/registry.c",
-            ],
-            include_dirs=include_dirs,
-            library_dirs=library_dirs,
-            libraries=libraries,
-            extra_compile_args=extra_compile_args,
-        )
-    ],
-    python_requires=">=3.10",
-)
+C_SOURCES = [
+    "src/compresso/csrc/_core.c",
+    "src/compresso/csrc/common.c",
+    "src/compresso/csrc/compress.c",
+    "src/compresso/csrc/format.c",
+    "src/compresso/csrc/registry.c",
+    "src/compresso/csrc/strategy.c",
+    "src/compresso/csrc/archives.c",
+    "src/compresso/csrc/validate.c",
+    "src/compresso/csrc/fsutil.c",
+    # Compression algorithms
+    "src/compresso/csrc/compression/py_zlib.c",
+    "src/compresso/csrc/compression/py_bzip2.c",
+    "src/compresso/csrc/compression/py_lzma.c",
+    "src/compresso/csrc/compression/py_zstd.c",
+    "src/compresso/csrc/compression/py_lz4.c",
+    "src/compresso/csrc/compression/py_snappy.c",
+    # Archive backends
+    "src/compresso/csrc/archives/tar.c",
+    "src/compresso/csrc/archives/zip.c",
+    # Standalone formats
+    "src/compresso/csrc/standalone/gzip.c",
+    "src/compresso/csrc/standalone/bzip2.c",
+    "src/compresso/csrc/standalone/xz.c",
+    "src/compresso/csrc/standalone/zstd.c",
+    "src/compresso/csrc/standalone/lz4.c",
+    "src/compresso/csrc/standalone/registry.c",
+]
+
+# Guarded so tooling can import this module for `resolve_dirs`/`C_SOURCES` without
+# building the extension
+if __name__ == "__main__":
+    setup(
+        name="compresso",
+        packages=find_packages(where="src"),
+        package_dir={"": "src"},
+        ext_modules=[
+            Extension(
+                name="compresso._core",
+                sources=C_SOURCES,
+                include_dirs=include_dirs,
+                library_dirs=library_dirs,
+                libraries=libraries,
+                extra_compile_args=extra_compile_args,
+            )
+        ],
+        python_requires=">=3.10",
+    )

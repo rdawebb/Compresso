@@ -40,13 +40,13 @@ jobs:
         run: uv sync --all-extras
 
       - name: Ruff lint
-        run: uv run ruff check .
+        run: uv run ruff check
 
       - name: Ruff format check
-        run: uv run ruff format --check .
+        run: uv run ruff format --check
 
       - name: Type check
-        run: uv run ty check src tests
+        run: uv run ty check
 
   test-python:
     name: Python tests (${{ matrix.os }}, py${{ matrix.python }})
