@@ -49,11 +49,8 @@ class TestCompressionOptions:
         """Test that CompressionOptions is immutable."""
         opts = CompressionOptions(algo="zlib", strategy="fast", level=1)
 
-        try:
+        with pytest.raises((AttributeError, TypeError)):
             opts.algo = "zstd"  # type: ignore
-            assert False, "Expected exception when modifying frozen dataclass"
-        except (AttributeError, TypeError, Exception):
-            pass
 
 
 class TestCompressionPlan:

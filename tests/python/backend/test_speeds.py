@@ -164,7 +164,7 @@ class TestSpeedsFilePersistence:
         loaded = json.loads(speeds_file.read_text("utf-8"))
 
         # Check structure
-        for algo_name, algo_data in loaded.items():
+        for algo_data in loaded.values():
             assert "comp_mb_s" in algo_data
             assert "decomp_mb_s" in algo_data
             assert "samples" in algo_data

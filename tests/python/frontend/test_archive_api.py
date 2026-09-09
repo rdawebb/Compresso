@@ -227,7 +227,8 @@ class TestArchivingSymlinks:
         options = ArchiveOptions(format="tar")
         assert ArchiveJob.from_paths([src], archive_path, options).run().ok
 
-        members = {m.name: m for m in tarfile.open(archive_path)}
+        with tarfile.open(archive_path) as tar:
+            members = {m.name: m for m in tar}
         assert members["tree/alias.txt"].issym()
         assert members["tree/alias.txt"].linkname == "real.txt"
         assert members["tree/real.txt"].isreg()
@@ -245,7 +246,8 @@ class TestArchivingSymlinks:
         result = ArchiveJob.from_paths([src], archive_path, options).run()
         assert result.ok, result.error
 
-        names = sorted(m.name for m in tarfile.open(archive_path))
+        with tarfile.open(archive_path) as tar:
+            names = sorted(m.name for m in tar)
         assert names == ["tree", "tree/a.txt", "tree/loop"]
 
 

@@ -16,15 +16,20 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "prek>=0.4.6,<1.0.0",
+    "prek>=0.5.2,<1.0.0",
     "pytest>=9.0.3,<10.0.0",
     "pytest-cov>=7.1.0,<8.0.0",
-    "ruff>=0.15.20,<16.0.0",
-    "rust-just>=1.55.1,<2.0.0",
+    "ruff>=0.16.6,<0.17.0",
+    "rust-just>=1.58.0,<2.0.0",
     "setuptools>=84.0.0,<85.0.0",
-    "ty>=0.0.56,<0.1.0"
+    "ty>=0.0.79,<0.1.0"
 ]
 
 [project.scripts]
 compresso = "compresso.cli:main"
 comp = "compresso.cli:main"
+
+[tool.ruff.lint.per-file-ignores]
+# Every function in cli.py deliberately ends in a last-resort `except Exception`,
+# so the blind-except rule is turned off here rather than annotated on each one
+"src/compresso/cli.py" = ["BLE001"]

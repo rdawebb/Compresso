@@ -8,15 +8,15 @@ install-dev:
 
 # Lint Python code
 lint:
-    uv run ruff check --fix src/ tests/
+    uv run ruff check --fix
 
 # Format Python code
 format:
-    uv run ruff format src/ tests/
+    uv run ruff format
 
 # Type check Python code
 type:
-    uv run ty check src/ tests/
+    uv run ty check
 
 # Check code quality
 check: lint format type

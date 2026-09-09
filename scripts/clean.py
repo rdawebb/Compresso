@@ -1,5 +1,6 @@
 """Cache cleaning script"""
 
+import contextlib
 import shutil
 from pathlib import Path
 
@@ -27,10 +28,9 @@ def remove_files(root: Path, extensions: list[str]) -> None:
     for ext in extensions:
         for file in root.rglob(f"*{ext}"):
             if file.is_file():
-                try:
+                # Ignore files that vanish or are locked mid-sweep
+                with contextlib.suppress(OSError):
                     file.unlink()
-                except Exception:
-                    pass
 
 
 def clean() -> None:

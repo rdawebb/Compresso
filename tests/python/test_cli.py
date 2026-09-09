@@ -52,7 +52,7 @@ class TestCLIModule:
         from compresso.cli import app
 
         assert app is not None
-        assert hasattr(app, "__call__")
+        assert callable(app)
 
     def test_compress_command_exists(self):
         """Test that compress command is defined."""
