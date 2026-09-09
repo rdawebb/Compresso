@@ -299,7 +299,7 @@ class ArchiveJob:
 
             return JobResult(ok=True, error=None, plan=self.plan)
 
-        except BaseException as e:
+        except Exception as e:
             return JobResult(ok=False, error=e, plan=self.plan)
 
 
@@ -376,5 +376,5 @@ class ExtractJob:
 
             return JobResult(ok=True, error=None, plan=self.plan)
 
-        except BaseException as e:
+        except Exception as e:
             return JobResult(ok=False, error=e, plan=self.plan)

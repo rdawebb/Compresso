@@ -34,12 +34,8 @@ class TestBackendCapabilities:
         cap = BackendCapabilities(name="zlib", id=1, has_buffer=True, has_stream=True)
 
         # Frozen dataclass should not allow assignment
-        try:
+        with pytest.raises((AttributeError, TypeError)):
             cap.name = "bzip2"  # type: ignore
-            assert False, "Expected exception when modifying frozen dataclass"
-        except (AttributeError, TypeError, Exception):
-            # Expected - frozen dataclass prevents modification
-            pass
 
 
 class TestListCapabilities:

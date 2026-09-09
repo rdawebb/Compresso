@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from compresso import compress_file
+from compresso._core import Error
 from compresso.backend.file_inspect import (
     COMP_HEADER_STRUCT,
     InspectResult,
@@ -111,18 +112,18 @@ class TestInspect:
             compress_file(
                 str(sample_text_file), str(compressed_file), "zlib", "balanced", 6
             )
-
-            # Then inspect it
-            result = inspect(compressed_file)
-
-            assert result.is_compresso is True
-            assert result.header_ok is True
-            assert result.algo_name is not None
-            assert result.orig_size is not None
-            assert result.version is not None
-        except Exception:
+        except Error:
             # If compression fails, skip test
             pytest.skip("Compression not available")
+
+        # Then inspect it
+        result = inspect(compressed_file)
+
+        assert result.is_compresso is True
+        assert result.header_ok is True
+        assert result.algo_name is not None
+        assert result.orig_size is not None
+        assert result.version is not None
 
     def test_inspect_path_as_string(self, sample_text_file: Path, temp_dir: Path):
         """Test inspect with path as string."""
@@ -132,14 +133,14 @@ class TestInspect:
             compress_file(
                 str(sample_text_file), str(compressed_file), "zlib", "balanced", 6
             )
-
-            # Inspect using string path
-            result = inspect(str(compressed_file))
-
-            assert isinstance(result.path, Path)
-            assert result.is_compresso is True
-        except Exception:
+        except Error:
             pytest.skip("Compression not available")
+
+        # Inspect using string path
+        result = inspect(str(compressed_file))
+
+        assert isinstance(result.path, Path)
+        assert result.is_compresso is True
 
     def test_inspect_file_too_small(self, temp_dir: Path):
         """Test inspecting a file that's too small to be valid."""
