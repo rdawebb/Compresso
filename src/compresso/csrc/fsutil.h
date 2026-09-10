@@ -65,6 +65,15 @@ void fs_closedir(fs_dir *dir);
 // Open `path` with fopen(3) semantics, returning NULL with errno set
 FILE *fs_fopen(const char *path, const char *mode);
 
+// Open `path` for binary writing, failing with errno EEXIST if it already
+// exists; the existence test and the creation are one atomic operation, so an
+// existing file is never truncated
+FILE *fs_fopen_exclusive(const char *path);
+
+// Set `path`'s modification time to `mtime` seconds since the Unix epoch
+// The access time is set to the same value, since archives do not carry one
+int fs_set_mtime(const char *path, int64_t mtime);
+
 // Canonicalise `path` into `resolved` (at least FS_PATH_MAX bytes), resolving
 // symlinks and Windows reparse points; fails if `path` does not exist
 int fs_realpath(const char *path, char *resolved);

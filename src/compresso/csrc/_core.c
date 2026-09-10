@@ -236,16 +236,54 @@ static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
 
 static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
                                     PyObject *kwargs) {
-  static char *kwlist[] = {"archive_path", "output_dir", "files", NULL};
+  static char *kwlist[] = {"archive_path",
+                           "output_dir",
+                           "files",
+                           "overwrite",
+                           "max_total_size",
+                           "max_depth",
+                           "preserve_permissions",
+                           "preserve_timestamps",
+                           "allow_symlinks",
+                           NULL};
 
   PyObject *archive_path_obj = NULL;
   PyObject *output_dir_obj = NULL;
   PyObject *files_obj = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOO", kwlist,
-                                   &archive_path_obj, &output_dir_obj,
-                                   &files_obj)) {
+  // Anything the caller does not pass keeps its default
+  ExtractionPolicy policy = extraction_policy_default();
+
+  // K and I write through exactly-sized pointers, so they cannot target the
+  // struct's fixed-width fields directly
+  unsigned long long max_total_size = (unsigned long long)policy.max_total_size;
+  unsigned int max_depth = (unsigned int)policy.max_depth;
+
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "OOO|$iKIppi", kwlist, &archive_path_obj,
+          &output_dir_obj, &files_obj, &policy.overwrite_existing,
+          &max_total_size, &max_depth, &policy.preserve_permissions,
+          &policy.preserve_timestamps, &policy.allow_symlinks)) {
     return NULL; // Error already set
+  }
+
+  policy.max_total_size = (uint64_t)max_total_size;
+  policy.max_depth = (uint32_t)max_depth;
+
+  if (policy.overwrite_existing < 0 || policy.overwrite_existing > 2) {
+    PyErr_Format(PyExc_ValueError,
+                 "overwrite must be 0 (error), 1 (skip) or 2 (overwrite), "
+                 "not %d",
+                 policy.overwrite_existing);
+    return NULL;
+  }
+
+  if (policy.allow_symlinks < 0 || policy.allow_symlinks > 2) {
+    PyErr_Format(PyExc_ValueError,
+                 "allow_symlinks must be 0 (deny), 1 (allow) or 2 (rewrite), "
+                 "not %d",
+                 policy.allow_symlinks);
+    return NULL;
   }
 
   const char **files = NULL;
@@ -280,7 +318,8 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
     return NULL; // Error already set
   }
 
-  int result = extract_archive(archive_path, output_dir, files, num_files);
+  int result =
+      extract_archive(archive_path, output_dir, files, num_files, &policy);
 
   Py_DECREF(archive_path_bytes);
   Py_DECREF(output_dir_bytes);
@@ -512,7 +551,8 @@ static PyMethodDef CoreMethods[] = {
      "Create a new archive from a list of files."},
     {"extract_archive", (PyCFunction)py_extract_archive,
      METH_VARARGS | METH_KEYWORDS,
-     "Extract an archive file to a specified directory."},
+     "Extract an archive file to a specified directory, subject to the "
+     "keyword-only extraction policy."},
     {"list_archive_contents", (PyCFunction)py_list_archive_contents,
      METH_VARARGS | METH_KEYWORDS, "List the contents of an archive file."},
 

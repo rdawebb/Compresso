@@ -265,7 +265,8 @@ static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
   return 1; // Entry retrieved
 }
 
-static int zip_extract_entry_data(void *reader_ptr, FILE *output) {
+static int zip_extract_entry_data(void *reader_ptr, FILE *output,
+                                  uint64_t max_bytes, uint64_t *bytes_written) {
   ZipReader *reader = (ZipReader *)reader_ptr;
 
   // Open the file at current_index - 1 (already incremented)
@@ -280,21 +281,39 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output) {
 
   char buffer[65536];
   zip_int64_t bytes_read;
+  uint64_t total = 0;
+  int over_limit = 0;
 
   Py_BEGIN_ALLOW_THREADS
 
       while ((bytes_read = zip_fread(zf, buffer, sizeof(buffer))) > 0) {
+    // Cap is applied to the bytes produced rather than to the declared size
+    if ((uint64_t)bytes_read > max_bytes - total) {
+      over_limit = 1;
+      break;
+    }
+
     size_t written = fwrite(buffer, 1, bytes_read, output);
     if (written != (size_t)bytes_read || ferror(output)) {
       Py_BLOCK_THREADS zip_fclose(zf);
       PyErr_SetString(PyExc_IOError, "Error writing output");
       return -1;
     }
+    total += (uint64_t)bytes_read;
   }
 
   Py_END_ALLOW_THREADS
 
-      if (bytes_read < 0) {
+      if (bytes_written) *bytes_written = total;
+
+  if (over_limit) {
+    zip_fclose(zf);
+    PyErr_SetString(PyExc_ValueError,
+                    "Archive exceeds the maximum extracted size");
+    return -1;
+  }
+
+  if (bytes_read < 0) {
     PyErr_Format(PyExc_IOError, "Error reading from archive: %s",
                  zip_file_strerror(zf));
     zip_fclose(zf);

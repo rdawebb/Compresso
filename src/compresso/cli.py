@@ -26,6 +26,7 @@ from .frontend.archive_api import (
     ArchiveJob,
     ArchiveOptions,
     ExtractJob,
+    ExtractOptions,
 )
 
 app = ExtendedTyper(help="Compresso - Fast file compression and decompression tool")
@@ -450,20 +451,56 @@ def extract(
     list_only: Annotated[
         bool, app.Option("--list", help="List archive contents without extracting")
     ] = False,
+    overwrite: Annotated[
+        bool, app.Option("--overwrite", help="Replace files that already exist")
+    ] = False,
+    skip_existing: Annotated[
+        bool, app.Option("--skip-existing", help="Leave files that already exist")
+    ] = False,
+    max_total_size: Annotated[
+        int | None,
+        app.Option(
+            "--max-total-size",
+            help="Refuse archives extracting to more than this many bytes",
+        ),
+    ] = None,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
 ) -> None:
     """Extract an archive, or list its contents.
 
+    Extraction refuses to touch an existing file unless either `--overwrite`
+    or `--skip-existing` flags are explicitly used.
+
     Args:
         archive: The path to the archive file.
         output_dir: Directory to extract into (default: current directory).
         list_only: If True, list contents without extracting.
+        overwrite: If True, replace files that already exist.
+        skip_existing: If True, leave files that already exist untouched.
+        max_total_size: Cap on total extracted bytes (default: no cap).
         quiet: If True, suppress all output (default: False).
     """
+    if overwrite and skip_existing:
+        app.echo(
+            message=app.style(
+                text="✗ Error: --overwrite and --skip-existing are mutually exclusive",
+                fg="red",
+            ),
+            err=True,
+        )
+        sys.exit(1)
+
+    options = ExtractOptions(
+        overwrite="overwrite" if overwrite else "skip" if skip_existing else "error",
+        max_total_size=max_total_size or 0,
+    )
+
     try:
-        job = ExtractJob.from_archive(archive=archive, output_dir=output_dir)
+        job = ExtractJob.from_archive(
+            archive=archive, output_dir=output_dir, options=options
+        )
         plan = job.plan
 
         if not plan.can_run:
