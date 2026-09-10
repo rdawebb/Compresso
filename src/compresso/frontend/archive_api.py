@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .._core import create_archive, extract_archive, list_archive_contents
 from ._job import JobResult, ProgressCallback
@@ -61,6 +62,29 @@ class ArchivePlan:
     reason_if_unavailable: str | None
 
 
+@dataclass
+class ExtractOptions:
+    """Represents the policy applied while extracting an archive.
+
+    Attributes:
+        overwrite: What to do when an entry's destination already exists.
+        max_total_size: Cap on total extracted bytes; 0 means unlimited.
+        max_depth: Maximum nesting depth of an entry path; 0 means unlimited.
+        preserve_permissions: Whether to restore each entry's mode bits.
+        preserve_timestamps: Whether to restore each entry's modification time.
+    """
+
+    overwrite: Literal["error", "skip", "overwrite"] = "error"
+    max_total_size: int = 0
+    max_depth: int = 32
+    preserve_permissions: bool = True
+    preserve_timestamps: bool = True
+
+
+# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h
+_OVERWRITE_MODES: dict[str, int] = {"error": 0, "skip": 1, "overwrite": 2}
+
+
 @dataclass(frozen=True)
 class ExtractPlan:
     """Holds a plan for extracting an archive.
@@ -69,6 +93,7 @@ class ExtractPlan:
         archive: Source archive path.
         output_dir: Directory to extract into.
         files: Optional subset of entry paths to extract (None = all).
+        options: Extraction policy to apply.
         entries: Entries discovered in the archive.
         can_run: Whether the extract operation can proceed.
         reason_if_unavailable: Reason the operation cannot proceed, if any.
@@ -77,6 +102,7 @@ class ExtractPlan:
     archive: Path
     output_dir: Path
     files: list[str] | None
+    options: ExtractOptions
 
     entries: list[ArchiveEntry]
     can_run: bool
@@ -186,6 +212,7 @@ def plan_extraction(
     archive: str | Path,
     output_dir: str | Path | None = None,
     files: list[str] | None = None,
+    options: ExtractOptions | None = None,
 ) -> ExtractPlan:
     """Plan an archive-extraction operation.
 
@@ -193,18 +220,35 @@ def plan_extraction(
         archive: Source archive path.
         output_dir: Directory to extract into. If None, the current directory.
         files: Optional subset of entry paths to extract. If None, extracts all.
+        options: Extraction policy. If None, defaults are used.
 
     Returns:
         ExtractPlan: The resulting plan.
     """
     archive_path = Path(archive)
     out_dir = Path.cwd() if output_dir is None else Path(output_dir)
+    opts = ExtractOptions() if options is None else options
+
+    if opts.overwrite not in _OVERWRITE_MODES:
+        return ExtractPlan(
+            archive=archive_path,
+            output_dir=out_dir,
+            files=files,
+            options=opts,
+            entries=[],
+            can_run=False,
+            reason_if_unavailable=(
+                f"Unknown overwrite mode: {opts.overwrite!r} "
+                f"(expected one of {', '.join(sorted(_OVERWRITE_MODES))})"
+            ),
+        )
 
     if not archive_path.is_file():
         return ExtractPlan(
             archive=archive_path,
             output_dir=out_dir,
             files=files,
+            options=opts,
             entries=[],
             can_run=False,
             reason_if_unavailable="Archive does not exist or is not a file",
@@ -219,6 +263,7 @@ def plan_extraction(
             archive=archive_path,
             output_dir=out_dir,
             files=files,
+            options=opts,
             entries=[],
             can_run=False,
             reason_if_unavailable=f"Cannot read archive: {e}",
@@ -228,6 +273,7 @@ def plan_extraction(
         archive=archive_path,
         output_dir=out_dir,
         files=files,
+        options=opts,
         entries=entries,
         can_run=True,
         reason_if_unavailable=None,
@@ -322,6 +368,7 @@ class ExtractJob:
         archive: str | Path,
         output_dir: str | Path | None = None,
         files: list[str] | None = None,
+        options: ExtractOptions | None = None,
     ) -> ExtractJob:
         """Create extract job from archive path.
 
@@ -329,11 +376,12 @@ class ExtractJob:
             archive: Path to the archive file.
             output_dir: Directory to extract to. If None, extracts to current directory.
             files: Optional list of files to extract from the archive. If None, extracts all files.
+            options: Extraction policy. If None, defaults are used.
 
         Returns:
             ExtractJob instance.
         """
-        return cls(plan=plan_extraction(archive, output_dir, files))
+        return cls(plan=plan_extraction(archive, output_dir, files, options))
 
     def list_contents(self) -> list[ArchiveEntry]:
         """List archive entry paths without extracting.
@@ -366,11 +414,17 @@ class ExtractJob:
             if progress:
                 progress(0.0, 0, total)
 
+            options = self.plan.options
             self.plan.output_dir.mkdir(parents=True, exist_ok=True)
             extract_archive(
                 str(self.plan.archive),
                 str(self.plan.output_dir),
                 self.plan.files or [],
+                overwrite=_OVERWRITE_MODES[options.overwrite],
+                max_total_size=options.max_total_size,
+                max_depth=options.max_depth,
+                preserve_permissions=options.preserve_permissions,
+                preserve_timestamps=options.preserve_timestamps,
             )
 
             if progress:

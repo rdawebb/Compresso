@@ -75,6 +75,7 @@ int fs_mkdir_p(const char *path, uint32_t mode) {
 #include <io.h>
 #include <share.h>
 #include <sys/stat.h>
+#include <sys/utime.h>
 #include <wchar.h>
 #include <windows.h>
 
@@ -251,6 +252,39 @@ FILE *fs_fopen(const char *path, const char *mode) {
   return _wfopen(wpath, wmode);
 }
 
+FILE *fs_fopen_exclusive(const char *path) {
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return NULL;
+
+  int fd;
+  errno_t e = _wsopen_s(&fd, wpath, _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY,
+                        _SH_DENYNO, _S_IREAD | _S_IWRITE);
+  if (e != 0) {
+    errno = e;
+    return NULL;
+  }
+
+  FILE *f = _fdopen(fd, "wb");
+  if (!f) {
+    int saved = errno;
+    _close(fd);
+    errno = saved;
+  }
+  return f;
+}
+
+int fs_set_mtime(const char *path, int64_t mtime) {
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+
+  struct __utimbuf64 times;
+  times.actime = (__time64_t)mtime;
+  times.modtime = (__time64_t)mtime;
+  return _wutime64(wpath, &times);
+}
+
 // Resolves `path` to an absolute path, following reparse points if necessary
 int fs_realpath(const char *path, char *resolved) {
   wchar_t wpath[FS_PATH_MAX];
@@ -336,7 +370,9 @@ int fs_unlink(const char *path) {
 // ---- POSIX implementation ----
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 int fs_stat_path(const char *path, fs_stat *out) {
@@ -374,6 +410,31 @@ struct fs_dir {
 };
 
 FILE *fs_fopen(const char *path, const char *mode) { return fopen(path, mode); }
+
+FILE *fs_fopen_exclusive(const char *path) {
+  // O_NOFOLLOW so an existing symlink is refused rather than followed; O_EXCL
+  // already rejects one, but only where the kernel implements it
+  int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
+  if (fd < 0)
+    return NULL;
+
+  FILE *f = fdopen(fd, "wb");
+  if (!f) {
+    int saved = errno;
+    close(fd);
+    errno = saved;
+  }
+  return f;
+}
+
+int fs_set_mtime(const char *path, int64_t mtime) {
+  struct timeval times[2];
+  times[0].tv_sec = (time_t)mtime; // Access time
+  times[0].tv_usec = 0;
+  times[1].tv_sec = (time_t)mtime; // Modification time
+  times[1].tv_usec = 0;
+  return utimes(path, times);
+}
 
 int fs_dir_error(const fs_dir *dir) {
   (void)dir;

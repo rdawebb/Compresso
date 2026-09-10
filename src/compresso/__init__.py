@@ -18,6 +18,7 @@ from .frontend.archive_api import (
     ArchiveOptions,
     ArchivePlan,
     ExtractJob,
+    ExtractOptions,
     ExtractPlan,
 )
 
@@ -34,6 +35,7 @@ __all__: list[str] = [
     "DecompressionPlan",
     "Error",
     "ExtractJob",
+    "ExtractOptions",
     "ExtractPlan",
     "HeaderError",
     "InspectResult",

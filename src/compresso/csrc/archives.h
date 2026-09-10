@@ -50,7 +50,12 @@ typedef struct CArchive {
   void *(*create_reader)(const char *input_path);
   int (*get_entry_count)(void *reader);
   int (*get_next_entry)(void *reader, ArchiveEntry *entry);
-  int (*extract_entry_data)(void *reader, FILE *output);
+
+  // Writes the current entry's data to `output`, refusing to write more than
+  // `max_bytes` (UINT64_MAX for no limit) and reporting the byte count through
+  // `bytes_written` when it is non-NULL
+  int (*extract_entry_data)(void *reader, FILE *output, uint64_t max_bytes,
+                            uint64_t *bytes_written);
   int (*skip_entry_data)(void *reader);
   int (*reset_reader)(void *reader);
   int (*close_reader)(void *reader);
@@ -160,8 +165,11 @@ int pipeline_is_valid(const CompressionPipeline *p);
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths);
 
+// Entries are validated against `policy` (NULL = extraction_policy_default())
+// in a first pass over the archive
 int extract_archive(const char *archive_path, const char *output_dir,
-                    const char **files, size_t num_files);
+                    const char **files, size_t num_files,
+                    const ExtractionPolicy *policy);
 
 PyObject *list_archive_contents(const char *archive_path);
 

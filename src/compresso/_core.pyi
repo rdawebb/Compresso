@@ -43,8 +43,23 @@ def extract_archive(
     archive_path: str,
     output_dir: str,
     files: list[str] = ...,
-) -> int:
-    """Extract an archive to output_dir, optionally selecting specific files."""
+    *,
+    overwrite: int = ...,
+    max_total_size: int = ...,
+    max_depth: int = ...,
+    preserve_permissions: bool = ...,
+    preserve_timestamps: bool = ...,
+    allow_symlinks: int = ...,
+) -> None:
+    """Extract an archive to output_dir, optionally selecting specific files.
+
+    The keyword-only arguments are the extraction policy; each defaults to the
+    value in `extraction_policy_default()` in the C extension.
+
+    `overwrite` is 0 = error, 1 = skip, 2 = overwrite; `allow_symlinks` is 0 = deny,
+    1 = allow, 2 = rewrite to regular files; `max_total_size` and `max_depth`
+    treat 0 as unlimited.
+    """
 
 def list_archive_contents(archive_path: str) -> list[str]:
     """List the entry paths contained in an archive."""

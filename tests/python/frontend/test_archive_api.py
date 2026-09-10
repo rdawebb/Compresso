@@ -1,10 +1,13 @@
 """Tests for the frontend archive API module."""
 
 import io
+import os
+import struct
 import subprocess
 import sys
 import tarfile
 import unicodedata
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -16,6 +19,7 @@ from compresso.frontend.archive_api import (
     ArchiveOptions,
     ArchivePlan,
     ExtractJob,
+    ExtractOptions,
     ExtractPlan,
     plan_archive,
 )
@@ -426,3 +430,358 @@ class TestExtractionRefusesUnsafePaths:
 
         assert result.ok, result.error
         assert (out_dir / "sub" / "deep" / "leaf.txt").read_bytes() == b"pwned"
+
+
+def _tar_with_entries(archive_path: Path, entries: list[tarfile.TarInfo]) -> None:
+    """Write a tar holding `entries`, each with `size` bytes of filler.
+
+    Args:
+        archive_path: Where to write the tar.
+        entries: Entry headers to store, used exactly as given.
+    """
+    with tarfile.open(archive_path, "w", format=tarfile.GNU_FORMAT) as tf:
+        for info in entries:
+            data = io.BytesIO(b"x" * info.size) if info.size else None
+            tf.addfile(info, data)
+
+
+def _file_entry(name: str, size: int = 5) -> tarfile.TarInfo:
+    """Build a regular-file tar header of `size` bytes.
+
+    Args:
+        name: Entry name to store.
+        size: Size of the entry's filler payload.
+
+    Returns:
+        The tar header.
+    """
+    info = tarfile.TarInfo(name)
+    info.size = size
+    return info
+
+
+class TestExtractionSizeCap:
+    """Test that `max_total_size` bounds what an archive can write."""
+
+    def test_no_cap_by_default(self, temp_dir: Path):
+        """Test that the shipped default places no limit on extracted bytes."""
+        archive_path = temp_dir / "big.tar"
+        _tar_with_entries(archive_path, [_file_entry("big.bin", 200_000)])
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "big.bin").stat().st_size == 200_000
+
+    def test_refuses_archive_over_the_cap(self, temp_dir: Path):
+        """Test that a total past the cap is refused with nothing written."""
+        archive_path = temp_dir / "bomb.tar"
+        _tar_with_entries(archive_path, [_file_entry("big.bin", 200_000)])
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(max_total_size=1000)
+        ).run()
+
+        assert result.ok is False
+        assert "maximum extracted size" in str(result.error)
+        assert list(out_dir.iterdir()) == []
+
+    def test_cap_applies_to_the_total_not_each_entry(self, temp_dir: Path):
+        """Test that entries individually under the cap still fail in total."""
+        archive_path = temp_dir / "many.tar"
+        _tar_with_entries(
+            archive_path, [_file_entry(f"f{i}.bin", 400) for i in range(10)]
+        )
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(max_total_size=1000)
+        ).run()
+
+        assert result.ok is False
+        assert "maximum extracted size" in str(result.error)
+
+    def test_entry_under_the_cap_extracts(self, temp_dir: Path):
+        """Test that the cap does not over-reject an archive that fits."""
+        archive_path = temp_dir / "small.tar"
+        _tar_with_entries(archive_path, [_file_entry("small.bin", 500)])
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(max_total_size=1000)
+        ).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "small.bin").stat().st_size == 500
+
+    def test_understated_entry_size_is_still_capped(self, temp_dir: Path):
+        """Test that the cap counts bytes written, not the declared size.
+
+        A zip's central directory is the only thing the pre-extraction pass can
+        read sizes from, and it is attacker-controlled: patched to claim ten
+        bytes, this entry passes that pass and has to be stopped mid-write.
+        """
+        archive_path = temp_dir / "lie.zip"
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("big.bin", b"x" * 200_000)
+
+        data = bytearray(archive_path.read_bytes())
+        central_dir = data.find(b"PK\x01\x02")
+        struct.pack_into("<I", data, central_dir + 24, 10)  # Uncompressed size
+        archive_path.write_bytes(bytes(data))
+
+        out_dir = temp_dir / "out"
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(max_total_size=1000)
+        ).run()
+
+        assert result.ok is False
+        assert "maximum extracted size" in str(result.error)
+        assert (out_dir / "big.bin").stat().st_size == 0
+
+
+class TestExtractionDepthLimit:
+    """Test that `max_depth` bounds how deeply an entry may nest."""
+
+    def test_refuses_entry_past_the_depth_limit(self, temp_dir: Path):
+        """Test that an entry nested past the default limit is refused."""
+        archive_path = temp_dir / "deep.tar"
+        name = "/".join(f"d{i}" for i in range(40)) + "/leaf.txt"
+        _tar_with_entries(archive_path, [_file_entry(name)])
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok is False
+        assert "max depth" in str(result.error)
+        assert list(out_dir.iterdir()) == []
+
+    def test_accepts_entry_within_the_depth_limit(self, temp_dir: Path):
+        """Test that an entry just inside the limit still extracts."""
+        archive_path = temp_dir / "deep.tar"
+        parts = [f"d{i}" for i in range(31)]
+        _tar_with_entries(archive_path, [_file_entry("/".join([*parts, "leaf.txt"]))])
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok, result.error
+        assert out_dir.joinpath(*parts, "leaf.txt").exists()
+
+    def test_depth_limit_is_configurable(self, temp_dir: Path):
+        """Test that a tighter limit refuses what the default accepts."""
+        archive_path = temp_dir / "nested.tar"
+        _tar_with_entries(archive_path, [_file_entry("a/b/c/leaf.txt")])
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(max_depth=2)
+        ).run()
+
+        assert result.ok is False
+        assert "max depth" in str(result.error)
+
+
+class TestExtractionOverwrite:
+    """Test the three `overwrite` modes against an existing destination."""
+
+    @staticmethod
+    def _archive_and_stale_output(temp_dir: Path) -> tuple[Path, Path]:
+        """Build a one-entry archive and an output dir already holding that name.
+
+        Args:
+            temp_dir: Directory to build both in.
+
+        Returns:
+            The archive path and the output directory.
+        """
+        archive_path = temp_dir / "one.tar"
+        _tar_with_entries(archive_path, [_file_entry("a.txt")])
+
+        out_dir = temp_dir / "out"
+        out_dir.mkdir()
+        (out_dir / "a.txt").write_bytes(b"original")
+
+        return archive_path, out_dir
+
+    def test_refuses_existing_file_by_default(self, temp_dir: Path):
+        """Test that the default policy refuses to touch an existing file."""
+        archive_path, out_dir = self._archive_and_stale_output(temp_dir)
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok is False
+        assert isinstance(result.error, FileExistsError)
+        assert (out_dir / "a.txt").read_bytes() == b"original"
+
+    def test_skip_leaves_the_existing_file(self, temp_dir: Path):
+        """Test that `skip` succeeds without replacing what is already there."""
+        archive_path, out_dir = self._archive_and_stale_output(temp_dir)
+
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(overwrite="skip")
+        ).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "a.txt").read_bytes() == b"original"
+
+    def test_overwrite_replaces_the_existing_file(self, temp_dir: Path):
+        """Test that `overwrite` replaces the file's contents."""
+        archive_path, out_dir = self._archive_and_stale_output(temp_dir)
+
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(overwrite="overwrite")
+        ).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "a.txt").read_bytes() == b"xxxxx"
+
+    def test_unknown_mode_is_an_unavailable_plan(self, temp_dir: Path):
+        """Test that a mode outside the three names never reaches the C layer."""
+        archive_path = temp_dir / "one.tar"
+        _tar_with_entries(archive_path, [_file_entry("a.txt")])
+
+        plan = ExtractJob.from_archive(
+            archive_path,
+            temp_dir / "out",
+            options=ExtractOptions(overwrite="clobber"),  # ty: ignore
+        ).plan
+
+        assert plan.can_run is False
+        assert "Unknown overwrite mode" in str(plan.reason_if_unavailable)
+
+
+class TestExtractionMetadata:
+    """Test that modes and modification times are restored as the policy says."""
+
+    @staticmethod
+    def _archive_with_metadata(archive_path: Path, mtime: int, mode: int) -> None:
+        """Write a one-entry tar carrying an explicit mtime and mode.
+
+        Args:
+            archive_path: Where to write the tar.
+            mtime: Modification time to store, in seconds since the epoch.
+            mode: Permission bits to store.
+        """
+        info = _file_entry("a.txt")
+        info.mtime = mtime
+        info.mode = mode
+        _tar_with_entries(archive_path, [info])
+
+    def test_restores_mtime_by_default(self, temp_dir: Path):
+        """Test that the entry's modification time survives extraction."""
+        archive_path = temp_dir / "meta.tar"
+        self._archive_with_metadata(archive_path, mtime=1_000_000_000, mode=0o644)
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "a.txt").stat().st_mtime == pytest.approx(
+            1_000_000_000, abs=2
+        )
+
+    def test_preserve_timestamps_off_uses_the_current_time(self, temp_dir: Path):
+        """Test that the stored mtime is ignored when the flag is off."""
+        archive_path = temp_dir / "meta.tar"
+        self._archive_with_metadata(archive_path, mtime=1_000_000_000, mode=0o644)
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(preserve_timestamps=False)
+        ).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "a.txt").stat().st_mtime > 1_000_000_000
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows has no POSIX permission bits"
+    )
+    def test_restores_mode_by_default(self, temp_dir: Path):
+        """Test that the entry's permission bits survive extraction."""
+        archive_path = temp_dir / "meta.tar"
+        self._archive_with_metadata(archive_path, mtime=1_000_000_000, mode=0o640)
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "a.txt").stat().st_mode & 0o777 == 0o640
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows has no POSIX permission bits"
+    )
+    def test_preserve_permissions_off_leaves_the_created_mode(self, temp_dir: Path):
+        """Test that the stored mode is not applied when the flag is off."""
+        archive_path = temp_dir / "meta.tar"
+        self._archive_with_metadata(archive_path, mtime=1_000_000_000, mode=0o600)
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(preserve_permissions=False)
+        ).run()
+
+        assert result.ok, result.error
+        created = (out_dir / "a.txt").stat().st_mode & 0o777
+        assert created == 0o666 & ~_umask()
+
+
+def _umask() -> int:
+    """Read the process umask without leaving it changed.
+
+    Returns:
+        The current umask.
+    """
+    current = os.umask(0)
+    os.umask(current)
+    return current
+
+
+class TestExtractionRefusesSpecialFiles:
+    """Test that device nodes, FIFOs and sockets are refused."""
+
+    def test_refuses_fifo_entry(self, temp_dir: Path):
+        """Test that a FIFO entry is classified and refused, not written."""
+        archive_path = temp_dir / "fifo.tar"
+        info = tarfile.TarInfo("pipe")
+        info.type = tarfile.FIFOTYPE
+        _tar_with_entries(archive_path, [info])
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok is False
+        assert "special file" in str(result.error)
+        assert not (out_dir / "pipe").exists()
+
+
+class TestExtractionIsAllOrNothing:
+    """Test that a refused entry stops anything from being written."""
+
+    def test_later_bad_entry_blocks_the_earlier_good_one(self, temp_dir: Path):
+        """Test that an escape in the second entry keeps the first off disk."""
+        archive_path = temp_dir / "mixed.tar"
+        _tar_with_entries(
+            archive_path, [_file_entry("good.txt"), _file_entry("../escape.txt")]
+        )
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok is False
+        assert "traversal" in str(result.error)
+        assert not (out_dir / "good.txt").exists()
+        assert not (temp_dir / "escape.txt").exists()
+
+    def test_parent_segment_check_allows_a_leading_dot_name(self, temp_dir: Path):
+        """Test that `..data` is a filename, not a traversal."""
+        archive_path = temp_dir / "dots.tar"
+        _tar_with_entries(archive_path, [_file_entry("..data")])
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "..data").read_bytes() == b"xxxxx"
