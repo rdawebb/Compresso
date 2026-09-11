@@ -60,7 +60,8 @@ static int zstd_decompress_buffer(const unsigned char *input, size_t input_size,
 
 // ---- Stream Compression/Decompression ----
 
-static int zstd_compress_stream(FILE *src, FILE *dst, int level) {
+static int zstd_compress_stream(FILE *src, FILE *dst, int level,
+                                CoreContext *ctx) {
   int zlevel =
       (level >= 0) ? zstd_level_from_generic(level) : ZSTD_CLEVEL_DEFAULT;
 
@@ -84,6 +85,12 @@ static int zstd_compress_stream(FILE *src, FILE *dst, int level) {
     size_t read = fread(input, 1, ZSTD_CHUNK, src);
     if (ferror(src)) {
       err = -1;
+      break;
+    }
+
+    int advance = ctx_advance(ctx, read);
+    if (advance != 0) {
+      err = advance;
       break;
     }
 
@@ -126,10 +133,11 @@ static int zstd_compress_stream(FILE *src, FILE *dst, int level) {
 
       ZSTD_freeCStream(cstream);
 
-  return err ? -1 : 0; // success or failure
+  return err; // 0, -1, or COMP_CANCELLED
 }
 
-static int zstd_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
+static int zstd_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
+                                  CoreContext *ctx) {
   (void)orig_size; // unused
 
   ZSTD_DStream *dstream = ZSTD_createDStream();
@@ -163,6 +171,12 @@ static int zstd_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
       if (input_size == 0) {
         break; // end of input
       }
+
+      int advance = ctx_advance(ctx, input_size);
+      if (advance != 0) {
+        err = advance;
+        break;
+      }
     }
 
     ZSTD_inBuffer inbuf = {input + input_pos, input_size - input_pos, 0};
@@ -190,7 +204,7 @@ static int zstd_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
 
   Py_END_ALLOW_THREADS ZSTD_freeDStream(dstream);
 
-  return err ? -1 : 0; // success or failure
+  return err; // 0, -1, or COMP_CANCELLED
 }
 
 // ---- Backend Definition ----

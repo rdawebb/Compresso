@@ -1,7 +1,8 @@
 #ifndef STANDALONE_H
 #define STANDALONE_H
 
-#include "archives.h"
+// common.h for CoreContext; it pulls in archives.h, which defines Format
+#include "common.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -10,12 +11,13 @@ typedef struct {
   const char *name;
   const char *extension; // Primary extension
 
-  // Compress a file to standalone format
+  // Compress a file to standalone format; `ctx` is NULL-tolerant
   int (*compress_file)(const char *input_path, const char *output_path,
-                       int level);
+                       int level, CoreContext *ctx);
 
   // Decompress a standalone format file
-  int (*decompress_file)(const char *input_path, const char *output_path);
+  int (*decompress_file)(const char *input_path, const char *output_path,
+                         CoreContext *ctx);
 
   // Get original filename from compressed file, or NULL if not stored
   char *(*get_original_name)(const char *compressed_path);

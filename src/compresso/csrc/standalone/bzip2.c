@@ -17,12 +17,14 @@ static int bzip2_block_size_from_level(int level) {
 }
 
 static int bzip2_compress_file(const char *input_path, const char *output_path,
-                               int level) {
+                               int level, CoreContext *ctx) {
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
+
+  ctx_begin_stage_stream(ctx, input);
 
   FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
@@ -58,6 +60,12 @@ static int bzip2_compress_file(const char *input_path, const char *output_path,
       break;
     }
 
+    int advance = ctx_advance(ctx, nread);
+    if (advance != 0) {
+      ret = advance;
+      break;
+    }
+
     if (nread > 0) {
       BZ2_bzWrite(&bzerr, bzf, buffer, (int)nread);
       if (bzerr != BZ_OK) {
@@ -74,31 +82,25 @@ static int bzip2_compress_file(const char *input_path, const char *output_path,
   Py_END_ALLOW_THREADS
 
       int close_err;
-  BZ2_bzWriteClose(&close_err, bzf, 0, NULL, NULL);
+  // Abandon rather than flush when the run failed or was cancelled
+  BZ2_bzWriteClose(&close_err, bzf, ret != 0, NULL, NULL);
   if (ret == 0 && close_err != BZ_OK) {
     ret = -1; // Error finalising stream
   }
 
-  if (ret != 0) {
-    if (!PyErr_Occurred())
-      PyErr_SetString(comp_BackendError, "bzip2 compression failed");
-    fclose(input);
-    fclose(output);
-    return -1;
-  }
-
-  fclose(input);
-  fclose(output);
-  return 0;
+  return codec_finish_file(ret, input, output, output_path,
+                           "bzip2 compression failed");
 }
 
 static int bzip2_decompress_file(const char *input_path,
-                                 const char *output_path) {
+                                 const char *output_path, CoreContext *ctx) {
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
+
+  ctx_begin_stage_stream(ctx, input);
 
   FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
@@ -138,6 +140,13 @@ static int bzip2_decompress_file(const char *input_path,
       if (bzerr == BZ_STREAM_END) {
         break; // End of stream
       }
+
+      // BZ2_bzRead does the reading, so no per-chunk input delta to report
+      int advance = ctx_set_position(ctx, (uint64_t)fs_ftell(input));
+      if (advance != 0) {
+        ret = advance;
+        break;
+      }
     } else {
       ret = -1; // Read / CRC / Data error
       break;
@@ -149,21 +158,12 @@ static int bzip2_decompress_file(const char *input_path,
 
   Py_END_ALLOW_THREADS
 
-      if (ret != 0) {
-    if (saved_err == BZ_DATA_ERROR || saved_err == BZ_DATA_ERROR_MAGIC) {
-      PyErr_SetString(comp_BackendError,
-                      "bzip2 data error: corrupted or invalid compressed data");
-    } else {
-      PyErr_SetString(comp_BackendError, "bzip2 decompression failed");
-    }
-    fclose(input);
-    fclose(output);
-    return -1;
-  }
+      const char *message =
+          (saved_err == BZ_DATA_ERROR || saved_err == BZ_DATA_ERROR_MAGIC)
+              ? "bzip2 data error: corrupted or invalid compressed data"
+              : "bzip2 decompression failed";
 
-  fclose(input);
-  fclose(output);
-  return 0;
+  return codec_finish_file(ret, input, output, output_path, message);
 }
 
 static char *bzip2_get_original_name(const char *compressed_path) {

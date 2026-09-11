@@ -1,5 +1,8 @@
 """Type stubs for the _core C extension module."""
 
+from collections.abc import Callable
+from typing import TypeAlias
+
 class Error(Exception):
     """Base error for compression operations."""
 
@@ -9,12 +12,38 @@ class HeaderError(Error):
 class BackendError(Error):
     """Error in compression backend."""
 
+class Cancelled(Error):
+    """Raised when an operation stopped because its CancelToken was set."""
+
+class CancelToken:
+    """Cancellation flag shared with a running compression.
+
+    Pass one as the `cancel=` argument of any operation below; calling
+    `cancel()` stops it within one 64 KB chunk, raising `Cancelled` and leaving no
+    partial destination file behind.
+    """
+
+    def cancel(self) -> None:
+        """Request cancellation. Safe to call from any thread."""
+
+    @property
+    def cancelled(self) -> bool:
+        """True once cancel() has been called."""
+
+# Progress callbacks receive (done_bytes, total_bytes), counting input bytes
+# consumed; returning is enough to continue; raising aborts the operation with
+# that exception
+ProgressFn: TypeAlias = Callable[[int, int], None]
+
 def compress_file(
     src_path: str,
     dst_path: str,
     algo: str,
     strategy: str,
     level: int,
+    *,
+    progress: ProgressFn | None = ...,
+    cancel: CancelToken | None = ...,
 ) -> int:
     """Compress a file using the specified algorithm and strategy."""
 
@@ -22,6 +51,9 @@ def decompress_file(
     src_path: str,
     dst_path: str,
     algo: str,
+    *,
+    progress: ProgressFn | None = ...,
+    cancel: CancelToken | None = ...,
 ) -> int:
     """Decompress a file."""
 
@@ -63,3 +95,24 @@ def extract_archive(
 
 def list_archive_contents(archive_path: str) -> list[str]:
     """List the entry paths contained in an archive."""
+
+def compress_standalone(
+    input_path: str,
+    output_path: str,
+    format: str,
+    compression_level: int = ...,
+    *,
+    progress: ProgressFn | None = ...,
+    cancel: CancelToken | None = ...,
+) -> None:
+    """Compress a file into a standalone container (.gz, .bz2, .xz, .zst, .lz4)."""
+
+def decompress_standalone(
+    input_path: str,
+    output_path: str,
+    format: str = ...,
+    *,
+    progress: ProgressFn | None = ...,
+    cancel: CancelToken | None = ...,
+) -> None:
+    """Decompress a standalone container, detecting the format if not given."""

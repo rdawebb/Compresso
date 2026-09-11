@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .._core import compress_file, decompress_file
+from .._core import Cancelled, CancelToken, compress_file, decompress_file
 from .._core import get_default_backend_for_strategy as default_backend
 from ..backend.file_inspect import InspectResult
 from ..backend.file_inspect import inspect as inspect_file
 from ..backend.speeds import get_estimated_speeds
-from ._job import JobResult, ProgressCallback
+from ._job import JobResult, ProgressCallback, to_core_progress
 
 MB = 1024 * 1024
 
@@ -211,11 +211,18 @@ class CompressionJob:
         """
         return cls(plan=plan_compression(src, dest, options))
 
-    def run(self, progress: ProgressCallback | None = None) -> JobResult:
+    def run(
+        self,
+        progress: ProgressCallback | None = None,
+        cancel: CancelToken | None = None,
+    ) -> JobResult:
         """Run the compression job.
 
         Args:
-            progress: Optional progress callback.
+            progress: Optional progress callback, invoked with
+                `(fraction, done_bytes, total_bytes)`; raising aborts the job
+                and the exception is reported through the returned `JobResult`.
+            cancel: Optional `CancelToken`.
 
         Returns:
             JobResult: The result of the compression job.
@@ -231,9 +238,6 @@ class CompressionJob:
 
         total: int = self.plan.input_size
         try:
-            if progress:
-                progress(0.0, 0, total)
-
             lvl: int = (
                 -1 if self.plan.options.level is None else int(self.plan.options.level)
             )
@@ -244,10 +248,9 @@ class CompressionJob:
                 algo=self.plan.backend_name or "",
                 strategy=self.plan.options.strategy or "",
                 level=lvl,
+                progress=to_core_progress(progress, total),
+                cancel=cancel,
             )
-
-            if progress:
-                progress(1.0, total, total)
 
             return JobResult(
                 ok=True,
@@ -255,8 +258,17 @@ class CompressionJob:
                 plan=self.plan,
             )
 
-        # `run` reports failure through JobResult rather than raising; see the
-        # contract on `compresso.frontend._job.Job`.
+        # Cancellation is a deliberate stop, so it is reported through its own
+        # flag with no error attached
+        except Cancelled:
+            return JobResult(
+                ok=False,
+                error=None,
+                plan=self.plan,
+                cancelled=True,
+            )
+
+        # `run` reports failure through JobResult rather than raising
         except Exception as e:  # noqa: BLE001
             return JobResult(
                 ok=False,
@@ -291,11 +303,19 @@ class DecompressionJob:
         """
         return cls(plan=plan_decompression(src, dest))
 
-    def run(self, progress: ProgressCallback | None = None) -> JobResult:
+    def run(
+        self,
+        progress: ProgressCallback | None = None,
+        cancel: CancelToken | None = None,
+    ) -> JobResult:
         """Run the decompression job.
 
         Args:
-            progress: Optional progress callback.
+            progress: Optional progress callback, invoked with
+                `(fraction, done_bytes, total_bytes)`; counts compressed
+                bytes consumed, so the total is the size of the source file
+                rather than the size it expands to.
+            cancel: Optional `CancelToken`.
 
         Returns:
             JobResult: The result of the decompression job.
@@ -325,17 +345,13 @@ class DecompressionJob:
 
         total = insp.orig_size or 0
         try:
-            if progress:
-                progress(0.0, 0, total)
-
             decompress_file(
                 src_path=str(object=self.plan.src),
                 dst_path=str(object=self.plan.dest),
                 algo="",
+                progress=to_core_progress(progress, total),
+                cancel=cancel,
             )
-
-            if progress:
-                progress(1.0, total, total)
 
             return JobResult(
                 ok=True,
@@ -343,8 +359,17 @@ class DecompressionJob:
                 plan=self.plan,
             )
 
-        # `run` reports failure through JobResult rather than raising; see the
-        # contract on `compresso.frontend._job.Job`.
+        # Cancellation is a deliberate stop, so it is reported through its own
+        # flag with no error attached
+        except Cancelled:
+            return JobResult(
+                ok=False,
+                error=None,
+                plan=self.plan,
+                cancelled=True,
+            )
+
+        # `run` reports failure through JobResult rather than raising
         except Exception as e:  # noqa: BLE001
             return JobResult(
                 ok=False,

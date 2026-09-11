@@ -8,15 +8,120 @@
 PyObject *comp_Error;
 PyObject *comp_HeaderError;
 PyObject *comp_BackendError;
+PyObject *comp_Cancelled;
+
+// ---- Cancel Token ----
+
+// A cancellation flag the C loops can poll without holding the GIL
+typedef struct {
+  PyObject_HEAD
+      // One-way and a single machine word
+      volatile int flag;
+} CancelTokenObject;
+
+static PyObject *cancel_token_cancel(PyObject *self, PyObject *ignored UNUSED) {
+  ((CancelTokenObject *)self)->flag = 1;
+  Py_RETURN_NONE;
+}
+
+static PyObject *cancel_token_get_cancelled(PyObject *self,
+                                            void *closure UNUSED) {
+  return PyBool_FromLong(((CancelTokenObject *)self)->flag);
+}
+
+static PyMethodDef cancel_token_methods[] = {
+    {"cancel", cancel_token_cancel, METH_NOARGS,
+     "Request cancellation of any operation using this token.\n"
+     "Safe to call from any thread, and before the operation starts."},
+    {NULL, NULL, 0, NULL}};
+
+static PyGetSetDef cancel_token_getset[] = {
+    {"cancelled", cancel_token_get_cancelled, NULL,
+     "True once cancel() has been called.", NULL},
+    {NULL, NULL, NULL, NULL, NULL}};
+
+static PyTypeObject CancelTokenType = {
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name = "compresso._core.CancelToken",
+    .tp_doc = "Cancellation flag shared with a running compression.",
+    .tp_basicsize = sizeof(CancelTokenObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_new = PyType_GenericNew,
+    .tp_methods = cancel_token_methods,
+    .tp_getset = cancel_token_getset,
+};
+
+// ---- Progress Bridge ----
+
+// Called from ctx_advance inside a codec loop running with the GIL released, so
+// it reacquires the GIL first
+static int progress_bridge(CoreContext *ctx, uint64_t done, uint64_t total) {
+  PyGILState_STATE gstate = PyGILState_Ensure();
+
+  int result = 0;
+  // NULL when the caller asked for no progress; the context stays attached so
+  // the signal check below still runs
+  PyObject *callback = (PyObject *)ctx->userdata;
+  if (callback) {
+    PyObject *ret = PyObject_CallFunction(
+        callback, "KK", (unsigned long long)done, (unsigned long long)total);
+    if (!ret) {
+      result = -1; // The callback raised; its exception propagates
+    } else {
+      Py_DECREF(ret);
+    }
+  }
+
+  // Runs pending signal handlers, so a Ctrl-C mid-compression raises promptly
+  if (result == 0 && PyErr_CheckSignals() != 0) {
+    result = -1;
+  }
+
+  PyGILState_Release(gstate);
+  return result;
+}
+
+// Populates `ctx` from the optional progress= and cancel= arguments; returns -1
+// with an exception set if either is of the wrong type
+//
+// The bridge is installed even when neither is given, since it is also where
+// PyErr_CheckSignals runs
+static int core_context_init(CoreContext *ctx, PyObject *progress,
+                             PyObject *cancel) {
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->on_progress = progress_bridge;
+
+  if (progress && progress != Py_None) {
+    if (!PyCallable_Check(progress)) {
+      PyErr_SetString(PyExc_TypeError, "progress must be callable or None");
+      return -1;
+    }
+    ctx->userdata = progress;
+  }
+
+  if (cancel && cancel != Py_None) {
+    if (!Py_IS_TYPE(cancel, &CancelTokenType)) {
+      PyErr_SetString(PyExc_TypeError, "cancel must be a CancelToken or None");
+      return -1;
+    }
+    ctx->cancel_flag = &((CancelTokenObject *)cancel)->flag;
+  }
+
+  return 0;
+}
+
+// Call only on a non-zero return; an exception already raised by the callback
+// or a signal handler is more specific
+static void set_cancelled_error(int return_code) {
+  if (return_code == COMP_CANCELLED && !PyErr_Occurred()) {
+    PyErr_SetString(comp_Cancelled, "Operation cancelled");
+  }
+}
 
 // ---- Path Encoding Helpers ----
 
-// Encode a Python str into filesystem-encoded bytes, the way every file-based
-// entry point hands OS paths to the C layer. Returns a new bytes reference
-// (caller Py_DECREFs) with *out pointing into its buffer, or NULL with an
-// exception set. Routing all paths through PyUnicode_EncodeFSDefault keeps path
-// handling consistent and honours the configured filesystem encoding rather
-// than assuming UTF-8.
+// Returns a new bytes reference (caller Py_DECREFs) with *out pointing into its
+// buffer; PyUnicode_EncodeFSDefault honours the configured filesystem encoding
 static PyObject *encode_fs_path(PyObject *obj, const char **out) {
   PyObject *bytes = PyUnicode_EncodeFSDefault(obj);
   if (!bytes)
@@ -25,11 +130,8 @@ static PyObject *encode_fs_path(PyObject *obj, const char **out) {
   return bytes;
 }
 
-// Encode a Python list of str paths into a C array of filesystem-encoded
-// C-strings. Returns a Python list holding the backing bytes objects, which the
-// caller must keep alive for the duration of the C call and then Py_DECREF;
-// *out_paths (caller frees) and *out_count are filled on success. NULL on
-// error.
+// Returns a list holding the backing bytes objects; *out_paths (caller frees)
+// and *out_count are filled on success
 static PyObject *encode_fs_path_list(PyObject *list, const char ***out_paths,
                                      size_t *out_count) {
   Py_ssize_t n = PyList_Size(list);
@@ -73,19 +175,26 @@ static PyObject *encode_fs_path_list(PyObject *list, const char ***out_paths,
 
 static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
                                   PyObject *kwargs) {
-  static char *kwlist[] = {"src_path", "dst_path", "algo",
-                           "strategy", "level",    NULL};
+  static char *kwlist[] = {"src_path", "dst_path", "algo",   "strategy",
+                           "level",    "progress", "cancel", NULL};
 
   PyObject *src_path_obj;
   PyObject *dst_path_obj;
   const char *algo_name = NULL;
   const char *strategy_name = NULL;
   int level = -1;
+  PyObject *progress = NULL;
+  PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|ssi", kwlist,
-                                   &src_path_obj, &dst_path_obj, &algo_name,
-                                   &strategy_name, &level)) {
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "OO|ssi$OO", kwlist, &src_path_obj, &dst_path_obj,
+          &algo_name, &strategy_name, &level, &progress, &cancel)) {
     return NULL; // Error already set
+  }
+
+  CoreContext ctx;
+  if (core_context_init(&ctx, progress, cancel) != 0) {
+    return NULL;
   }
 
   PyObject *src_path_bytes = PyUnicode_EncodeFSDefault(src_path_obj);
@@ -116,28 +225,43 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  if (compress_file(src_path, dst_path, algo, strat, level) != 0) {
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL; // Error already set
-  }
+  int return_code = compress_file(src_path, dst_path, algo, strat, level, &ctx);
 
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
+
+  if (return_code != 0) {
+    set_cancelled_error(return_code);
+    return NULL; // Error already set
+  }
+
+  if (ctx_finish(&ctx) != 0) {
+    return NULL;
+  }
+
   return PyLong_FromLong(0);
 }
 
 static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
                                     PyObject *kwargs) {
-  static char *kwlist[] = {"src_path", "dst_path", "algo", NULL};
+  static char *kwlist[] = {"src_path", "dst_path", "algo",
+                           "progress", "cancel",   NULL};
 
   PyObject *src_path_obj;
   PyObject *dst_path_obj;
   const char *algo_name = NULL;
+  PyObject *progress = NULL;
+  PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|s", kwlist, &src_path_obj,
-                                   &dst_path_obj, &algo_name)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|s$OO", kwlist,
+                                   &src_path_obj, &dst_path_obj, &algo_name,
+                                   &progress, &cancel)) {
     return NULL; // Error already set
+  }
+
+  CoreContext ctx;
+  if (core_context_init(&ctx, progress, cancel) != 0) {
+    return NULL;
   }
 
   PyObject *src_path_bytes = PyUnicode_EncodeFSDefault(src_path_obj);
@@ -161,14 +285,20 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  if (decompress_file(src_path, dst_path, algo) != 0) {
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL; // Error already set
-  }
+  int return_code = decompress_file(src_path, dst_path, algo, &ctx);
 
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
+
+  if (return_code != 0) {
+    set_cancelled_error(return_code);
+    return NULL; // Error already set
+  }
+
+  if (ctx_finish(&ctx) != 0) {
+    return NULL;
+  }
+
   return PyLong_FromLong(0);
 }
 
@@ -355,18 +485,26 @@ static PyObject *py_list_archive_contents(PyObject *self UNUSED,
 
 static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
                                         PyObject *kwargs) {
-  static char *kwlist[] = {"input_path", "output_path", "format",
-                           "compression_level", NULL};
+  static char *kwlist[] = {
+      "input_path", "output_path", "format", "compression_level",
+      "progress",   "cancel",      NULL};
 
   PyObject *input_path_obj = NULL;
   PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
   int compression_level = -1;
+  PyObject *progress = NULL;
+  PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOs|i", kwlist,
-                                   &input_path_obj, &output_path_obj,
-                                   &format_name, &compression_level)) {
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "OOs|i$OO", kwlist, &input_path_obj, &output_path_obj,
+          &format_name, &compression_level, &progress, &cancel)) {
     return NULL; // Error already set
+  }
+
+  CoreContext ctx;
+  if (core_context_init(&ctx, progress, cancel) != 0) {
+    return NULL;
   }
 
   Format format = format_from_name(format_name);
@@ -392,11 +530,16 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
     return NULL; // Error already set
   }
 
-  int rc = fmt->compress_file(input_path, output_path, compression_level);
+  int rc = fmt->compress_file(input_path, output_path, compression_level, &ctx);
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
   if (rc != 0) {
+    set_cancelled_error(rc);
     return NULL; // Error already set
+  }
+
+  if (ctx_finish(&ctx) != 0) {
+    return NULL;
   }
 
   Py_RETURN_NONE;
@@ -404,18 +547,26 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
 
 static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
                                           PyObject *kwargs) {
-  static char *kwlist[] = {"input_path", "output_path", "format", NULL};
+  static char *kwlist[] = {"input_path", "output_path", "format",
+                           "progress",   "cancel",      NULL};
 
   PyObject *input_path_obj = NULL;
   PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
+  PyObject *progress = NULL;
+  PyObject *cancel = NULL;
 
   Format format = FORMAT_UNKNOWN;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|s", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|s$OO", kwlist,
                                    &input_path_obj, &output_path_obj,
-                                   &format_name)) {
+                                   &format_name, &progress, &cancel)) {
     return NULL; // Error already set
+  }
+
+  CoreContext ctx;
+  if (core_context_init(&ctx, progress, cancel) != 0) {
+    return NULL;
   }
 
   const char *input_path = NULL;
@@ -450,12 +601,19 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
     goto fail;
   }
 
-  if (fmt->decompress_file(input_path, output_path) != 0) {
+  int rc = fmt->decompress_file(input_path, output_path, &ctx);
+  if (rc != 0) {
+    set_cancelled_error(rc);
     goto fail; // Error already set
   }
 
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
+
+  if (ctx_finish(&ctx) != 0) {
+    return NULL;
+  }
+
   Py_RETURN_NONE;
 
 fail:
@@ -624,6 +782,17 @@ PyMODINIT_FUNC PyInit__core(void) {
     return NULL;
   }
 
+  // Subclasses Error, not BaseException: the frontend jobs catch Exception to
+  // honour their "never raises" contract, which a cancellation must not evade
+  comp_Cancelled = PyErr_NewException("compresso.Cancelled", comp_Error, NULL);
+  if (!comp_Cancelled) {
+    Py_DECREF(comp_BackendError);
+    Py_DECREF(comp_HeaderError);
+    Py_DECREF(comp_Error);
+    Py_DECREF(module);
+    return NULL;
+  }
+
   Py_INCREF(comp_Error);
   if (PyModule_AddObject(module, "Error", comp_Error) < 0) {
     Py_DECREF(comp_Error);
@@ -647,6 +816,29 @@ PyMODINIT_FUNC PyInit__core(void) {
     Py_DECREF(comp_Error);
     Py_DECREF(comp_HeaderError);
     Py_DECREF(comp_BackendError);
+    Py_DECREF(module);
+    return NULL;
+  }
+
+  Py_INCREF(comp_Cancelled);
+  if (PyModule_AddObject(module, "Cancelled", comp_Cancelled) < 0) {
+    Py_DECREF(comp_Error);
+    Py_DECREF(comp_HeaderError);
+    Py_DECREF(comp_BackendError);
+    Py_DECREF(comp_Cancelled);
+    Py_DECREF(module);
+    return NULL;
+  }
+
+  if (PyType_Ready(&CancelTokenType) < 0) {
+    Py_DECREF(module);
+    return NULL;
+  }
+
+  Py_INCREF(&CancelTokenType);
+  if (PyModule_AddObject(module, "CancelToken", (PyObject *)&CancelTokenType) <
+      0) {
+    Py_DECREF(&CancelTokenType);
     Py_DECREF(module);
     return NULL;
   }
