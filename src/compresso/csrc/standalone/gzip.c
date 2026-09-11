@@ -29,12 +29,14 @@
 #define FCOMMENT 0x10
 
 static int gzip_compress_file(const char *input_path, const char *output_path,
-                              int level) {
+                              int level, CoreContext *ctx) {
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
+
+  ctx_begin_stage_stream(ctx, input);
 
   FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
@@ -81,6 +83,8 @@ static int gzip_compress_file(const char *input_path, const char *output_path,
   uint32_t crc = crc32(0L, Z_NULL, 0);
   uint32_t total_in = 0;
   int flush;
+  // Carried separately from `ret`, which holds zlib status codes
+  int cancel_rc = 0;
 
   Py_BEGIN_ALLOW_THREADS
 
@@ -88,14 +92,18 @@ static int gzip_compress_file(const char *input_path, const char *output_path,
     strm.avail_in = fread(in_buf, 1, GZIP_CHUNK, input);
     if (ferror(input)) {
       Py_BLOCK_THREADS deflateEnd(&strm);
-      fclose(input);
-      fclose(output);
       PyErr_SetString(PyExc_IOError, "Error reading input file");
-      return -1;
+      return codec_finish_file(-1, input, output, output_path,
+                               "gzip compression failed");
     }
 
     total_in += strm.avail_in;
     crc = crc32(crc, in_buf, strm.avail_in);
+
+    cancel_rc = ctx_advance(ctx, strm.avail_in);
+    if (cancel_rc != 0) {
+      break;
+    }
 
     flush = feof(input) ? Z_FINISH : Z_NO_FLUSH;
     strm.next_in = in_buf;
@@ -107,19 +115,17 @@ static int gzip_compress_file(const char *input_path, const char *output_path,
       ret = deflate(&strm, flush);
       if (ret == Z_STREAM_ERROR) {
         Py_BLOCK_THREADS deflateEnd(&strm);
-        fclose(input);
-        fclose(output);
         PyErr_SetString(comp_BackendError, "Compression stream error");
-        return -1;
+        return codec_finish_file(-1, input, output, output_path,
+                                 "gzip compression failed");
       }
 
       size_t have = GZIP_CHUNK - strm.avail_out;
       if (fwrite(out_buf, 1, have, output) != have || ferror(output)) {
         Py_BLOCK_THREADS deflateEnd(&strm);
-        fclose(input);
-        fclose(output);
         PyErr_SetString(PyExc_IOError, "Error writing output file");
-        return -1;
+        return codec_finish_file(-1, input, output, output_path,
+                                 "gzip compression failed");
       }
     } while (strm.avail_out == 0);
   }
@@ -130,6 +136,11 @@ static int gzip_compress_file(const char *input_path, const char *output_path,
 
       deflateEnd(&strm);
 
+  if (cancel_rc != 0) {
+    return codec_finish_file(cancel_rc, input, output, output_path,
+                             "gzip compression failed");
+  }
+
   // Write GZIP trailer (CRC32 + original size)
   uint8_t trailer[8];
   write_le32(trailer, crc);
@@ -137,23 +148,22 @@ static int gzip_compress_file(const char *input_path, const char *output_path,
 
   if (fwrite(trailer, 8, 1, output) != 1) {
     PyErr_SetString(PyExc_IOError, "Failed to write GZIP trailer");
-    fclose(input);
-    fclose(output);
-    return -1;
+    return codec_finish_file(-1, input, output, output_path,
+                             "gzip compression failed");
   }
 
-  fclose(input);
-  fclose(output);
-  return 0;
+  return codec_finish_file(0, input, output, output_path, NULL);
 }
 
-static int gzip_decompress_file(const char *input_path,
-                                const char *output_path) {
+static int gzip_decompress_file(const char *input_path, const char *output_path,
+                                CoreContext *ctx) {
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
+
+  ctx_begin_stage_stream(ctx, input);
 
   // Read and validate GZIP header
   uint8_t header[GZIP_HEADER_SIZE];
@@ -230,6 +240,8 @@ static int gzip_decompress_file(const char *input_path,
   unsigned char out_buf[GZIP_CHUNK];
   uint32_t crc = crc32(0L, Z_NULL, 0);
   uint32_t total_out = 0;
+  // Carried separately from `ret`, which holds zlib status codes
+  int cancel_rc = 0;
 
   Py_BEGIN_ALLOW_THREADS
 
@@ -237,14 +249,18 @@ static int gzip_decompress_file(const char *input_path,
     strm.avail_in = fread(in_buf, 1, GZIP_CHUNK, input);
     if (ferror(input)) {
       Py_BLOCK_THREADS inflateEnd(&strm);
-      fclose(input);
-      fclose(output);
       PyErr_SetString(PyExc_IOError, "Error reading input file");
-      return -1;
+      return codec_finish_file(-1, input, output, output_path,
+                               "gzip decompression failed");
     }
 
     if (strm.avail_in == 0)
       break;
+
+    cancel_rc = ctx_advance(ctx, strm.avail_in);
+    if (cancel_rc != 0) {
+      break;
+    }
 
     strm.next_in = in_buf;
 
@@ -255,10 +271,9 @@ static int gzip_decompress_file(const char *input_path,
       ret = inflate(&strm, Z_NO_FLUSH);
       if (ret != Z_OK && ret != Z_STREAM_END) {
         Py_BLOCK_THREADS inflateEnd(&strm);
-        fclose(input);
-        fclose(output);
         PyErr_SetString(comp_BackendError, "Decompression error");
-        return -1;
+        return codec_finish_file(-1, input, output, output_path,
+                                 "gzip decompression failed");
       }
 
       size_t have = GZIP_CHUNK - strm.avail_out;
@@ -267,10 +282,9 @@ static int gzip_decompress_file(const char *input_path,
 
       if (fwrite(out_buf, 1, have, output) != have || ferror(output)) {
         Py_BLOCK_THREADS inflateEnd(&strm);
-        fclose(input);
-        fclose(output);
         PyErr_SetString(PyExc_IOError, "Error writing output file");
-        return -1;
+        return codec_finish_file(-1, input, output, output_path,
+                                 "gzip decompression failed");
       }
     } while (strm.avail_out == 0);
   }
@@ -280,8 +294,7 @@ static int gzip_decompress_file(const char *input_path,
   Py_END_ALLOW_THREADS
 
       // After the deflate stream ends, inflate leaves the 8-byte trailer
-      // (CRC32 + ISIZE) unconsumed in the input buffer. Capture it from there,
-      // topping up from the file if it was split across a read boundary.
+      // (CRC32 + ISIZE) unconsumed in the input buffer
       uint8_t trailer[8];
   size_t trailer_have = 0;
   if (strm.avail_in > 0) {
@@ -291,11 +304,15 @@ static int gzip_decompress_file(const char *input_path,
 
   inflateEnd(&strm);
 
+  if (cancel_rc != 0) {
+    return codec_finish_file(cancel_rc, input, output, output_path,
+                             "gzip decompression failed");
+  }
+
   if (ret != Z_STREAM_END) {
     PyErr_SetString(comp_BackendError, "Truncated or incomplete GZIP stream");
-    fclose(input);
-    fclose(output);
-    return -1;
+    return codec_finish_file(-1, input, output, output_path,
+                             "gzip decompression failed");
   }
 
   if (trailer_have < 8) {
@@ -304,9 +321,8 @@ static int gzip_decompress_file(const char *input_path,
 
   if (trailer_have != 8) {
     PyErr_SetString(comp_HeaderError, "Missing or truncated GZIP trailer");
-    fclose(input);
-    fclose(output);
-    return -1;
+    return codec_finish_file(-1, input, output, output_path,
+                             "gzip decompression failed");
   }
 
   uint32_t expected_crc = read_le32(trailer);
@@ -315,22 +331,18 @@ static int gzip_decompress_file(const char *input_path,
   if (crc != expected_crc) {
     PyErr_Format(comp_BackendError, "CRC mismatch: expected %08x, got %08x",
                  expected_crc, crc);
-    fclose(input);
-    fclose(output);
-    return -1;
+    return codec_finish_file(-1, input, output, output_path,
+                             "gzip decompression failed");
   }
 
   if (total_out != expected_size) {
     PyErr_Format(comp_BackendError, "Size mismatch: expected %u, got %u",
                  expected_size, total_out);
-    fclose(input);
-    fclose(output);
-    return -1;
+    return codec_finish_file(-1, input, output, output_path,
+                             "gzip decompression failed");
   }
 
-  fclose(input);
-  fclose(output);
-  return 0;
+  return codec_finish_file(0, input, output, output_path, NULL);
 }
 
 static char *gzip_get_original_name(const char *compressed_path) {

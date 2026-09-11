@@ -409,7 +409,7 @@ class ExtractJob:
                 plan=self.plan,
             )
 
-        total: int = len(self.plan.entries)
+        total: int = sum(entry.size for entry in self.plan.entries)
         try:
             if progress:
                 progress(0.0, 0, total)
@@ -433,6 +433,6 @@ class ExtractJob:
             return JobResult(ok=True, error=None, plan=self.plan)
 
         # `run` reports failure through JobResult rather than raising; see the
-        # contract on `compresso.frontend._job.Job`.
+        # contract on `compresso.frontend._job.Job`
         except Exception as e:  # noqa: BLE001
             return JobResult(ok=False, error=e, plan=self.plan)

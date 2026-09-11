@@ -1,5 +1,6 @@
 """Frontend API for Compresso library."""
 
+from .._core import Cancelled, CancelToken
 from ._job import JobResult, ProgressCallback
 from .api import (
     CompressionJob,
@@ -27,6 +28,8 @@ __all__ = [
     "ArchiveJob",
     "ArchiveOptions",
     "ArchivePlan",
+    "CancelToken",
+    "Cancelled",
     "CompressionJob",
     "CompressionOptions",
     "CompressionPlan",

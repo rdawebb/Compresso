@@ -525,7 +525,8 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
 
   if (ret == 0 && pipeline->codec != FORMAT_UNKNOWN) {
     const StandaloneFormat *codec = find_standalone_format(pipeline->codec);
-    ret = codec->compress_file(tmp_path, output_path, level);
+    // NULL context: archive progress and cancellation are not wired up yet
+    ret = codec->compress_file(tmp_path, output_path, level, NULL);
   }
 
   if (tmp_path) {
@@ -717,7 +718,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
     tmp_path = make_temp_path(archive_path);
     if (!tmp_path)
       return -1;
-    if (codec->decompress_file(archive_path, tmp_path) != 0) {
+    if (codec->decompress_file(archive_path, tmp_path, NULL) != 0) {
       fs_unlink(tmp_path);
       free(tmp_path);
       return -1;
@@ -822,7 +823,7 @@ PyObject *list_archive_contents(const char *archive_path) {
     tmp_path = make_temp_path(archive_path);
     if (!tmp_path)
       return NULL;
-    if (codec->decompress_file(archive_path, tmp_path) != 0) {
+    if (codec->decompress_file(archive_path, tmp_path, NULL) != 0) {
       fs_unlink(tmp_path);
       free(tmp_path);
       return NULL;

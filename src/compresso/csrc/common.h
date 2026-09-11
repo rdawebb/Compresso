@@ -75,6 +75,59 @@ static inline uint64_t read_le64(const uint8_t *buf) {
   return val;
 }
 
+// ---- Progress and Cancellation ----
+
+// Distinct from -1 so callers can tell cancelled from failed
+#define COMP_CANCELLED (-2)
+
+// Per-call progress and cancellation state, passed as a parameter; every field
+// is optional, and a NULL CoreContext behaves as no context
+typedef struct CoreContext {
+  // Owned by a Python CancelToken, which outlives this stack-local context and
+  // may be cancelled from another thread; NULL = uncancellable
+  volatile int *cancel_flag;
+
+  // Returns 0 to continue, non-zero to abort
+  int (*on_progress)(struct CoreContext *ctx, uint64_t done, uint64_t total);
+  void *userdata; // PyObject* callback, owned by the _core.c bridge
+
+  uint64_t total_bytes, done_bytes;
+  uint64_t report_interval, last_reported;
+
+  // Input offset this stage began at, so an absolute position passed to
+  // ctx_set_position shares coordinates with total_bytes; non-zero when the
+  // caller has already consumed a header
+  uint64_t stage_base;
+} CoreContext;
+
+// Starts a new stage: total, counters, report interval
+void ctx_begin_stage(CoreContext *ctx, uint64_t total);
+
+// ctx_begin_stage with the total taken from an open input stream, measured from
+// its current position to the end; an unmeasurable stream (a pipe) gets a
+// total of 0 rather than failing
+void ctx_begin_stage_stream(CoreContext *ctx, FILE *input);
+
+// Records `n` more input bytes consumed: returns 0 to continue, COMP_CANCELLED
+// if the cancel flag is set, or -1 if the progress callback itself failed
+//
+// The cancel flag is checked on every call, but the callback only fires once
+// per report_interval bytes
+int ctx_advance(CoreContext *ctx, size_t n);
+
+// As ctx_advance, but takes an absolute input position instead of a delta, for
+// decoders that read through a library and cannot report per-chunk deltas
+int ctx_set_position(CoreContext *ctx, uint64_t done);
+
+// Emits one final report at 100%; called after a successful run
+int ctx_finish(CoreContext *ctx);
+
+// Closes both streams, and on failure or cancellation unlinks the half-written
+// output; sets `failure_message` unless cancelled or pending exception; pass
+// NULL when every failing path sets its own; returns `err` unchanged
+int codec_finish_file(int err, FILE *input, FILE *output,
+                      const char *output_path, const char *failure_message);
+
 // ---- Header ----
 
 #define C_MAGIC "COMP"
@@ -143,8 +196,10 @@ typedef struct CBackend {
                            unsigned char *output, size_t *output_capacity,
                            size_t *output_size);
 
-  int (*compress_stream)(FILE *src, FILE *dst, int level);
-  int (*decompress_stream)(FILE *src, FILE *dst, uint64_t orig_size);
+  // `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation
+  int (*compress_stream)(FILE *src, FILE *dst, int level, CoreContext *ctx);
+  int (*decompress_stream)(FILE *src, FILE *dst, uint64_t orig_size,
+                           CoreContext *ctx);
 } CBackend;
 
 // ---- Strategy ----
@@ -182,6 +237,7 @@ const CBackend *choose_backend(Strategy strat);
 extern PyObject *comp_Error;
 extern PyObject *comp_HeaderError;
 extern PyObject *comp_BackendError;
+extern PyObject *comp_Cancelled;
 
 // ---- Helpers ----
 
@@ -209,9 +265,10 @@ void set_backend_error(const CBackend *backend, const char *op,
 // ---- Public API ----
 
 int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
-                  Strategy strategy, int level);
+                  Strategy strategy, int level, CoreContext *ctx);
 
-int decompress_file(const char *src_path, const char *dst_path, AlgoID algo);
+int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
+                    CoreContext *ctx);
 
 const char *get_default_backend_for_strategy(Strategy strat);
 

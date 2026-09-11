@@ -1,12 +1,4 @@
-"""Shared job-lifecycle primitives for the frontend APIs.
-
-Both :mod:`compresso.frontend.api` (single-file compress/decompress) and
-:mod:`compresso.frontend.archive_api` (multi-file archive/extract) build on the
-same contract: a *plan* describes the work and whether it can proceed, a *job*
-executes it, and a :class:`JobResult` reports the outcome without ever raising.
-These primitives live here so the two APIs share one definition instead of
-drifting apart.
-"""
+"""Shared job-lifecycle primitives for the frontend APIs."""
 
 from __future__ import annotations
 
@@ -27,11 +19,38 @@ class JobResult:
         error: The error encountered, if any.
         plan: The associated plan (a compression, decompression, archive, or
             extraction plan).
+        cancelled: True if the job stopped because its cancel token was set.
     """
 
     ok: bool
     error: BaseException | None
     plan: object
+    cancelled: bool = False
+
+
+def to_core_progress(
+    progress: ProgressCallback | None, total: int
+) -> Callable[[int, int], None] | None:
+    """Adapt a :data:`ProgressCallback` to the two-argument form `_core` calls.
+
+    Args:
+        progress: The progress callback function.
+        total: The total size of the input, used as a fallback when the C layer
+            does not report progress.
+
+    Returns:
+        A function that can be used as a progress callback for `_core` calls,
+        or None if no callback was provided.
+    """
+    if progress is None:
+        return None
+
+    def on_progress(done: int, core_total: int) -> None:
+        effective: int = core_total or total
+        fraction: float = (done / effective) if effective else 0.0
+        progress(fraction, done, effective)
+
+    return on_progress
 
 
 @runtime_checkable

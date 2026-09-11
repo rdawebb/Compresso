@@ -54,9 +54,12 @@ static int zlib_decompress_buffer(const unsigned char *input, size_t input_size,
 
 // ---- Stream Compression/Decompression ----
 
-static int zlib_compress_stream(FILE *src, FILE *dst, int level) {
+static int zlib_compress_stream(FILE *src, FILE *dst, int level,
+                                CoreContext *ctx) {
   int ret;
   int flush;
+  // Carried separately from `ret`, which holds zlib status codes
+  int cancel_rc = 0;
   unsigned char input[ZLIB_CHUNK];
   unsigned char output[ZLIB_CHUNK];
   z_stream strm;
@@ -78,6 +81,12 @@ static int zlib_compress_stream(FILE *src, FILE *dst, int level) {
       ret = Z_ERRNO;
       break;
     }
+
+    cancel_rc = ctx_advance(ctx, strm.avail_in);
+    if (cancel_rc != 0) {
+      break;
+    }
+
     flush = feof(src) ? Z_FINISH : Z_NO_FLUSH;
 
     strm.next_in = input;
@@ -109,17 +118,24 @@ static int zlib_compress_stream(FILE *src, FILE *dst, int level) {
 
   Py_END_ALLOW_THREADS
 
-      if (ret != Z_STREAM_END) {
+      if (cancel_rc != 0) {
+    return cancel_rc;
+  }
+
+  if (ret != Z_STREAM_END) {
     return -1; // compression failed
   }
 
   return 0; // success
 }
 
-static int zlib_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
+static int zlib_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
+                                  CoreContext *ctx) {
   (void)orig_size; // unused parameter
 
   int ret;
+  // Carried separately from `ret`, which holds zlib status codes
+  int cancel_rc = 0;
   unsigned char input[ZLIB_CHUNK];
   unsigned char output[ZLIB_CHUNK];
   z_stream strm;
@@ -141,6 +157,12 @@ static int zlib_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
     if (strm.avail_in == 0) {
       break; // end of file
     }
+
+    cancel_rc = ctx_advance(ctx, strm.avail_in);
+    if (cancel_rc != 0) {
+      goto done;
+    }
+
     strm.next_in = input;
 
     do {
@@ -174,7 +196,11 @@ done:
 
   Py_END_ALLOW_THREADS
 
-      if (ret != Z_STREAM_END) {
+      if (cancel_rc != 0) {
+    return cancel_rc;
+  }
+
+  if (ret != Z_STREAM_END) {
     return -1; // decompression failed
   }
 

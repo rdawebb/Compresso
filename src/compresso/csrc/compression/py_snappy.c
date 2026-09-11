@@ -77,7 +77,8 @@ static uint32_t read_u32_le(const unsigned char buffer[4]) {
 
 // ---- Stream Compression/Decompression ----
 
-static int snappy_compress_stream(FILE *src, FILE *dst, int level) {
+static int snappy_compress_stream(FILE *src, FILE *dst, int level,
+                                  CoreContext *ctx) {
   (void)level; // snappy ignores compression level
 
   size_t max_comp_len = snappy_max_compressed_length(SNAPPY_CHUNK);
@@ -103,6 +104,12 @@ static int snappy_compress_stream(FILE *src, FILE *dst, int level) {
 
     if (nread == 0) {
       break; // end of file
+    }
+
+    int advance = ctx_advance(ctx, nread);
+    if (advance != 0) {
+      return_code = advance;
+      break;
     }
 
     if (nread > UINT32_MAX) {
@@ -145,7 +152,8 @@ static int snappy_compress_stream(FILE *src, FILE *dst, int level) {
   return return_code;
 }
 
-static int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
+static int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
+                                    CoreContext *ctx) {
   (void)orig_size; // unused parameter
 
   size_t max_comp_len = snappy_max_compressed_length(SNAPPY_CHUNK);
@@ -194,6 +202,13 @@ static int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
     size_t read_bytes = fread(comp_buffer, 1, comp_len, src);
     if (read_bytes != comp_len || ferror(src)) {
       return_code = -1; // read error
+      break;
+    }
+
+    // Counts the framing header too, so progress tracks the compressed input
+    int advance = ctx_advance(ctx, read_bytes + 8);
+    if (advance != 0) {
+      return_code = advance;
       break;
     }
 

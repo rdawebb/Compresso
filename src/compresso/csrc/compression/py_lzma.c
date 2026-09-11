@@ -89,7 +89,8 @@ static int lzma_decompress_buffer(const unsigned char *input, size_t input_size,
 
 // ---- Stream Compression/Decompression ----
 
-static int lzma_compress_stream(FILE *src, FILE *dst, int level) {
+static int lzma_compress_stream(FILE *src, FILE *dst, int level,
+                                CoreContext *ctx) {
   uint32_t preset = lzma_level_to_preset(level);
 
   lzma_stream strm = LZMA_STREAM_INIT;
@@ -117,6 +118,12 @@ static int lzma_compress_stream(FILE *src, FILE *dst, int level) {
 
       strm.next_in = input;
       strm.avail_in = nread;
+
+      int advance = ctx_advance(ctx, nread);
+      if (advance != 0) {
+        return_code = advance;
+        break;
+      }
 
       if (feof(src)) {
         action = LZMA_FINISH;
@@ -152,7 +159,8 @@ static int lzma_compress_stream(FILE *src, FILE *dst, int level) {
   return return_code;
 }
 
-static int lzma_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
+static int lzma_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
+                                  CoreContext *ctx) {
   (void)orig_size; // unused parameter
 
   lzma_stream strm = LZMA_STREAM_INIT;
@@ -181,6 +189,12 @@ static int lzma_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
 
       strm.next_in = input;
       strm.avail_in = nread;
+
+      int advance = ctx_advance(ctx, nread);
+      if (advance != 0) {
+        return_code = advance;
+        break;
+      }
     }
 
     if (strm.avail_in == 0 && feof(src)) {

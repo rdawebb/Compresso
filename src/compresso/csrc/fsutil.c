@@ -8,6 +8,41 @@
 // Split-and-create helper shared by both platforms
 static int fs_mkdir_one(const char *path, uint32_t mode);
 
+// Returns the current read/write offset in an open stream as a 64-bit value
+int64_t fs_ftell(FILE *stream) {
+#if defined(_WIN32) || defined(_WIN64)
+  return (int64_t)_ftelli64(stream);
+#else
+  return (int64_t)ftello(stream);
+#endif
+}
+
+int64_t fs_stream_size(FILE *stream) {
+  int64_t original = fs_ftell(stream);
+  if (original < 0)
+    return -1;
+
+#if defined(_WIN32) || defined(_WIN64)
+  if (_fseeki64(stream, 0, SEEK_END) != 0)
+    return -1;
+#else
+  if (fseeko(stream, 0, SEEK_END) != 0)
+    return -1;
+#endif
+
+  int64_t size = fs_ftell(stream);
+
+#if defined(_WIN32) || defined(_WIN64)
+  if (_fseeki64(stream, original, SEEK_SET) != 0)
+    return -1;
+#else
+  if (fseeko(stream, (off_t)original, SEEK_SET) != 0)
+    return -1;
+#endif
+
+  return size;
+}
+
 int fs_is_absolute(const char *path) {
   // Deliberately tests both separators on every platform - see fsutil.h
   if (path[0] == '/' || path[0] == '\\')

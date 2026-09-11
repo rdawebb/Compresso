@@ -1,6 +1,14 @@
 """Initialise the compressor package."""
 
-from ._core import BackendError, Error, HeaderError, compress_file, decompress_file
+from ._core import (
+    BackendError,
+    Cancelled,
+    CancelToken,
+    Error,
+    HeaderError,
+    compress_file,
+    decompress_file,
+)
 from .backend.benchmark import benchmark_file, print_results
 from .backend.capabilities import list_capabilities
 from .backend.file_inspect import InspectResult, inspect
@@ -28,6 +36,8 @@ __all__: list[str] = [
     "ArchiveOptions",
     "ArchivePlan",
     "BackendError",
+    "CancelToken",
+    "Cancelled",
     "CompressionJob",
     "CompressionOptions",
     "CompressionPlan",

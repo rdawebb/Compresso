@@ -91,4 +91,12 @@ int fs_chmod(const char *path, uint32_t mode);
 
 int fs_unlink(const char *path);
 
+// Current read/write offset in an open stream, as a 64-bit value on every
+// platform (plain ftell() is 32-bit on Windows); returns -1 on failure
+int64_t fs_ftell(FILE *stream);
+
+// Size of an open stream in bytes, leaving the offset where it found it;
+// returns -1 on failure
+int64_t fs_stream_size(FILE *stream);
+
 #endif // FSUTIL_H
