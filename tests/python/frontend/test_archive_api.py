@@ -208,6 +208,33 @@ class TestArchiveRoundTrip:
         assert (out_dir / "données" / "café.txt").read_bytes() == b"contenu"
         assert (out_dir / "données" / "日本語.txt").read_bytes() == b"content"
 
+    @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
+    def test_absolute_source_directory_round_trip(self, temp_dir: Path, fmt: str):
+        """Test that an absolute source directory is stored relative to its parent."""
+        src = temp_dir / "tree"
+        (src / "deep").mkdir(parents=True)
+        (src / "top.txt").write_bytes(b"top level")
+        (src / "deep" / "leaf.txt").write_bytes(b"leaf content")
+        archive_path = temp_dir / f"tree.{fmt}"
+
+        options = ArchiveOptions(format=fmt)
+        result = ArchiveJob.from_paths([src.resolve()], archive_path, options).run()
+        assert result.ok, result.error
+
+        names = {e.path for e in ExtractJob.from_archive(archive_path).list_contents()}
+        assert "tree/top.txt" in names
+        assert "tree/deep/leaf.txt" in names
+        for name in names:
+            assert not name.startswith(("/", "\\")), name
+            assert "\\" not in name, name
+
+        out_dir = temp_dir / "out"
+        extract_result = ExtractJob.from_archive(archive_path, out_dir).run()
+        assert extract_result.ok, extract_result.error
+
+        assert (out_dir / "tree" / "top.txt").read_bytes() == b"top level"
+        assert (out_dir / "tree" / "deep" / "leaf.txt").read_bytes() == b"leaf content"
+
 
 @pytest.mark.skipif(
     sys.platform == "win32", reason="symlink creation needs privilege on Windows"

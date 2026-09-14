@@ -118,7 +118,7 @@ static ArchiveEntry *create_entry_from_path(const char *path,
   const char *rel_path = path;
   if (base_path && strncmp(path, base_path, strlen(base_path)) == 0) {
     rel_path = path + strlen(base_path);
-    if (*rel_path == '/')
+    if (FS_IS_SEP(*rel_path))
       rel_path++;
   }
   entry->path = strdup(rel_path);
@@ -126,6 +126,12 @@ static ArchiveEntry *create_entry_from_path(const char *path,
     entry_free(entry);
     PyErr_NoMemory();
     return NULL;
+  }
+
+  // Archive formats separate components with '/'
+  for (char *p = entry->path; *p; p++) {
+    if (FS_IS_SEP(*p))
+      *p = '/';
   }
 
   entry->size = st.size;
