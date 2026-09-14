@@ -68,6 +68,9 @@ def create_archive(
     format: str,
     input_paths: list[str],
     compression_level: int = ...,
+    *,
+    progress: ProgressFn | None = ...,
+    cancel: CancelToken | None = ...,
 ) -> None:
     """Create an archive from the given input paths in the given format."""
 
@@ -82,6 +85,8 @@ def extract_archive(
     preserve_permissions: bool = ...,
     preserve_timestamps: bool = ...,
     allow_symlinks: int = ...,
+    progress: ProgressFn | None = ...,
+    cancel: CancelToken | None = ...,
 ) -> None:
     """Extract an archive to output_dir, optionally selecting specific files.
 

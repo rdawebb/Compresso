@@ -59,6 +59,7 @@ def check(paths: list[str]) -> int:
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    # With no arguments, check every source the extension builds
-    files = args or [str(ROOT / src) for src in setup.C_SOURCES]
+
+    # Check every source and header the extension builds if no arguments are given
+    files = args or [str(ROOT / path) for path in (*setup.C_SOURCES, *setup.C_HEADERS)]
     sys.exit(check(files))

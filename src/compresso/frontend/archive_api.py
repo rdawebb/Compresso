@@ -7,8 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from .._core import create_archive, extract_archive, list_archive_contents
-from ._job import JobResult, ProgressCallback
+from .._core import (
+    Cancelled,
+    CancelToken,
+    create_archive,
+    extract_archive,
+    list_archive_contents,
+)
+from ._job import JobResult, ProgressCallback, to_core_progress
 
 # Formats whose container cannot hold multiple entries
 _NON_ARCHIVE_FORMATS = {"gz", "gzip", "bz2", "bzip2", "xz", "zst", "zstd", "lz4"}
@@ -310,11 +316,17 @@ class ArchiveJob:
         """
         return cls(plan=plan_archive(sources, output, options))
 
-    def run(self, progress: ProgressCallback | None = None) -> JobResult:
+    def run(
+        self,
+        progress: ProgressCallback | None = None,
+        cancel: CancelToken | None = None,
+    ) -> JobResult:
         """Create the archive.
 
         Args:
-            progress: Optional progress callback.
+            progress: Optional progress callback, invoked with
+                `(fraction, done_bytes, total_bytes)`.
+            cancel: Optional `CancelToken`. Cancelling leaves no archive behind.
 
         Returns:
             JobResult indicating success or failure.
@@ -330,20 +342,21 @@ class ArchiveJob:
 
         total: int = self.plan.total_input_size
         try:
-            if progress:
-                progress(0.0, 0, total)
-
             create_archive(
                 str(self.plan.output),
                 self.plan.options.format,
                 [str(s) for s in self.plan.sources],
                 self.plan.options.compression_level or -1,
+                progress=to_core_progress(progress, total),
+                cancel=cancel,
             )
 
-            if progress:
-                progress(1.0, total, total)
-
             return JobResult(ok=True, error=None, plan=self.plan)
+
+        # Cancellation is a deliberate stop, not a failure; see
+        # `CompressionJob.run`.
+        except Cancelled:
+            return JobResult(ok=False, error=None, plan=self.plan, cancelled=True)
 
         # `run` reports failure through JobResult rather than raising; see the
         # contract on `compresso.frontend._job.Job`.
@@ -391,11 +404,18 @@ class ExtractJob:
         """
         return list(self.plan.entries)
 
-    def run(self, progress: ProgressCallback | None = None) -> JobResult:
+    def run(
+        self,
+        progress: ProgressCallback | None = None,
+        cancel: CancelToken | None = None,
+    ) -> JobResult:
         """Extract the archive.
 
         Args:
-            progress: Optional progress callback.
+            progress: Optional progress callback, invoked with
+                `(fraction, done_bytes, total_bytes)` in bytes written.
+            cancel: Optional `CancelToken`. Cancelling leaves already extracted
+                entries in place, but removes any in-progress entry.
 
         Returns:
             JobResult indicating success or failure.
@@ -411,9 +431,6 @@ class ExtractJob:
 
         total: int = sum(entry.size for entry in self.plan.entries)
         try:
-            if progress:
-                progress(0.0, 0, total)
-
             options = self.plan.options
             self.plan.output_dir.mkdir(parents=True, exist_ok=True)
             extract_archive(
@@ -425,12 +442,16 @@ class ExtractJob:
                 max_depth=options.max_depth,
                 preserve_permissions=options.preserve_permissions,
                 preserve_timestamps=options.preserve_timestamps,
+                progress=to_core_progress(progress, total),
+                cancel=cancel,
             )
 
-            if progress:
-                progress(1.0, total, total)
-
             return JobResult(ok=True, error=None, plan=self.plan)
+
+        # Cancellation is a deliberate stop, not a failure; see
+        # `CompressionJob.run`.
+        except Cancelled:
+            return JobResult(ok=False, error=None, plan=self.plan, cancelled=True)
 
         # `run` reports failure through JobResult rather than raising; see the
         # contract on `compresso.frontend._job.Job`

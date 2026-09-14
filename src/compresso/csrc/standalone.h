@@ -1,8 +1,8 @@
 #ifndef STANDALONE_H
 #define STANDALONE_H
 
-// common.h for CoreContext; it pulls in archives.h, which defines Format
-#include "common.h"
+#include "archives.h" // Format
+#include "context.h"  // CoreContext
 #include <stdint.h>
 #include <stdio.h>
 

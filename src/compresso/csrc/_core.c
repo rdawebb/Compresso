@@ -306,17 +306,21 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
 
 static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
                                    PyObject *kwargs) {
-  static char *kwlist[] = {"output_path", "format", "input_paths",
-                           "compression_level", NULL};
+  static char *kwlist[] = {"output_path",       "format",   "input_paths",
+                           "compression_level", "progress", "cancel",
+                           NULL};
 
   PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
   PyObject *input_paths_obj = NULL;
   int compression_level = -1;
+  PyObject *progress = NULL;
+  PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OsO|i", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OsO|i$OO", kwlist,
                                    &output_path_obj, &format_name,
-                                   &input_paths_obj, &compression_level)) {
+                                   &input_paths_obj, &compression_level,
+                                   &progress, &cancel)) {
     return NULL; // Error already set
   }
 
@@ -352,13 +356,26 @@ static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
     return NULL; // Error already set
   }
 
-  int result = create_archive(output_path, &pipe, input_paths, num_paths);
+  CoreContext ctx;
+  if (core_context_init(&ctx, progress, cancel) != 0) {
+    Py_DECREF(output_path_bytes);
+    Py_DECREF(paths_keepalive);
+    free(input_paths);
+    return NULL;
+  }
+
+  int result = create_archive(output_path, &pipe, input_paths, num_paths, &ctx);
 
   Py_DECREF(output_path_bytes);
   Py_DECREF(paths_keepalive);
   free(input_paths);
   if (result != 0) {
+    set_cancelled_error(result);
     return NULL; // Error already set
+  }
+
+  if (ctx_finish(&ctx) != 0) {
+    return NULL;
   }
 
   Py_RETURN_NONE;
@@ -375,11 +392,15 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
                            "preserve_permissions",
                            "preserve_timestamps",
                            "allow_symlinks",
+                           "progress",
+                           "cancel",
                            NULL};
 
   PyObject *archive_path_obj = NULL;
   PyObject *output_dir_obj = NULL;
   PyObject *files_obj = NULL;
+  PyObject *progress = NULL;
+  PyObject *cancel = NULL;
 
   // Anything the caller does not pass keeps its default
   ExtractionPolicy policy = extraction_policy_default();
@@ -390,10 +411,11 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   unsigned int max_depth = (unsigned int)policy.max_depth;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OOO|$iKIppi", kwlist, &archive_path_obj,
+          args, kwargs, "OOO|$iKIppiOO", kwlist, &archive_path_obj,
           &output_dir_obj, &files_obj, &policy.overwrite_existing,
           &max_total_size, &max_depth, &policy.preserve_permissions,
-          &policy.preserve_timestamps, &policy.allow_symlinks)) {
+          &policy.preserve_timestamps, &policy.allow_symlinks, &progress,
+          &cancel)) {
     return NULL; // Error already set
   }
 
@@ -448,14 +470,27 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
     return NULL; // Error already set
   }
 
-  int result =
-      extract_archive(archive_path, output_dir, files, num_files, &policy);
+  CoreContext ctx;
+  if (core_context_init(&ctx, progress, cancel) != 0) {
+    Py_DECREF(archive_path_bytes);
+    Py_DECREF(output_dir_bytes);
+    free(files);
+    return NULL;
+  }
+
+  int result = extract_archive(archive_path, output_dir, files, num_files,
+                               &policy, &ctx);
 
   Py_DECREF(archive_path_bytes);
   Py_DECREF(output_dir_bytes);
   free(files);
   if (result != 0) {
+    set_cancelled_error(result);
     return NULL; // Error already set
+  }
+
+  if (ctx_finish(&ctx) != 0) {
+    return NULL;
   }
 
   Py_RETURN_NONE;

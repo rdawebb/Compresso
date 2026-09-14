@@ -6,6 +6,7 @@ resolving them per-platform via `pkg-config`, Homebrew prefix, or environment va
 
 from __future__ import annotations
 
+import glob
 import os
 import shutil
 import subprocess
@@ -231,6 +232,10 @@ C_SOURCES = [
     "src/compresso/csrc/standalone/registry.c",
 ]
 
+# Force rebuild of C extension on every run, so stale headers don't silently
+# prevent a successful build
+C_HEADERS = sorted(glob.glob("src/compresso/csrc/**/*.h", recursive=True))
+
 # Guarded so tooling can import this module for `resolve_dirs`/`C_SOURCES` without
 # building the extension
 if __name__ == "__main__":
@@ -242,6 +247,7 @@ if __name__ == "__main__":
             Extension(
                 name="compresso._core",
                 sources=C_SOURCES,
+                depends=C_HEADERS,
                 include_dirs=include_dirs,
                 library_dirs=library_dirs,
                 libraries=libraries,

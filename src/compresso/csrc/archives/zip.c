@@ -11,10 +11,21 @@
 
 // ---- ZIP Writer ----
 
+// Below libzip 1.6, progress callbacks are not available
+#if defined(LIBZIP_VERSION_MAJOR) &&                                           \
+    (LIBZIP_VERSION_MAJOR > 1 ||                                               \
+     (LIBZIP_VERSION_MAJOR == 1 && LIBZIP_VERSION_MINOR >= 6))
+#define ZIP_HAS_PROGRESS_CALLBACKS 1
+#endif
+
 typedef struct {
   zip_t *archive;
   const char *output_path;
   int compression_level;
+
+  // Only set for the duration of zip_close
+  CoreContext *ctx;
+  int abort_code; // Non-zero once the context asked to stop
 } ZipWriter;
 
 static void *zip_create_writer(const char *output_path, int compression_level) {
@@ -36,6 +47,8 @@ static void *zip_create_writer(const char *output_path, int compression_level) {
   }
 
   writer->archive = za;
+  writer->ctx = NULL;
+  writer->abort_code = 0;
   writer->output_path = output_path;
   writer->compression_level = (compression_level >= 0 && compression_level <= 9)
                                   ? compression_level
@@ -45,8 +58,17 @@ static void *zip_create_writer(const char *output_path, int compression_level) {
 }
 
 static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
-                         FILE *data) {
+                         FILE *data, CoreContext *ctx) {
   ZipWriter *writer = (ZipWriter *)writer_ptr;
+
+  // No progress is reported here; libzip buffers each source and compresses
+  // everything inside zip_close
+  int cancelled = ctx_advance(ctx, 0);
+  if (cancelled != 0) {
+    // Remembered so the close discards the buffered sources
+    writer->abort_code = cancelled;
+    return cancelled;
+  }
 
   if (entry->type == ENTRY_DIR) {
     // ZIP requires directories to end with '/
@@ -164,11 +186,65 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   return -1;
 }
 
-static int zip_close_writer(void *writer_ptr) {
+#ifdef ZIP_HAS_PROGRESS_CALLBACKS
+
+static void zip_on_progress(zip_t *za, double fraction, void *userdata) {
+  (void)za;
+  ZipWriter *writer = (ZipWriter *)userdata;
+  if (!writer->ctx || writer->abort_code != 0)
+    return;
+
+  if (fraction < 0.0)
+    fraction = 0.0;
+  if (fraction > 1.0)
+    fraction = 1.0;
+
+  uint64_t position = (uint64_t)(fraction * (double)writer->ctx->total_bytes);
+  int rc = ctx_set_position(writer->ctx, position);
+  if (rc != 0) {
+    // Recorded rather than acted on: libzip ignores this callback's return
+    writer->abort_code = rc;
+  }
+}
+
+static int zip_on_cancel(zip_t *za, void *userdata) {
+  (void)za;
+  return ((ZipWriter *)userdata)->abort_code != 0;
+}
+
+#endif
+
+static int zip_close_writer(void *writer_ptr, CoreContext *ctx) {
   ZipWriter *writer = (ZipWriter *)writer_ptr;
 
+  writer->ctx = ctx;
+
+#ifdef ZIP_HAS_PROGRESS_CALLBACKS
+  if (ctx) {
+    // 0.01 so libzip reports each 1% of the write
+    zip_register_progress_callback_with_state(writer->archive, 0.01,
+                                              zip_on_progress, NULL, writer);
+    zip_register_cancel_callback_with_state(writer->archive, zip_on_cancel,
+                                            NULL, writer);
+  }
+#endif
+
+  // Discard buffered sources if cancelled
+  if (writer->abort_code != 0) {
+    int abort_code = writer->abort_code;
+    zip_discard(writer->archive);
+    free(writer);
+    return abort_code;
+  }
+
   int ret = zip_close(writer->archive);
+  int abort_code = writer->abort_code;
   free(writer);
+
+  if (abort_code != 0) {
+    // Cancelled from inside zip_close, which surfaces as a close failure
+    return abort_code;
+  }
 
   if (ret < 0) {
     PyErr_SetString(PyExc_IOError, "Failed to close ZIP archive");
@@ -266,7 +342,8 @@ static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
 }
 
 static int zip_extract_entry_data(void *reader_ptr, FILE *output,
-                                  uint64_t max_bytes, uint64_t *bytes_written) {
+                                  uint64_t max_bytes, uint64_t *bytes_written,
+                                  CoreContext *ctx) {
   ZipReader *reader = (ZipReader *)reader_ptr;
 
   // Open the file at current_index - 1 (already incremented)
@@ -283,6 +360,7 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
   zip_int64_t bytes_read;
   uint64_t total = 0;
   int over_limit = 0;
+  int advance = 0;
 
   Py_BEGIN_ALLOW_THREADS
 
@@ -300,11 +378,21 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
       return -1;
     }
     total += (uint64_t)bytes_read;
+
+    advance = ctx_advance(ctx, (size_t)bytes_read);
+    if (advance != 0) {
+      break;
+    }
   }
 
   Py_END_ALLOW_THREADS
 
       if (bytes_written) *bytes_written = total;
+
+  if (advance != 0) {
+    zip_fclose(zf);
+    return advance;
+  }
 
   if (over_limit) {
     zip_fclose(zf);
