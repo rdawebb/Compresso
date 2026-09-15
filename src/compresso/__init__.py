@@ -13,6 +13,7 @@ from .backend.benchmark import benchmark_file, print_results
 from .backend.capabilities import list_capabilities
 from .backend.file_inspect import InspectResult, inspect
 from .backend.speeds import get_estimated_speeds
+from .frontend._job import JobHandle
 from .frontend.api import (
     CompressionJob,
     CompressionOptions,
@@ -49,6 +50,7 @@ __all__: list[str] = [
     "ExtractPlan",
     "HeaderError",
     "InspectResult",
+    "JobHandle",
     "benchmark_file",
     "compress_file",
     "decompress_file",

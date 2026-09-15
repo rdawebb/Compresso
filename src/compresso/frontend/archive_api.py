@@ -14,7 +14,7 @@ from .._core import (
     extract_archive,
     list_archive_contents,
 )
-from ._job import JobResult, ProgressCallback, to_core_progress
+from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 
 # Formats whose container cannot hold multiple entries
 _NON_ARCHIVE_FORMATS = {"gz", "gzip", "bz2", "bzip2", "xz", "zst", "zstd", "lz4"}
@@ -264,7 +264,7 @@ def plan_extraction(
         entries: list[ArchiveEntry] = [
             ArchiveEntry(path=name) for name in list_archive_contents(str(archive_path))
         ]
-    except BaseException as e:  # noqa: BLE001 - surface as an unavailable plan
+    except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
         return ExtractPlan(
             archive=archive_path,
             output_dir=out_dir,
@@ -286,7 +286,7 @@ def plan_extraction(
     )
 
 
-class ArchiveJob:
+class ArchiveJob(ThreadedJob[ArchivePlan]):
     """Job for creating an archive."""
 
     def __init__(self, plan: ArchivePlan) -> None:
@@ -364,7 +364,7 @@ class ArchiveJob:
             return JobResult(ok=False, error=e, plan=self.plan)
 
 
-class ExtractJob:
+class ExtractJob(ThreadedJob[ExtractPlan]):
     """Job for extracting an archive."""
 
     def __init__(self, plan: ExtractPlan) -> None:

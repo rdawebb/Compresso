@@ -10,7 +10,7 @@ from .._core import get_default_backend_for_strategy as default_backend
 from ..backend.file_inspect import InspectResult
 from ..backend.file_inspect import inspect as inspect_file
 from ..backend.speeds import get_estimated_speeds
-from ._job import JobResult, ProgressCallback, to_core_progress
+from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 
 MB = 1024 * 1024
 
@@ -181,7 +181,7 @@ def plan_decompression(
     )
 
 
-class CompressionJob:
+class CompressionJob(ThreadedJob[CompressionPlan]):
     """Compression job high-level wrapper."""
 
     def __init__(self, plan: CompressionPlan) -> None:
@@ -277,7 +277,7 @@ class CompressionJob:
             )
 
 
-class DecompressionJob:
+class DecompressionJob(ThreadedJob[DecompressionPlan]):
     """Decompression job high-level wrapper."""
 
     def __init__(self, plan: DecompressionPlan) -> None:
