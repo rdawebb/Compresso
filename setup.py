@@ -254,5 +254,5 @@ if __name__ == "__main__":
                 extra_compile_args=extra_compile_args,
             )
         ],
-        python_requires=">=3.10",
+        python_requires=">=3.11",
     )

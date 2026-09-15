@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 from .._core import Cancelled, CancelToken, compress_file, decompress_file
 from .._core import get_default_backend_for_strategy as default_backend
@@ -198,7 +199,7 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
         src: str | Path,
         dest: str | Path | None = None,
         options: CompressionOptions | None = None,
-    ) -> CompressionJob:
+    ) -> Self:
         """Create a CompressionJob from file paths and options.
 
         Args:
@@ -289,9 +290,7 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
         self.plan: DecompressionPlan = plan
 
     @classmethod
-    def from_file(
-        cls, src: str | Path, dest: str | Path | None = None
-    ) -> DecompressionJob:
+    def from_file(cls, src: str | Path, dest: str | Path | None = None) -> Self:
         """Create a DecompressionJob from file paths.
 
         Args:

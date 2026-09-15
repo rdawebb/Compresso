@@ -6,7 +6,7 @@ import asyncio
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
+from typing import Any, Generic, Protocol, Self, TypeVar, runtime_checkable
 
 from .._core import CancelToken
 
@@ -159,7 +159,7 @@ class JobHandle:
         assert self._result is not None
         return self._result
 
-    def __enter__(self) -> JobHandle:  # noqa: PYI034
+    def __enter__(self) -> Self:
         """Return this handle for use in a `with` block."""
         return self
 

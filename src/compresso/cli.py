@@ -27,6 +27,7 @@ from .frontend.archive_api import (
     ArchiveOptions,
     ExtractJob,
     ExtractOptions,
+    OverwriteMode,
 )
 
 app = ExtendedTyper(help="Compresso - Fast file compression and decompression tool")
@@ -492,8 +493,15 @@ def extract(
         )
         sys.exit(1)
 
+    if overwrite:
+        mode = OverwriteMode.OVERWRITE
+    elif skip_existing:
+        mode = OverwriteMode.SKIP
+    else:
+        mode = OverwriteMode.ERROR
+
     options = ExtractOptions(
-        overwrite="overwrite" if overwrite else "skip" if skip_existing else "error",
+        overwrite=mode,
         max_total_size=max_total_size or 0,
     )
 

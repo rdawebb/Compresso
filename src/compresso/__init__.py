@@ -29,6 +29,7 @@ from .frontend.archive_api import (
     ExtractJob,
     ExtractOptions,
     ExtractPlan,
+    OverwriteMode,
 )
 
 __all__: list[str] = [
@@ -51,6 +52,7 @@ __all__: list[str] = [
     "HeaderError",
     "InspectResult",
     "JobHandle",
+    "OverwriteMode",
     "benchmark_file",
     "compress_file",
     "decompress_file",

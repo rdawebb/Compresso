@@ -21,6 +21,7 @@ from compresso.frontend.archive_api import (
     ExtractJob,
     ExtractOptions,
     ExtractPlan,
+    OverwriteMode,
     plan_archive,
 )
 
@@ -648,7 +649,7 @@ class TestExtractionOverwrite:
         archive_path, out_dir = self._archive_and_stale_output(temp_dir)
 
         result = ExtractJob.from_archive(
-            archive_path, out_dir, options=ExtractOptions(overwrite="skip")
+            archive_path, out_dir, options=ExtractOptions(overwrite=OverwriteMode.SKIP)
         ).run()
 
         assert result.ok, result.error
@@ -659,11 +660,27 @@ class TestExtractionOverwrite:
         archive_path, out_dir = self._archive_and_stale_output(temp_dir)
 
         result = ExtractJob.from_archive(
-            archive_path, out_dir, options=ExtractOptions(overwrite="overwrite")
+            archive_path,
+            out_dir,
+            options=ExtractOptions(overwrite=OverwriteMode.OVERWRITE),
         ).run()
 
         assert result.ok, result.error
         assert (out_dir / "a.txt").read_bytes() == b"xxxxx"
+
+    def test_plain_string_mode_is_normalised(self, temp_dir: Path):
+        """Test that a mode given as a plain string still plans as the enum."""
+        archive_path = temp_dir / "one.tar"
+        _tar_with_entries(archive_path, [_file_entry("a.txt")])
+
+        plan = ExtractJob.from_archive(
+            archive_path,
+            temp_dir / "out",
+            options=ExtractOptions(overwrite="skip"),  # ty: ignore
+        ).plan
+
+        assert plan.can_run is True
+        assert plan.options.overwrite is OverwriteMode.SKIP
 
     def test_unknown_mode_is_an_unavailable_plan(self, temp_dir: Path):
         """Test that a mode outside the three names never reaches the C layer."""

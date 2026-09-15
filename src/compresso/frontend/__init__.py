@@ -19,6 +19,7 @@ from .archive_api import (
     ExtractJob,
     ExtractOptions,
     ExtractPlan,
+    OverwriteMode,
     plan_archive,
     plan_extraction,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "ExtractPlan",
     "JobHandle",
     "JobResult",
+    "OverwriteMode",
     "ProgressCallback",
     "plan_archive",
     "plan_compression",

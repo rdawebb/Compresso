@@ -1,7 +1,7 @@
 """Type stubs for the _core C extension module."""
 
 from collections.abc import Callable
-from typing import TypeAlias
+from typing import TypeAlias, TypedDict
 
 class Error(Exception):
     """Base error for compression operations."""
@@ -57,8 +57,18 @@ def decompress_file(
 ) -> int:
     """Decompress a file."""
 
-def get_capabilities() -> list[tuple[str, int, bool, bool]]:
-    """Get list of available compression backends."""
+# Stub-only: the extension builds a plain dict per backend, with every key set
+class _CapabilityDict(TypedDict):
+    name: str
+    id: int
+    has_buffer: bool
+    has_stream: bool
+
+def get_capabilities() -> list[_CapabilityDict | None]:
+    """Get list of available compression backends.
+
+    A slot is None when its backend is not registered.
+    """
 
 def get_default_backend_for_strategy(strategy: str) -> str:
     """Get the default backend for the given strategy."""

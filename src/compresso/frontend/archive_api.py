@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Self
 
 from .._core import (
     Cancelled,
@@ -68,6 +69,28 @@ class ArchivePlan:
     reason_if_unavailable: str | None
 
 
+class OverwriteMode(StrEnum):
+    """What extraction does when an entry's destination already exists.
+
+    Attributes:
+        ERROR: Fail the extraction.
+        SKIP: Leave the existing file untouched.
+        OVERWRITE: Replace the existing file.
+    """
+
+    ERROR = "error"
+    SKIP = "skip"
+    OVERWRITE = "overwrite"
+
+
+# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h
+_OVERWRITE_CODES: dict[OverwriteMode, int] = {
+    OverwriteMode.ERROR: 0,
+    OverwriteMode.SKIP: 1,
+    OverwriteMode.OVERWRITE: 2,
+}
+
+
 @dataclass
 class ExtractOptions:
     """Represents the policy applied while extracting an archive.
@@ -80,15 +103,11 @@ class ExtractOptions:
         preserve_timestamps: Whether to restore each entry's modification time.
     """
 
-    overwrite: Literal["error", "skip", "overwrite"] = "error"
+    overwrite: OverwriteMode = OverwriteMode.ERROR
     max_total_size: int = 0
     max_depth: int = 32
     preserve_permissions: bool = True
     preserve_timestamps: bool = True
-
-
-# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h
-_OVERWRITE_MODES: dict[str, int] = {"error": 0, "skip": 1, "overwrite": 2}
 
 
 @dataclass(frozen=True)
@@ -235,7 +254,11 @@ def plan_extraction(
     out_dir = Path.cwd() if output_dir is None else Path(output_dir)
     opts = ExtractOptions() if options is None else options
 
-    if opts.overwrite not in _OVERWRITE_MODES:
+    try:
+        # Plain strings still work at runtime
+        opts = replace(opts, overwrite=OverwriteMode(opts.overwrite))
+
+    except ValueError:
         return ExtractPlan(
             archive=archive_path,
             output_dir=out_dir,
@@ -245,7 +268,7 @@ def plan_extraction(
             can_run=False,
             reason_if_unavailable=(
                 f"Unknown overwrite mode: {opts.overwrite!r} "
-                f"(expected one of {', '.join(sorted(_OVERWRITE_MODES))})"
+                f"(expected one of {', '.join(OverwriteMode)})"
             ),
         )
 
@@ -303,7 +326,7 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
         sources: Sequence[str | Path],
         output: str | Path,
         options: ArchiveOptions | None = None,
-    ) -> ArchiveJob:
+    ) -> Self:
         """Create an ArchiveJob from source paths and options.
 
         Args:
@@ -382,7 +405,7 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
         output_dir: str | Path | None = None,
         files: list[str] | None = None,
         options: ExtractOptions | None = None,
-    ) -> ExtractJob:
+    ) -> Self:
         """Create extract job from archive path.
 
         Args:
@@ -437,7 +460,7 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
                 str(self.plan.archive),
                 str(self.plan.output_dir),
                 self.plan.files or [],
-                overwrite=_OVERWRITE_MODES[options.overwrite],
+                overwrite=_OVERWRITE_CODES[options.overwrite],
                 max_total_size=options.max_total_size,
                 max_depth=options.max_depth,
                 preserve_permissions=options.preserve_permissions,
