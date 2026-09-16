@@ -101,10 +101,43 @@ static int path_has_parent_segment(const char *path) {
   return 0;
 }
 
+// Length of the parent prefix of a source path; trailing separators are
+// ignored, so "dir/" names "dir" rather than ""
+static size_t source_prefix_len(const char *path) {
+  size_t end = strlen(path);
+  while (end > 1 && FS_IS_SEP(path[end - 1]))
+    end--;
+
+  size_t start = end;
+  while (start > 0 && !FS_IS_SEP(path[start - 1]))
+    start--;
+
+#if defined(_WIN32) || defined(_WIN64)
+  // "C:file" is drive-relative: the qualifier is not part of the name
+  if (start == 0 && path[0] != '\0' && path[1] == ':')
+    start = 2;
+#endif
+
+  return start;
+}
+
+// Mirror extraction's checks, so an unsafe source fails at write time rather
+// than producing an unextractable archive
+static int check_storable_entry_name(const char *name) {
+  if (name[0] == '\0' || fs_is_absolute(name) || fs_is_stream_path(name) ||
+      path_has_parent_segment(name)) {
+    PyErr_Format(PyExc_ValueError, "Refusing to store unsafe entry name: %s",
+                 name);
+    return -1;
+  }
+
+  return 0;
+}
+
 // ---- Helpers ----
 
 static ArchiveEntry *create_entry_from_path(const char *path,
-                                            const char *base_path) {
+                                            size_t prefix_len) {
   fs_stat st;
   if (fs_stat_path(path, &st) != 0) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
@@ -115,12 +148,10 @@ static ArchiveEntry *create_entry_from_path(const char *path,
   if (!entry)
     return NULL;
 
-  const char *rel_path = path;
-  if (base_path && strncmp(path, base_path, strlen(base_path)) == 0) {
-    rel_path = path + strlen(base_path);
-    if (FS_IS_SEP(*rel_path))
-      rel_path++;
-  }
+  const char *rel_path = path + prefix_len;
+  while (FS_IS_SEP(*rel_path))
+    rel_path++;
+
   entry->path = strdup(rel_path);
   if (!entry->path) {
     entry_free(entry);
@@ -128,10 +159,26 @@ static ArchiveEntry *create_entry_from_path(const char *path,
     return NULL;
   }
 
-  // Archive formats separate components with '/'
-  for (char *p = entry->path; *p; p++) {
-    if (FS_IS_SEP(*p))
-      *p = '/';
+  // Normalise to '/', collapsing runs and dropping a trailing one; writers add
+  // the trailing separator a directory needs themselves
+  char *w = entry->path;
+  for (const char *r = entry->path; *r; r++) {
+    if (FS_IS_SEP(*r)) {
+      // Keep a leading separator so the absolute name is still rejected below
+      if (w > entry->path && w[-1] == '/')
+        continue;
+      *w++ = '/';
+    } else {
+      *w++ = *r;
+    }
+  }
+  while (w > entry->path + 1 && w[-1] == '/')
+    w--;
+  *w = '\0';
+
+  if (check_storable_entry_name(entry->path) != 0) {
+    entry_free(entry);
+    return NULL;
   }
 
   entry->size = st.size;
@@ -154,7 +201,7 @@ static ArchiveEntry *create_entry_from_path(const char *path,
 }
 
 static int add_directory_recursive(void *writer, const CArchive *archive,
-                                   const char *dir_path, const char *base_path,
+                                   const char *dir_path, size_t prefix_len,
                                    CoreContext *ctx) {
   fs_dir *dir = fs_opendir(dir_path);
   if (!dir) {
@@ -167,7 +214,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
     char full_path[FS_PATH_MAX];
     snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
 
-    ArchiveEntry *ae = create_entry_from_path(full_path, base_path);
+    ArchiveEntry *ae = create_entry_from_path(full_path, prefix_len);
     if (!ae) {
       fs_closedir(dir);
       return -1;
@@ -192,7 +239,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
       archive->add_entry(writer, ae, NULL, ctx);
       entry_free(ae);
       int ret =
-          add_directory_recursive(writer, archive, full_path, base_path, ctx);
+          add_directory_recursive(writer, archive, full_path, prefix_len, ctx);
       if (ret != 0) {
         fs_closedir(dir);
         return ret;
@@ -479,25 +526,13 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
       return -1;
     }
 
-    if (st.type == FS_TYPE_DIR) {
-      // Strip only the source's parent, so the source directory's own name is
-      // preserved in stored entry paths
-      char base[FS_PATH_MAX];
-      const char *slash = fs_last_sep(input_paths[i]);
-      if (slash) {
-        size_t base_len = (size_t)(slash - input_paths[i]);
-        if (base_len >= sizeof(base)) {
-          PyErr_SetString(PyExc_ValueError, "Source path too long");
-          return -1;
-        }
-        memcpy(base, input_paths[i], base_len);
-        base[base_len] = '\0';
-      } else {
-        base[0] = '\0';
-      }
+    // Strip only the source's parent, so entries keep the source's own name
+    size_t prefix_len = source_prefix_len(input_paths[i]);
 
+    if (st.type == FS_TYPE_DIR) {
       // Record the directory itself so empty directories are preserved
-      ArchiveEntry *dir_entry = create_entry_from_path(input_paths[i], base);
+      ArchiveEntry *dir_entry =
+          create_entry_from_path(input_paths[i], prefix_len);
       if (!dir_entry)
         return -1;
       int dir_ret = archive->add_entry(writer, dir_entry, NULL, ctx);
@@ -505,12 +540,12 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
       if (dir_ret != 0)
         return dir_ret;
 
-      int walk_ret =
-          add_directory_recursive(writer, archive, input_paths[i], base, ctx);
+      int walk_ret = add_directory_recursive(writer, archive, input_paths[i],
+                                             prefix_len, ctx);
       if (walk_ret != 0)
         return walk_ret;
     } else {
-      ArchiveEntry *entry = create_entry_from_path(input_paths[i], NULL);
+      ArchiveEntry *entry = create_entry_from_path(input_paths[i], prefix_len);
       if (!entry)
         return -1;
 

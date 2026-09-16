@@ -135,8 +135,7 @@ class TestStart:
 
     def test_start_works_for_extract_jobs(self, big_file: Path, temp_dir: Path) -> None:
         """Test that extraction can be backgrounded too."""
-        # Archived as a directory so entries are stored relative to it; a
-        # single file given by absolute path is stored with that path
+        # Archived as a directory so extraction has a nested path to recreate
         tree = temp_dir / "tree"
         tree.mkdir()
         payload = tree / big_file.name
