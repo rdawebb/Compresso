@@ -285,8 +285,16 @@ def plan_extraction(
 
     try:
         entries: list[ArchiveEntry] = [
-            ArchiveEntry(path=name) for name in list_archive_contents(str(archive_path))
+            ArchiveEntry(
+                path=name,
+                size=size,
+                is_dir=kind == "dir",
+                is_symlink=kind == "symlink",
+                link_target=target,
+            )
+            for name, size, kind, target in list_archive_contents(str(archive_path))
         ]
+
     except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
         return ExtractPlan(
             archive=archive_path,

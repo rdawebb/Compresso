@@ -1,7 +1,7 @@
 """Type stubs for the _core C extension module."""
 
 from collections.abc import Callable
-from typing import TypeAlias, TypedDict
+from typing import Literal, TypeAlias, TypedDict
 
 class Error(Exception):
     """Base error for compression operations."""
@@ -108,8 +108,17 @@ def extract_archive(
     treat 0 as unlimited.
     """
 
-def list_archive_contents(archive_path: str) -> list[str]:
-    """List the entry paths contained in an archive."""
+EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "special"]
+
+def list_archive_contents(
+    archive_path: str,
+) -> list[tuple[str, int, EntryTypeName, str | None]]:
+    """List the `(path, size, type, link_target)` of each entry in an archive.
+
+    `size` is the uncompressed size the archive declares for the entry (0 for
+    directories), it is not trusted for extraction limits; `link_target` is
+    the stored target of a symlink, and None for every other type.
+    """
 
 def compress_standalone(
     input_path: str,

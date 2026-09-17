@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Annotated
 
 from .._core import BackendError, Error, HeaderError
-from ..frontend.archive_api import ExtractJob, ExtractOptions, OverwriteMode
+from ..frontend.archive_api import (
+    ArchiveEntry,
+    ExtractJob,
+    ExtractOptions,
+    OverwriteMode,
+)
 from ._app import app
 from ._render import (
     BAR_THRESHOLD,
@@ -15,10 +20,42 @@ from ._render import (
     cancelled,
     exit_for_result,
     fail,
+    format_size,
     format_time,
     progress_bar,
     succeed,
 )
+
+
+def list_entries(entries: list[ArchiveEntry]) -> None:
+    """Print one line per entry: its size, then its path.
+
+    Directories and symlinks leave the size blank, a symlink is followed by
+    its target, and each entry is indented once for every directory above it
+    that was already listed.
+
+    Args:
+        entries: The archive's entries, in archive order.
+    """
+    listed_dirs: set[str] = set()
+
+    for entry in entries:
+        parts = entry.path.rstrip("/").split("/")
+        depth = sum("/".join(parts[:i]) in listed_dirs for i in range(1, len(parts)))
+
+        if entry.is_dir:
+            listed_dirs.add("/".join(parts))
+
+        # A symlink's stored size is the length of its target, not file data
+        size = (
+            ""
+            if entry.is_dir or entry.is_symlink
+            else format_size(size_bytes=entry.size)
+        )
+        target = f" -> {entry.link_target}" if entry.is_symlink else ""
+
+        # "1023.99 KB" is the widest format_size gives
+        app.echo(message=f"{size:>10}  {'  ' * depth}{entry.path}{target}")
 
 
 def extract(
@@ -93,8 +130,7 @@ def extract(
             fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
         if list_only:
-            for entry in job.list_contents():
-                app.echo(message=entry.path)
+            list_entries(job.list_contents())
             return
 
         if not quiet:

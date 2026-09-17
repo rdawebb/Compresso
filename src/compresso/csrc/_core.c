@@ -747,7 +747,8 @@ static PyMethodDef CoreMethods[] = {
      "Extract an archive file to a specified directory, subject to the "
      "keyword-only extraction policy."},
     {"list_archive_contents", (PyCFunction)py_list_archive_contents,
-     METH_VARARGS | METH_KEYWORDS, "List the contents of an archive file."},
+     METH_VARARGS | METH_KEYWORDS, "List the (path, size, type, link_target) of each entry in an archive "
+     "file."},
 
     {"compress_standalone", (PyCFunction)py_compress_standalone,
      METH_VARARGS | METH_KEYWORDS,

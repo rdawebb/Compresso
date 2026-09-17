@@ -913,8 +913,25 @@ int extract_archive(const char *archive_path, const char *output_dir,
   return ret;
 }
 
-// Collect entry paths from an already-open reader into a new Python list
-static PyObject *read_archive_names(const CArchive *archive, void *reader) {
+// Name an EntryType as the Python layer sees it
+static const char *entry_type_name(EntryType type) {
+  switch (type) {
+  case ENTRY_DIR:
+    return "dir";
+  case ENTRY_SYMLINK:
+    return "symlink";
+  case ENTRY_SPECIAL:
+    return "special";
+  case ENTRY_FILE:
+  default:
+    return "file";
+  }
+}
+
+// Collect (path, size, type, link_target) tuples from an already-open reader
+// into a new Python list; size is the declared uncompressed size, 0 for
+// directories, and link_target is None for anything but a symlink
+static PyObject *read_archive_entries(const CArchive *archive, void *reader) {
   PyObject *list = PyList_New(0);
   if (!list)
     return NULL;
@@ -923,7 +940,11 @@ static PyObject *read_archive_names(const CArchive *archive, void *reader) {
   int ret;
 
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
-    PyObject *item = PyUnicode_FromString(entry.path ? entry.path : "");
+    // "z" converts a NULL target to None
+    PyObject *item = Py_BuildValue(
+        "(sKsz)", entry.path ? entry.path : "", (unsigned long long)entry.size,
+        entry_type_name(entry.type),
+        entry.type == ENTRY_SYMLINK ? entry.symlink_target : NULL);
     entry_reset(&entry);
 
     if (!item) {
@@ -985,7 +1006,7 @@ PyObject *list_archive_contents(const char *archive_path) {
     return NULL;
   }
 
-  PyObject *list = read_archive_names(archive, reader);
+  PyObject *list = read_archive_entries(archive, reader);
   archive->close_reader(reader);
 
   if (tmp_path) {

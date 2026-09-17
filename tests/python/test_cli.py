@@ -17,6 +17,8 @@ from compresso.cli._render import (
     format_size,
     format_time,
 )
+from compresso.cli.extract import list_entries
+from compresso.frontend.archive_api import ArchiveEntry
 
 runner = CliRunner()
 
@@ -236,7 +238,7 @@ class TestArchiveRoundTrip:
             assert restored.read_bytes() == original.read_bytes()
 
     def test_extract_list_only(self, source_tree: Path, temp_dir: Path) -> None:
-        """Test that --list prints entries without writing anything."""
+        """Test that --list prints each entry's size and path without writing anything."""
         archive = temp_dir / "out.tar"
         dest = temp_dir / "dest"
         runner.invoke(
@@ -248,8 +250,39 @@ class TestArchiveRoundTrip:
         )
 
         assert result.exit_code == EXIT_OK
-        assert "f0.bin" in result.output
+        lines = result.output.splitlines()
+        f0_line = next(line for line in lines if "f0.bin" in line)
+        assert f0_line.split()[:2] == format_size(PAYLOAD_SIZE // 2).split()
         assert not dest.exists()
+
+        # Directories have a blank size; their contents are indented beneath them
+        dir_line = next(line for line in lines if line.rstrip("/").endswith("tree"))
+        assert dir_line == f"{'':>10}  {dir_line.strip()}"
+        assert f0_line.endswith("    tree/f0.bin")
+
+    def test_extract_list_indents_by_depth(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Test that --list indents only under directories it has listed."""
+        entries = [
+            ArchiveEntry(path="a/", is_dir=True),
+            ArchiveEntry(path="a/b/", is_dir=True),
+            ArchiveEntry(path="a/b/c.txt", size=1024),
+            ArchiveEntry(path="a/d.txt", size=10),
+            ArchiveEntry(path="a/e", size=5, is_symlink=True, link_target="d.txt"),
+            ArchiveEntry(path="x/y.txt", size=0),  # no "x/" entry was listed
+        ]
+
+        list_entries(entries)
+
+        assert capsys.readouterr().out.splitlines() == [
+            " " * 12 + "a/",
+            " " * 14 + "a/b/",
+            "   1.00 KB" + " " * 6 + "a/b/c.txt",
+            "   10.00 B" + " " * 4 + "a/d.txt",
+            " " * 14 + "a/e -> d.txt",
+            "    0.00 B" + " " * 2 + "x/y.txt",
+        ]
 
     def test_extract_refuses_to_overwrite_by_default(
         self, source_tree: Path, temp_dir: Path
