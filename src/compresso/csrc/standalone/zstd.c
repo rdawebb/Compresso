@@ -17,12 +17,14 @@ static int zstd_level_from_generic(int level) {
 }
 
 static int zstd_compress_file(const char *input_path, const char *output_path,
-                              int level) {
+                              int level, CoreContext *ctx) {
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
+
+  ctx_begin_stage_stream(ctx, input);
 
   FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
@@ -56,6 +58,12 @@ static int zstd_compress_file(const char *input_path, const char *output_path,
     size_t read = fread(in_buf, 1, ZSTD_FILE_CHUNK, input);
     if (ferror(input)) {
       err = -1;
+      break;
+    }
+
+    int advance = ctx_advance(ctx, read);
+    if (advance != 0) {
+      err = advance;
       break;
     }
 
@@ -97,26 +105,19 @@ static int zstd_compress_file(const char *input_path, const char *output_path,
 
       ZSTD_freeCCtx(cctx);
 
-  if (err) {
-    if (!PyErr_Occurred())
-      PyErr_SetString(comp_BackendError, "zstd compression failed");
-    fclose(input);
-    fclose(output);
-    return -1;
-  }
-
-  fclose(input);
-  fclose(output);
-  return 0;
+  return codec_finish_file(err, input, output, output_path,
+                           "zstd compression failed");
 }
 
-static int zstd_decompress_file(const char *input_path,
-                                const char *output_path) {
+static int zstd_decompress_file(const char *input_path, const char *output_path,
+                                CoreContext *ctx) {
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
+
+  ctx_begin_stage_stream(ctx, input);
 
   FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
@@ -163,6 +164,12 @@ static int zstd_decompress_file(const char *input_path,
       if (input_size == 0) {
         break; // End of input
       }
+
+      int advance = ctx_advance(ctx, input_size);
+      if (advance != 0) {
+        err = advance;
+        break;
+      }
     }
 
     ZSTD_inBuffer inbuf = {in_buf + input_pos, input_size - input_pos, 0};
@@ -194,18 +201,9 @@ static int zstd_decompress_file(const char *input_path,
 
       ZSTD_freeDStream(dstream);
 
-  if (err) {
-    if (!PyErr_Occurred())
-      PyErr_SetString(comp_BackendError,
-                      "zstd decompression failed: corrupted or invalid data");
-    fclose(input);
-    fclose(output);
-    return -1;
-  }
-
-  fclose(input);
-  fclose(output);
-  return 0;
+  return codec_finish_file(err, input, output, output_path,
+                           "zstd decompression failed: corrupted or invalid "
+                           "data");
 }
 
 static char *zstd_get_original_name(const char *compressed_path) {

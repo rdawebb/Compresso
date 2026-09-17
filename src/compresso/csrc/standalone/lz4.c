@@ -17,12 +17,14 @@ static int lz4_level_from_generic(int level) {
 }
 
 static int lz4_compress_file(const char *input_path, const char *output_path,
-                             int level) {
+                             int level, CoreContext *ctx) {
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
+
+  ctx_begin_stage_stream(ctx, input);
 
   FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
@@ -71,6 +73,12 @@ static int lz4_compress_file(const char *input_path, const char *output_path,
       break;
     }
 
+    int advance = ctx_advance(ctx, nread);
+    if (advance != 0) {
+      return_code = advance;
+      break;
+    }
+
     if (nread == 0) {
       size_t end_size = LZ4F_compressEnd(cctx, out_buf, LZ4_OUT_CHUNK, NULL);
       if (LZ4F_isError(end_size)) {
@@ -105,26 +113,19 @@ done_stream:
 
       LZ4F_freeCompressionContext(cctx);
 
-  if (return_code != 0) {
-    if (!PyErr_Occurred())
-      PyErr_SetString(comp_BackendError, "lz4 compression failed");
-    fclose(input);
-    fclose(output);
-    return -1;
-  }
-
-  fclose(input);
-  fclose(output);
-  return 0;
+  return codec_finish_file(return_code, input, output, output_path,
+                           "lz4 compression failed");
 }
 
-static int lz4_decompress_file(const char *input_path,
-                               const char *output_path) {
+static int lz4_decompress_file(const char *input_path, const char *output_path,
+                               CoreContext *ctx) {
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
+
+  ctx_begin_stage_stream(ctx, input);
 
   FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
@@ -162,6 +163,12 @@ static int lz4_decompress_file(const char *input_path,
       if (input_size == 0) {
         break; // End of file
       }
+
+      int advance = ctx_advance(ctx, input_size);
+      if (advance != 0) {
+        return_code = advance;
+        break;
+      }
     }
 
     size_t src_size = input_size - input_pos;
@@ -193,18 +200,9 @@ static int lz4_decompress_file(const char *input_path,
 
       LZ4F_freeDecompressionContext(dctx);
 
-  if (return_code != 0) {
-    if (!PyErr_Occurred())
-      PyErr_SetString(comp_BackendError,
-                      "lz4 decompression failed: corrupted or invalid data");
-    fclose(input);
-    fclose(output);
-    return -1;
-  }
-
-  fclose(input);
-  fclose(output);
-  return 0;
+  return codec_finish_file(return_code, input, output, output_path,
+                           "lz4 decompression failed: corrupted or invalid "
+                           "data");
 }
 
 static char *lz4_get_original_name(const char *compressed_path) {

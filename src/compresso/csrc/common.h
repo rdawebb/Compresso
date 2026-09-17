@@ -3,6 +3,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
+#include "context.h"
 #include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -75,6 +76,12 @@ static inline uint64_t read_le64(const uint8_t *buf) {
   return val;
 }
 
+// Closes both streams, and on failure or cancellation unlinks the half-written
+// output; sets `failure_message` unless cancelled or pending exception; pass
+// NULL when every failing path sets its own; returns `err` unchanged
+int codec_finish_file(int err, FILE *input, FILE *output,
+                      const char *output_path, const char *failure_message);
+
 // ---- Header ----
 
 #define C_MAGIC "COMP"
@@ -143,8 +150,10 @@ typedef struct CBackend {
                            unsigned char *output, size_t *output_capacity,
                            size_t *output_size);
 
-  int (*compress_stream)(FILE *src, FILE *dst, int level);
-  int (*decompress_stream)(FILE *src, FILE *dst, uint64_t orig_size);
+  // `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation
+  int (*compress_stream)(FILE *src, FILE *dst, int level, CoreContext *ctx);
+  int (*decompress_stream)(FILE *src, FILE *dst, uint64_t orig_size,
+                           CoreContext *ctx);
 } CBackend;
 
 // ---- Strategy ----
@@ -182,6 +191,7 @@ const CBackend *choose_backend(Strategy strat);
 extern PyObject *comp_Error;
 extern PyObject *comp_HeaderError;
 extern PyObject *comp_BackendError;
+extern PyObject *comp_Cancelled;
 
 // ---- Helpers ----
 
@@ -209,9 +219,10 @@ void set_backend_error(const CBackend *backend, const char *op,
 // ---- Public API ----
 
 int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
-                  Strategy strategy, int level);
+                  Strategy strategy, int level, CoreContext *ctx);
 
-int decompress_file(const char *src_path, const char *dst_path, AlgoID algo);
+int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
+                    CoreContext *ctx);
 
 const char *get_default_backend_for_strategy(Strategy strat);
 

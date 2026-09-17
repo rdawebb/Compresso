@@ -2,6 +2,7 @@
 #define ARCHIVE_H
 
 #define PY_SSIZE_T_CLEAN
+#include "context.h"
 #include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -43,8 +44,13 @@ typedef struct CArchive {
 
   // Writing (Creating Archives)
   void *(*create_writer)(const char *output_path, int compression_level);
-  int (*add_entry)(void *writer, const ArchiveEntry *entry, FILE *data);
-  int (*close_writer)(void *writer);
+
+  // `ctx` is NULL-tolerant and covers this entry's data only
+  int (*add_entry)(void *writer, const ArchiveEntry *entry, FILE *data,
+                   CoreContext *ctx);
+
+  // Some backends defer the real work to here, so this takes a context too
+  int (*close_writer)(void *writer, CoreContext *ctx);
 
   // Reading (Extracting Archives)
   void *(*create_reader)(const char *input_path);
@@ -55,7 +61,7 @@ typedef struct CArchive {
   // `max_bytes` (UINT64_MAX for no limit) and reporting the byte count through
   // `bytes_written` when it is non-NULL
   int (*extract_entry_data)(void *reader, FILE *output, uint64_t max_bytes,
-                            uint64_t *bytes_written);
+                            uint64_t *bytes_written, CoreContext *ctx);
   int (*skip_entry_data)(void *reader);
   int (*reset_reader)(void *reader);
   int (*close_reader)(void *reader);
@@ -163,13 +169,14 @@ int pipeline_is_valid(const CompressionPipeline *p);
 // ---- High-Level Operations ----
 
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
-                   const char **input_paths, size_t num_paths);
+                   const char **input_paths, size_t num_paths,
+                   CoreContext *ctx);
 
 // Entries are validated against `policy` (NULL = extraction_policy_default())
 // in a first pass over the archive
 int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files,
-                    const ExtractionPolicy *policy);
+                    const ExtractionPolicy *policy, CoreContext *ctx);
 
 PyObject *list_archive_contents(const char *archive_path);
 

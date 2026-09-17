@@ -48,7 +48,7 @@ static void *tar_create_writer(const char *output_path, int compression_level) {
 }
 
 static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
-                         FILE *data) {
+                         FILE *data, CoreContext *ctx) {
   TarWriter *writer = (TarWriter *)writer_ptr;
   struct archive_entry *ae = archive_entry_new();
 
@@ -96,6 +96,8 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
     char buffer[65536];
     size_t bytes_read;
 
+    int advance = 0;
+
     Py_BEGIN_ALLOW_THREADS
 
         while ((bytes_read = fread(buffer, 1, sizeof(buffer), data)) > 0) {
@@ -107,11 +109,21 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
         archive_entry_free(ae);
         return -1;
       }
+
+      advance = ctx_advance(ctx, bytes_read);
+      if (advance != 0) {
+        break;
+      }
     }
 
     Py_END_ALLOW_THREADS
 
-        if (ferror(data)) {
+        if (advance != 0) {
+      archive_entry_free(ae);
+      return advance;
+    }
+
+    if (ferror(data)) {
       PyErr_SetString(PyExc_IOError, "Error reading input file");
       archive_entry_free(ae);
       return -1;
@@ -122,7 +134,11 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   return 0;
 }
 
-static int tar_close_writer(void *writer_ptr) {
+static int tar_close_writer(void *writer_ptr, CoreContext *ctx) {
+  // libarchive streams as it goes, so everything has already been written and
+  // reported by the time this runs
+  (void)ctx;
+
   TarWriter *writer = (TarWriter *)writer_ptr;
 
   int r = archive_write_close(writer->archive);
@@ -235,7 +251,8 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
 }
 
 static int tar_extract_entry_data(void *reader_ptr, FILE *output,
-                                  uint64_t max_bytes, uint64_t *bytes_written) {
+                                  uint64_t max_bytes, uint64_t *bytes_written,
+                                  CoreContext *ctx) {
   TarReader *reader = (TarReader *)reader_ptr;
 
   if (!reader->current_entry) {
@@ -248,6 +265,7 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
   la_ssize_t bytes_read;
   uint64_t total = 0;
   int over_limit = 0;
+  int advance = 0;
 
   Py_BEGIN_ALLOW_THREADS
 
@@ -266,11 +284,20 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
       return -1;
     }
     total += (uint64_t)bytes_read;
+
+    advance = ctx_advance(ctx, (size_t)bytes_read);
+    if (advance != 0) {
+      break;
+    }
   }
 
   Py_END_ALLOW_THREADS
 
       if (bytes_written) *bytes_written = total;
+
+  if (advance != 0) {
+    return advance;
+  }
 
   if (over_limit) {
     PyErr_SetString(PyExc_ValueError,

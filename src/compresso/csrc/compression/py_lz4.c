@@ -99,7 +99,8 @@ static int lz4_decompress_buffer(const unsigned char *input, size_t input_size,
 
 // ---- Stream Compression/Decompression ----
 
-static int lz4_compress_stream(FILE *src, FILE *dst, int level) {
+static int lz4_compress_stream(FILE *src, FILE *dst, int level,
+                               CoreContext *ctx) {
   LZ4F_compressionContext_t cctx;
   size_t ret = LZ4F_createCompressionContext(&cctx, LZ4F_VERSION);
   if (LZ4F_isError(ret)) {
@@ -132,6 +133,12 @@ static int lz4_compress_stream(FILE *src, FILE *dst, int level) {
     size_t nread = fread(input, 1, LZ4_CHUNK, src);
     if (ferror(src)) {
       return_code = -1; // read error
+      break;
+    }
+
+    int advance = ctx_advance(ctx, nread);
+    if (advance != 0) {
+      return_code = advance;
       break;
     }
 
@@ -174,7 +181,8 @@ done_stream:
   return return_code;
 }
 
-static int lz4_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
+static int lz4_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
+                                 CoreContext *ctx) {
   (void)orig_size; // unused parameter
 
   LZ4F_decompressionContext_t dctx;
@@ -204,6 +212,12 @@ static int lz4_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
 
       if (input_size == 0) {
         break; // end of file
+      }
+
+      int advance = ctx_advance(ctx, input_size);
+      if (advance != 0) {
+        return_code = advance;
+        break;
       }
     }
 

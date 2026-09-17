@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Self
 
-from .._core import create_archive, extract_archive, list_archive_contents
-from ._job import JobResult, ProgressCallback
+from .._core import (
+    Cancelled,
+    CancelToken,
+    create_archive,
+    extract_archive,
+    list_archive_contents,
+)
+from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 
 # Formats whose container cannot hold multiple entries
 _NON_ARCHIVE_FORMATS = {"gz", "gzip", "bz2", "bzip2", "xz", "zst", "zstd", "lz4"}
@@ -62,6 +69,28 @@ class ArchivePlan:
     reason_if_unavailable: str | None
 
 
+class OverwriteMode(StrEnum):
+    """What extraction does when an entry's destination already exists.
+
+    Attributes:
+        ERROR: Fail the extraction.
+        SKIP: Leave the existing file untouched.
+        OVERWRITE: Replace the existing file.
+    """
+
+    ERROR = "error"
+    SKIP = "skip"
+    OVERWRITE = "overwrite"
+
+
+# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h
+_OVERWRITE_CODES: dict[OverwriteMode, int] = {
+    OverwriteMode.ERROR: 0,
+    OverwriteMode.SKIP: 1,
+    OverwriteMode.OVERWRITE: 2,
+}
+
+
 @dataclass
 class ExtractOptions:
     """Represents the policy applied while extracting an archive.
@@ -74,15 +103,11 @@ class ExtractOptions:
         preserve_timestamps: Whether to restore each entry's modification time.
     """
 
-    overwrite: Literal["error", "skip", "overwrite"] = "error"
+    overwrite: OverwriteMode = OverwriteMode.ERROR
     max_total_size: int = 0
     max_depth: int = 32
     preserve_permissions: bool = True
     preserve_timestamps: bool = True
-
-
-# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h
-_OVERWRITE_MODES: dict[str, int] = {"error": 0, "skip": 1, "overwrite": 2}
 
 
 @dataclass(frozen=True)
@@ -229,7 +254,11 @@ def plan_extraction(
     out_dir = Path.cwd() if output_dir is None else Path(output_dir)
     opts = ExtractOptions() if options is None else options
 
-    if opts.overwrite not in _OVERWRITE_MODES:
+    try:
+        # Plain strings still work at runtime
+        opts = replace(opts, overwrite=OverwriteMode(opts.overwrite))
+
+    except ValueError:
         return ExtractPlan(
             archive=archive_path,
             output_dir=out_dir,
@@ -239,7 +268,7 @@ def plan_extraction(
             can_run=False,
             reason_if_unavailable=(
                 f"Unknown overwrite mode: {opts.overwrite!r} "
-                f"(expected one of {', '.join(sorted(_OVERWRITE_MODES))})"
+                f"(expected one of {', '.join(OverwriteMode)})"
             ),
         )
 
@@ -256,9 +285,17 @@ def plan_extraction(
 
     try:
         entries: list[ArchiveEntry] = [
-            ArchiveEntry(path=name) for name in list_archive_contents(str(archive_path))
+            ArchiveEntry(
+                path=name,
+                size=size,
+                is_dir=kind == "dir",
+                is_symlink=kind == "symlink",
+                link_target=target,
+            )
+            for name, size, kind, target in list_archive_contents(str(archive_path))
         ]
-    except BaseException as e:  # noqa: BLE001 - surface as an unavailable plan
+
+    except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
         return ExtractPlan(
             archive=archive_path,
             output_dir=out_dir,
@@ -280,7 +317,7 @@ def plan_extraction(
     )
 
 
-class ArchiveJob:
+class ArchiveJob(ThreadedJob[ArchivePlan]):
     """Job for creating an archive."""
 
     def __init__(self, plan: ArchivePlan) -> None:
@@ -297,7 +334,7 @@ class ArchiveJob:
         sources: Sequence[str | Path],
         output: str | Path,
         options: ArchiveOptions | None = None,
-    ) -> ArchiveJob:
+    ) -> Self:
         """Create an ArchiveJob from source paths and options.
 
         Args:
@@ -310,11 +347,17 @@ class ArchiveJob:
         """
         return cls(plan=plan_archive(sources, output, options))
 
-    def run(self, progress: ProgressCallback | None = None) -> JobResult:
+    def run(
+        self,
+        progress: ProgressCallback | None = None,
+        cancel: CancelToken | None = None,
+    ) -> JobResult:
         """Create the archive.
 
         Args:
-            progress: Optional progress callback.
+            progress: Optional progress callback, invoked with
+                `(fraction, done_bytes, total_bytes)`.
+            cancel: Optional `CancelToken`. Cancelling leaves no archive behind.
 
         Returns:
             JobResult indicating success or failure.
@@ -330,20 +373,21 @@ class ArchiveJob:
 
         total: int = self.plan.total_input_size
         try:
-            if progress:
-                progress(0.0, 0, total)
-
             create_archive(
                 str(self.plan.output),
                 self.plan.options.format,
                 [str(s) for s in self.plan.sources],
                 self.plan.options.compression_level or -1,
+                progress=to_core_progress(progress, total),
+                cancel=cancel,
             )
 
-            if progress:
-                progress(1.0, total, total)
-
             return JobResult(ok=True, error=None, plan=self.plan)
+
+        # Cancellation is a deliberate stop, not a failure; see
+        # `CompressionJob.run`.
+        except Cancelled:
+            return JobResult(ok=False, error=None, plan=self.plan, cancelled=True)
 
         # `run` reports failure through JobResult rather than raising; see the
         # contract on `compresso.frontend._job.Job`.
@@ -351,7 +395,7 @@ class ArchiveJob:
             return JobResult(ok=False, error=e, plan=self.plan)
 
 
-class ExtractJob:
+class ExtractJob(ThreadedJob[ExtractPlan]):
     """Job for extracting an archive."""
 
     def __init__(self, plan: ExtractPlan) -> None:
@@ -369,7 +413,7 @@ class ExtractJob:
         output_dir: str | Path | None = None,
         files: list[str] | None = None,
         options: ExtractOptions | None = None,
-    ) -> ExtractJob:
+    ) -> Self:
         """Create extract job from archive path.
 
         Args:
@@ -391,11 +435,18 @@ class ExtractJob:
         """
         return list(self.plan.entries)
 
-    def run(self, progress: ProgressCallback | None = None) -> JobResult:
+    def run(
+        self,
+        progress: ProgressCallback | None = None,
+        cancel: CancelToken | None = None,
+    ) -> JobResult:
         """Extract the archive.
 
         Args:
-            progress: Optional progress callback.
+            progress: Optional progress callback, invoked with
+                `(fraction, done_bytes, total_bytes)` in bytes written.
+            cancel: Optional `CancelToken`. Cancelling leaves already extracted
+                entries in place, but removes any in-progress entry.
 
         Returns:
             JobResult indicating success or failure.
@@ -409,30 +460,31 @@ class ExtractJob:
                 plan=self.plan,
             )
 
-        total: int = len(self.plan.entries)
+        total: int = sum(entry.size for entry in self.plan.entries)
         try:
-            if progress:
-                progress(0.0, 0, total)
-
             options = self.plan.options
             self.plan.output_dir.mkdir(parents=True, exist_ok=True)
             extract_archive(
                 str(self.plan.archive),
                 str(self.plan.output_dir),
                 self.plan.files or [],
-                overwrite=_OVERWRITE_MODES[options.overwrite],
+                overwrite=_OVERWRITE_CODES[options.overwrite],
                 max_total_size=options.max_total_size,
                 max_depth=options.max_depth,
                 preserve_permissions=options.preserve_permissions,
                 preserve_timestamps=options.preserve_timestamps,
+                progress=to_core_progress(progress, total),
+                cancel=cancel,
             )
-
-            if progress:
-                progress(1.0, total, total)
 
             return JobResult(ok=True, error=None, plan=self.plan)
 
+        # Cancellation is a deliberate stop, not a failure; see
+        # `CompressionJob.run`.
+        except Cancelled:
+            return JobResult(ok=False, error=None, plan=self.plan, cancelled=True)
+
         # `run` reports failure through JobResult rather than raising; see the
-        # contract on `compresso.frontend._job.Job`.
+        # contract on `compresso.frontend._job.Job`
         except Exception as e:  # noqa: BLE001
             return JobResult(ok=False, error=e, plan=self.plan)

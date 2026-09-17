@@ -1,10 +1,19 @@
 """Initialise the compressor package."""
 
-from ._core import BackendError, Error, HeaderError, compress_file, decompress_file
+from ._core import (
+    BackendError,
+    Cancelled,
+    CancelToken,
+    Error,
+    HeaderError,
+    compress_file,
+    decompress_file,
+)
 from .backend.benchmark import benchmark_file, print_results
 from .backend.capabilities import list_capabilities
 from .backend.file_inspect import InspectResult, inspect
 from .backend.speeds import get_estimated_speeds
+from .frontend._job import JobHandle
 from .frontend.api import (
     CompressionJob,
     CompressionOptions,
@@ -20,6 +29,7 @@ from .frontend.archive_api import (
     ExtractJob,
     ExtractOptions,
     ExtractPlan,
+    OverwriteMode,
 )
 
 __all__: list[str] = [
@@ -28,6 +38,8 @@ __all__: list[str] = [
     "ArchiveOptions",
     "ArchivePlan",
     "BackendError",
+    "CancelToken",
+    "Cancelled",
     "CompressionJob",
     "CompressionOptions",
     "CompressionPlan",
@@ -39,6 +51,8 @@ __all__: list[str] = [
     "ExtractPlan",
     "HeaderError",
     "InspectResult",
+    "JobHandle",
+    "OverwriteMode",
     "benchmark_file",
     "compress_file",
     "decompress_file",

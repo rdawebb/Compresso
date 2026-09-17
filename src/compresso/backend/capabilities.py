@@ -41,30 +41,25 @@ _cap_by_id: dict[int, BackendCapabilities] | None = None
 def _load_capabilities() -> None:
     """Load capabilities from the compressor module"""
     global _cap_list, _cap_by_name, _cap_by_id
-    raw: list[tuple[str, int, bool, bool]] = _core.get_capabilities()
     caps: list[BackendCapabilities] = []
     by_name: dict[str, BackendCapabilities] = {}
     by_id: dict[int, BackendCapabilities] = {}
 
-    for item in raw:
-        if not isinstance(item, dict):
+    for item in _core.get_capabilities():
+        # Unregistered backend slots come back as None
+        if item is None:
             continue
 
-        name = str(object=item.get("name", ""))
-        cid = int(item.get("id", -1))
-        has_buffer = bool(item.get("has_buffer", False))
-        has_stream = bool(item.get("has_stream", False))
-
         cap = BackendCapabilities(
-            name=name,
-            id=cid,
-            has_buffer=has_buffer,
-            has_stream=has_stream,
+            name=item["name"],
+            id=item["id"],
+            has_buffer=item["has_buffer"],
+            has_stream=item["has_stream"],
         )
 
         caps.append(cap)
-        by_name[name] = cap
-        by_id[cid] = cap
+        by_name[cap.name] = cap
+        by_id[cap.id] = cap
 
     _cap_list = caps
     _cap_by_name = by_name

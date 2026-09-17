@@ -21,6 +21,7 @@ from compresso.frontend.archive_api import (
     ExtractJob,
     ExtractOptions,
     ExtractPlan,
+    OverwriteMode,
     plan_archive,
 )
 
@@ -155,6 +156,32 @@ class TestArchiveRoundTrip:
         restored = temp_dir / "restore" / src.name
         assert restored.read_bytes() == src.read_bytes()
 
+    @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
+    def test_plan_entries_carry_sizes(self, temp_dir: Path, monkeypatch, fmt: str):
+        """Test that planned entries report each file's uncompressed size.
+
+        The CLI sums these to decide whether to show a progress bar.
+        """
+        monkeypatch.chdir(temp_dir)
+        tree = Path("sized")
+        tree.mkdir()
+        (tree / "a.bin").write_bytes(b"a" * 1234)
+        (tree / "b.bin").write_bytes(b"b" * 56789)
+        archive_path = Path(f"sized.{fmt}")
+
+        options = ArchiveOptions(format=fmt)
+        assert ArchiveJob.from_paths([tree], archive_path, options=options).run().ok
+
+        entries = {
+            e.path.rstrip("/"): e
+            for e in ExtractJob.from_archive(archive_path).plan.entries
+        }
+        assert entries["sized/a.bin"].size == 1234
+        assert entries["sized/b.bin"].size == 56789
+        assert not entries["sized/a.bin"].is_dir
+        assert entries["sized"].size == 0
+        assert entries["sized"].is_dir
+
     def test_directory_round_trip(self, temp_dir: Path, monkeypatch):
         """Test that archiving a directory preserves its nested structure on extraction."""
         monkeypatch.chdir(temp_dir)
@@ -208,6 +235,33 @@ class TestArchiveRoundTrip:
         assert (out_dir / "données" / "café.txt").read_bytes() == b"contenu"
         assert (out_dir / "données" / "日本語.txt").read_bytes() == b"content"
 
+    @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
+    def test_absolute_source_directory_round_trip(self, temp_dir: Path, fmt: str):
+        """Test that an absolute source directory is stored relative to its parent."""
+        src = temp_dir / "tree"
+        (src / "deep").mkdir(parents=True)
+        (src / "top.txt").write_bytes(b"top level")
+        (src / "deep" / "leaf.txt").write_bytes(b"leaf content")
+        archive_path = temp_dir / f"tree.{fmt}"
+
+        options = ArchiveOptions(format=fmt)
+        result = ArchiveJob.from_paths([src.resolve()], archive_path, options).run()
+        assert result.ok, result.error
+
+        names = {e.path for e in ExtractJob.from_archive(archive_path).list_contents()}
+        assert "tree/top.txt" in names
+        assert "tree/deep/leaf.txt" in names
+        for name in names:
+            assert not name.startswith(("/", "\\")), name
+            assert "\\" not in name, name
+
+        out_dir = temp_dir / "out"
+        extract_result = ExtractJob.from_archive(archive_path, out_dir).run()
+        assert extract_result.ok, extract_result.error
+
+        assert (out_dir / "tree" / "top.txt").read_bytes() == b"top level"
+        assert (out_dir / "tree" / "deep" / "leaf.txt").read_bytes() == b"leaf content"
+
 
 @pytest.mark.skipif(
     sys.platform == "win32", reason="symlink creation needs privilege on Windows"
@@ -215,8 +269,8 @@ class TestArchiveRoundTrip:
 class TestArchivingSymlinks:
     """Test that a symlink is archived as a symlink, not as what it points at.
 
-    Written against an uncompressed tar read back by `tarfile`, because the
-    listing API reports entry names only and cannot show an entry's type.
+    Written against an uncompressed tar, checked both through `tarfile` and
+    through the entries an extraction plan lists.
     """
 
     def test_symlink_is_stored_as_a_link(self, temp_dir: Path, monkeypatch):
@@ -236,6 +290,14 @@ class TestArchivingSymlinks:
         assert members["tree/alias.txt"].issym()
         assert members["tree/alias.txt"].linkname == "real.txt"
         assert members["tree/real.txt"].isreg()
+
+        entries = {
+            e.path: e for e in ExtractJob.from_archive(archive_path).plan.entries
+        }
+        assert entries["tree/alias.txt"].is_symlink
+        assert entries["tree/alias.txt"].link_target == "real.txt"
+        assert not entries["tree/real.txt"].is_symlink
+        assert entries["tree/real.txt"].link_target is None
 
     def test_symlink_loop_does_not_recurse(self, temp_dir: Path, monkeypatch):
         """Test that a symlink pointing at its own parent terminates the walk."""
@@ -621,7 +683,7 @@ class TestExtractionOverwrite:
         archive_path, out_dir = self._archive_and_stale_output(temp_dir)
 
         result = ExtractJob.from_archive(
-            archive_path, out_dir, options=ExtractOptions(overwrite="skip")
+            archive_path, out_dir, options=ExtractOptions(overwrite=OverwriteMode.SKIP)
         ).run()
 
         assert result.ok, result.error
@@ -632,11 +694,27 @@ class TestExtractionOverwrite:
         archive_path, out_dir = self._archive_and_stale_output(temp_dir)
 
         result = ExtractJob.from_archive(
-            archive_path, out_dir, options=ExtractOptions(overwrite="overwrite")
+            archive_path,
+            out_dir,
+            options=ExtractOptions(overwrite=OverwriteMode.OVERWRITE),
         ).run()
 
         assert result.ok, result.error
         assert (out_dir / "a.txt").read_bytes() == b"xxxxx"
+
+    def test_plain_string_mode_is_normalised(self, temp_dir: Path):
+        """Test that a mode given as a plain string still plans as the enum."""
+        archive_path = temp_dir / "one.tar"
+        _tar_with_entries(archive_path, [_file_entry("a.txt")])
+
+        plan = ExtractJob.from_archive(
+            archive_path,
+            temp_dir / "out",
+            options=ExtractOptions(overwrite="skip"),  # ty: ignore
+        ).plan
+
+        assert plan.can_run is True
+        assert plan.options.overwrite is OverwriteMode.SKIP
 
     def test_unknown_mode_is_an_unavailable_plan(self, temp_dir: Path):
         """Test that a mode outside the three names never reaches the C layer."""

@@ -7,7 +7,7 @@
 #include <string.h>
 
 static int decompress_compresso_file(const char *src_path, const char *dst_path,
-                                     AlgoID algo);
+                                     AlgoID algo, CoreContext *ctx);
 
 // ---- I/O Helpers ----
 
@@ -122,7 +122,7 @@ static int UNUSED write_memory_to_file(const char *path,
 // ---- Public API ----
 
 int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
-                  Strategy strategy, int level) {
+                  Strategy strategy, int level, CoreContext *ctx) {
   init_backends();
 
   const CBackend *backend = NULL;
@@ -235,9 +235,14 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   }
 
   if (backend->compress_stream) {
-    return_code = backend->compress_stream(src, dst, level);
+    // src is rewound to the start, so the stage covers the whole input
+    ctx_begin_stage_stream(ctx, src);
+
+    return_code = backend->compress_stream(src, dst, level, ctx);
     if (return_code != 0) {
-      set_backend_error(backend, "compression", "streaming compression");
+      if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
+        set_backend_error(backend, "compression", "streaming compression");
+      }
       goto done;
     }
   } else {
@@ -297,14 +302,11 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   }
 
 done:
-  if (src)
-    fclose(src);
-  if (dst)
-    fclose(dst);
-  return return_code;
+  return codec_finish_file(return_code, src, dst, dst_path, NULL);
 }
 
-int decompress_file(const char *src_path, const char *dst_path, AlgoID algo) {
+int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
+                    CoreContext *ctx) {
   init_backends();
 
   Format format = detect_format_from_path(src_path);
@@ -313,36 +315,10 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo) {
     return -1;
   }
 
-  if (format == FORMAT_GZIP || format == FORMAT_BZIP2 || format == FORMAT_XZ ||
-      format == FORMAT_ZSTD || format == FORMAT_LZ4) {
-    const StandaloneFormat *standalone = NULL;
-
-    switch (format) {
-    case FORMAT_GZIP:
-      standalone = get_gzip_format();
-      break;
-    case FORMAT_BZIP2:
-      standalone = get_bzip2_format();
-      break;
-    case FORMAT_XZ:
-      standalone = get_xz_format();
-      break;
-    case FORMAT_ZSTD:
-      standalone = get_zstd_format();
-      break;
-    case FORMAT_LZ4:
-      standalone = get_lz4_format();
-      break;
-    default:
-      break;
-    }
-
-    if (!standalone) {
-      PyErr_SetString(comp_Error, "Standalone format backend not available");
-      return -1;
-    }
-
-    return standalone->decompress_file(src_path, dst_path);
+  // The standalone formats each open and size their own input
+  const StandaloneFormat *standalone = find_standalone_format(format);
+  if (standalone) {
+    return standalone->decompress_file(src_path, dst_path, ctx);
   }
 
   if (format_is_archive(format)) {
@@ -352,7 +328,7 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo) {
   }
 
   if (format == FORMAT_COMPRESSO) {
-    return decompress_compresso_file(src_path, dst_path, algo);
+    return decompress_compresso_file(src_path, dst_path, algo, ctx);
   }
 
   PyErr_Format(comp_Error, "Unknown or unsupported format: %s",
@@ -361,7 +337,7 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo) {
 }
 
 static int decompress_compresso_file(const char *src_path, const char *dst_path,
-                                     AlgoID algo) {
+                                     AlgoID algo, CoreContext *ctx) {
   init_backends();
 
   int return_code = 0;
@@ -431,9 +407,14 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
   }
 
   if (backend->decompress_stream) {
-    return_code = backend->decompress_stream(src, dst, orig_size);
+    // Progress counts input bytes consumed
+    ctx_begin_stage_stream(ctx, src);
+
+    return_code = backend->decompress_stream(src, dst, orig_size, ctx);
     if (return_code != 0) {
-      set_backend_error(backend, "decompression", "streaming decompression");
+      if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
+        set_backend_error(backend, "decompression", "streaming decompression");
+      }
       goto done;
     }
   } else {
@@ -584,9 +565,5 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
   }
 
 done:
-  if (src)
-    fclose(src);
-  if (dst)
-    fclose(dst);
-  return return_code;
+  return codec_finish_file(return_code, src, dst, dst_path, NULL);
 }

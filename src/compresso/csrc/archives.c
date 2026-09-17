@@ -101,10 +101,43 @@ static int path_has_parent_segment(const char *path) {
   return 0;
 }
 
+// Length of the parent prefix of a source path; trailing separators are
+// ignored, so "dir/" names "dir" rather than ""
+static size_t source_prefix_len(const char *path) {
+  size_t end = strlen(path);
+  while (end > 1 && FS_IS_SEP(path[end - 1]))
+    end--;
+
+  size_t start = end;
+  while (start > 0 && !FS_IS_SEP(path[start - 1]))
+    start--;
+
+#if defined(_WIN32) || defined(_WIN64)
+  // "C:file" is drive-relative: the qualifier is not part of the name
+  if (start == 0 && path[0] != '\0' && path[1] == ':')
+    start = 2;
+#endif
+
+  return start;
+}
+
+// Mirror extraction's checks, so an unsafe source fails at write time rather
+// than producing an unextractable archive
+static int check_storable_entry_name(const char *name) {
+  if (name[0] == '\0' || fs_is_absolute(name) || fs_is_stream_path(name) ||
+      path_has_parent_segment(name)) {
+    PyErr_Format(PyExc_ValueError, "Refusing to store unsafe entry name: %s",
+                 name);
+    return -1;
+  }
+
+  return 0;
+}
+
 // ---- Helpers ----
 
 static ArchiveEntry *create_entry_from_path(const char *path,
-                                            const char *base_path) {
+                                            size_t prefix_len) {
   fs_stat st;
   if (fs_stat_path(path, &st) != 0) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
@@ -115,16 +148,36 @@ static ArchiveEntry *create_entry_from_path(const char *path,
   if (!entry)
     return NULL;
 
-  const char *rel_path = path;
-  if (base_path && strncmp(path, base_path, strlen(base_path)) == 0) {
-    rel_path = path + strlen(base_path);
-    if (*rel_path == '/')
-      rel_path++;
-  }
+  const char *rel_path = path + prefix_len;
+  while (FS_IS_SEP(*rel_path))
+    rel_path++;
+
   entry->path = strdup(rel_path);
   if (!entry->path) {
     entry_free(entry);
     PyErr_NoMemory();
+    return NULL;
+  }
+
+  // Normalise to '/', collapsing runs and dropping a trailing one; writers add
+  // the trailing separator a directory needs themselves
+  char *w = entry->path;
+  for (const char *r = entry->path; *r; r++) {
+    if (FS_IS_SEP(*r)) {
+      // Keep a leading separator so the absolute name is still rejected below
+      if (w > entry->path && w[-1] == '/')
+        continue;
+      *w++ = '/';
+    } else {
+      *w++ = *r;
+    }
+  }
+  while (w > entry->path + 1 && w[-1] == '/')
+    w--;
+  *w = '\0';
+
+  if (check_storable_entry_name(entry->path) != 0) {
+    entry_free(entry);
     return NULL;
   }
 
@@ -148,8 +201,8 @@ static ArchiveEntry *create_entry_from_path(const char *path,
 }
 
 static int add_directory_recursive(void *writer, const CArchive *archive,
-                                   const char *dir_path,
-                                   const char *base_path) {
+                                   const char *dir_path, size_t prefix_len,
+                                   CoreContext *ctx) {
   fs_dir *dir = fs_opendir(dir_path);
   if (!dir) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir_path);
@@ -161,7 +214,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
     char full_path[FS_PATH_MAX];
     snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
 
-    ArchiveEntry *ae = create_entry_from_path(full_path, base_path);
+    ArchiveEntry *ae = create_entry_from_path(full_path, prefix_len);
     if (!ae) {
       fs_closedir(dir);
       return -1;
@@ -175,22 +228,24 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, full_path);
         return -1;
       }
-      int ret = archive->add_entry(writer, ae, f);
+      int ret = archive->add_entry(writer, ae, f, ctx);
       fclose(f);
       entry_free(ae);
       if (ret != 0) {
         fs_closedir(dir);
-        return -1;
+        return ret;
       }
     } else if (ae->type == ENTRY_DIR) {
-      archive->add_entry(writer, ae, NULL);
+      archive->add_entry(writer, ae, NULL, ctx);
       entry_free(ae);
-      if (add_directory_recursive(writer, archive, full_path, base_path) != 0) {
+      int ret =
+          add_directory_recursive(writer, archive, full_path, prefix_len, ctx);
+      if (ret != 0) {
         fs_closedir(dir);
-        return -1;
+        return ret;
       }
     } else {
-      archive->add_entry(writer, ae, NULL);
+      archive->add_entry(writer, ae, NULL, ctx);
       entry_free(ae);
     }
   }
@@ -418,9 +473,52 @@ static char *make_temp_path(const char *final_path) {
   return tmpl;
 }
 
+// Total bytes of regular files under `dir_path`, for the progress denominator
+static uint64_t sum_directory_size(const char *dir_path) {
+  fs_dir *dir = fs_opendir(dir_path);
+  if (!dir)
+    return 0;
+
+  uint64_t total = 0;
+  const char *name;
+  while ((name = fs_readdir(dir)) != NULL) {
+    char full_path[FS_PATH_MAX];
+    snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
+
+    fs_stat st;
+    if (fs_stat_path(full_path, &st) != 0)
+      continue;
+
+    if (st.type == FS_TYPE_DIR)
+      total += sum_directory_size(full_path);
+    else if (st.type == FS_TYPE_FILE)
+      total += st.size;
+  }
+
+  fs_closedir(dir);
+  return total;
+}
+
+// Bytes the writer stage will read, so progress has a denominator up front
+static uint64_t sum_input_size(const char **input_paths, size_t num_paths) {
+  uint64_t total = 0;
+  for (size_t i = 0; i < num_paths; i++) {
+    fs_stat st;
+    if (fs_stat_path(input_paths[i], &st) != 0)
+      continue;
+
+    if (st.type == FS_TYPE_DIR)
+      total += sum_directory_size(input_paths[i]);
+    else if (st.type == FS_TYPE_FILE)
+      total += st.size;
+  }
+  return total;
+}
+
 // Write every input path into an already-open writer
 static int add_paths_to_writer(const CArchive *archive, void *writer,
-                               const char **input_paths, size_t num_paths) {
+                               const char **input_paths, size_t num_paths,
+                               CoreContext *ctx) {
   for (size_t i = 0; i < num_paths; i++) {
     fs_stat st;
     if (fs_stat_path(input_paths[i], &st) != 0) {
@@ -428,36 +526,26 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
       return -1;
     }
 
-    if (st.type == FS_TYPE_DIR) {
-      // Strip only the source's parent, so the source directory's own name is
-      // preserved in stored entry paths
-      char base[FS_PATH_MAX];
-      const char *slash = fs_last_sep(input_paths[i]);
-      if (slash) {
-        size_t base_len = (size_t)(slash - input_paths[i]);
-        if (base_len >= sizeof(base)) {
-          PyErr_SetString(PyExc_ValueError, "Source path too long");
-          return -1;
-        }
-        memcpy(base, input_paths[i], base_len);
-        base[base_len] = '\0';
-      } else {
-        base[0] = '\0';
-      }
+    // Strip only the source's parent, so entries keep the source's own name
+    size_t prefix_len = source_prefix_len(input_paths[i]);
 
+    if (st.type == FS_TYPE_DIR) {
       // Record the directory itself so empty directories are preserved
-      ArchiveEntry *dir_entry = create_entry_from_path(input_paths[i], base);
+      ArchiveEntry *dir_entry =
+          create_entry_from_path(input_paths[i], prefix_len);
       if (!dir_entry)
         return -1;
-      int dir_ret = archive->add_entry(writer, dir_entry, NULL);
+      int dir_ret = archive->add_entry(writer, dir_entry, NULL, ctx);
       entry_free(dir_entry);
       if (dir_ret != 0)
-        return -1;
+        return dir_ret;
 
-      if (add_directory_recursive(writer, archive, input_paths[i], base) != 0)
-        return -1;
+      int walk_ret = add_directory_recursive(writer, archive, input_paths[i],
+                                             prefix_len, ctx);
+      if (walk_ret != 0)
+        return walk_ret;
     } else {
-      ArchiveEntry *entry = create_entry_from_path(input_paths[i], NULL);
+      ArchiveEntry *entry = create_entry_from_path(input_paths[i], prefix_len);
       if (!entry)
         return -1;
 
@@ -468,12 +556,12 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
         return -1;
       }
 
-      int ret = archive->add_entry(writer, entry, f);
+      int ret = archive->add_entry(writer, entry, f, ctx);
       fclose(f);
       entry_free(entry);
 
       if (ret != 0)
-        return -1;
+        return ret;
     }
   }
 
@@ -483,7 +571,8 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
 // ---- Archive Operations ----
 
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
-                   const char **input_paths, size_t num_paths) {
+                   const char **input_paths, size_t num_paths,
+                   CoreContext *ctx) {
   if (!pipeline_is_valid(pipeline) || pipeline->archive == ARCHIVE_NONE) {
     char name[32];
     pipeline_display_name(pipeline, name, sizeof(name));
@@ -519,19 +608,38 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
     return -1;
   }
 
-  int ret = add_paths_to_writer(archive, writer, input_paths, num_paths);
-  if (archive->close_writer(writer) != 0)
-    ret = -1;
+  // With a codec, the temp archive is read a second time, so the two reads are
+  // stages of one job
+  uint64_t input_total = sum_input_size(input_paths, num_paths);
+  if (pipeline->codec != FORMAT_UNKNOWN) {
+    ctx_begin_job(ctx, input_total);
+  }
+  ctx_begin_stage(ctx, input_total);
+
+  int ret = add_paths_to_writer(archive, writer, input_paths, num_paths, ctx);
+
+  // libzip does all its compression inside zip_close, so that is where its
+  // progress comes from; a run that already failed has nothing left to report
+  int close_ret = archive->close_writer(writer, ret == 0 ? ctx : NULL);
+  if (ret == 0 && close_ret != 0)
+    ret = close_ret;
 
   if (ret == 0 && pipeline->codec != FORMAT_UNKNOWN) {
     const StandaloneFormat *codec = find_standalone_format(pipeline->codec);
-    ret = codec->compress_file(tmp_path, output_path, level);
+    ret = codec->compress_file(tmp_path, output_path, level, ctx);
   }
 
   if (tmp_path) {
     fs_unlink(tmp_path);
     free(tmp_path);
   }
+
+  // Never leave a half-written archive behind. The codec stage cleans up after
+  // itself, so this covers the archive written straight to the destination.
+  if (ret != 0) {
+    fs_unlink(output_path);
+  }
+
   return ret;
 }
 
@@ -543,13 +651,21 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
 static int prevalidate_entries(const CArchive *archive, void *reader,
                                const char *output_dir,
                                const char *resolved_root, const char **files,
-                               size_t num_files,
-                               const ExtractionPolicy *policy) {
+                               size_t num_files, const ExtractionPolicy *policy,
+                               CoreContext *ctx, uint64_t *out_declared_total) {
   ArchiveEntry entry = {0};
   uint64_t declared_total = 0;
   int ret;
 
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
+    // Nothing is written in this pass, so this is a cancellation check with no
+    // progress to report
+    int cancelled = ctx_advance(ctx, 0);
+    if (cancelled != 0) {
+      entry_reset(&entry);
+      return cancelled;
+    }
+
     if (!entry.path) {
       entry_reset(&entry);
       archive->skip_entry_data(reader);
@@ -593,6 +709,9 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
     archive->skip_entry_data(reader);
   }
 
+  if (out_declared_total)
+    *out_declared_total = declared_total;
+
   return ret < 0 ? -1 : 0;
 }
 
@@ -600,12 +719,20 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
 static int extract_entries(const CArchive *archive, void *reader,
                            const char *output_dir, const char *resolved_root,
                            const char **files, size_t num_files,
-                           const ExtractionPolicy *policy) {
+                           const ExtractionPolicy *policy, CoreContext *ctx) {
   ArchiveEntry entry = {0};
   uint64_t written_total = 0;
   int ret;
 
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
+    // Catches a cancel between entries; extract_entry_data catches one during
+    // a single large entry
+    int cancelled = ctx_advance(ctx, 0);
+    if (cancelled != 0) {
+      entry_reset(&entry);
+      return cancelled;
+    }
+
     if (!entry.path) {
       entry_reset(&entry);
       archive->skip_entry_data(reader);
@@ -668,12 +795,19 @@ static int extract_entries(const CArchive *archive, void *reader,
                                : UINT64_MAX;
       uint64_t written = 0;
 
-      if (archive->extract_entry_data(reader, f, remaining, &written) != 0) {
+      int data_ret =
+          archive->extract_entry_data(reader, f, remaining, &written, ctx);
+      written_total += written;
+
+      if (data_ret != 0) {
         fclose(f);
         entry_reset(&entry);
-        return -1;
+        // A cancel mid-entry leaves a truncated file; entries already
+        // completed are kept, as documented
+        if (data_ret == COMP_CANCELLED)
+          fs_unlink(out_path);
+        return data_ret;
       }
-      written_total += written;
 
       fclose(f);
 
@@ -693,7 +827,7 @@ static int extract_entries(const CArchive *archive, void *reader,
 
 int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files,
-                    const ExtractionPolicy *policy) {
+                    const ExtractionPolicy *policy, CoreContext *ctx) {
   if (!policy)
     policy = &EXTRACTION_POLICY_DEFAULT;
 
@@ -717,10 +851,17 @@ int extract_archive(const char *archive_path, const char *output_dir,
     tmp_path = make_temp_path(archive_path);
     if (!tmp_path)
       return -1;
-    if (codec->decompress_file(archive_path, tmp_path) != 0) {
+
+    // Seeded with the compressed size; the extraction stage extends it once
+    // prevalidation knows how much the entries declare
+    fs_stat st;
+    ctx_begin_job(ctx, fs_stat_path(archive_path, &st) == 0 ? st.size : 0);
+
+    int codec_ret = codec->decompress_file(archive_path, tmp_path, ctx);
+    if (codec_ret != 0) {
       fs_unlink(tmp_path);
       free(tmp_path);
-      return -1;
+      return codec_ret;
     }
     read_path = tmp_path;
   }
@@ -739,6 +880,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
   }
 
   // Two passes over the same reader: validate everything, then extract
+  uint64_t declared_total = 0;
   int ret = -1;
   for (int pass = 0; pass < 2; pass++) {
     void *reader = archive->create_reader(read_path);
@@ -747,13 +889,17 @@ int extract_archive(const char *archive_path, const char *output_dir,
       break;
     }
 
+    if (pass == 1)
+      ctx_begin_stage(ctx, declared_total);
+
     ret = pass == 0
               ? prevalidate_entries(archive, reader, output_dir, resolved_root,
-                                    files, num_files, policy)
+                                    files, num_files, policy, ctx,
+                                    &declared_total)
               : extract_entries(archive, reader, output_dir, resolved_root,
-                                files, num_files, policy);
+                                files, num_files, policy, ctx);
 
-    if (archive->close_reader(reader) != 0)
+    if (archive->close_reader(reader) != 0 && ret == 0)
       ret = -1;
 
     if (ret != 0)
@@ -767,8 +913,25 @@ int extract_archive(const char *archive_path, const char *output_dir,
   return ret;
 }
 
-// Collect entry paths from an already-open reader into a new Python list
-static PyObject *read_archive_names(const CArchive *archive, void *reader) {
+// Name an EntryType as the Python layer sees it
+static const char *entry_type_name(EntryType type) {
+  switch (type) {
+  case ENTRY_DIR:
+    return "dir";
+  case ENTRY_SYMLINK:
+    return "symlink";
+  case ENTRY_SPECIAL:
+    return "special";
+  case ENTRY_FILE:
+  default:
+    return "file";
+  }
+}
+
+// Collect (path, size, type, link_target) tuples from an already-open reader
+// into a new Python list; size is the declared uncompressed size, 0 for
+// directories, and link_target is None for anything but a symlink
+static PyObject *read_archive_entries(const CArchive *archive, void *reader) {
   PyObject *list = PyList_New(0);
   if (!list)
     return NULL;
@@ -777,7 +940,11 @@ static PyObject *read_archive_names(const CArchive *archive, void *reader) {
   int ret;
 
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
-    PyObject *item = PyUnicode_FromString(entry.path ? entry.path : "");
+    // "z" converts a NULL target to None
+    PyObject *item = Py_BuildValue(
+        "(sKsz)", entry.path ? entry.path : "", (unsigned long long)entry.size,
+        entry_type_name(entry.type),
+        entry.type == ENTRY_SYMLINK ? entry.symlink_target : NULL);
     entry_reset(&entry);
 
     if (!item) {
@@ -822,7 +989,7 @@ PyObject *list_archive_contents(const char *archive_path) {
     tmp_path = make_temp_path(archive_path);
     if (!tmp_path)
       return NULL;
-    if (codec->decompress_file(archive_path, tmp_path) != 0) {
+    if (codec->decompress_file(archive_path, tmp_path, NULL) != 0) {
       fs_unlink(tmp_path);
       free(tmp_path);
       return NULL;
@@ -839,7 +1006,7 @@ PyObject *list_archive_contents(const char *archive_path) {
     return NULL;
   }
 
-  PyObject *list = read_archive_names(archive, reader);
+  PyObject *list = read_archive_entries(archive, reader);
   archive->close_reader(reader);
 
   if (tmp_path) {

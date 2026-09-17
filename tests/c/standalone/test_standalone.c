@@ -69,9 +69,9 @@ static void round_trip(const StandaloneFormat *fmt) {
   snprintf(comp, sizeof(comp), "tmp_%s_rt.compressed", fmt->name);
   snprintf(out, sizeof(out), "tmp_%s_rt.out", fmt->name);
 
-  TEST_ASSERT_EQUAL_INT_MESSAGE(0, fmt->compress_file(TEST_INPUT, comp, 6),
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, fmt->compress_file(TEST_INPUT, comp, 6, NULL),
                                 fmt->name);
-  TEST_ASSERT_EQUAL_INT_MESSAGE(0, fmt->decompress_file(comp, out), fmt->name);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, fmt->decompress_file(comp, out, NULL), fmt->name);
   TEST_ASSERT_TRUE_MESSAGE(files_equal(TEST_INPUT, out), fmt->name);
 
   remove(comp);
@@ -83,7 +83,7 @@ static void detect_corruption(const StandaloneFormat *fmt) {
   snprintf(comp, sizeof(comp), "tmp_%s_cx.compressed", fmt->name);
   snprintf(out, sizeof(out), "tmp_%s_cx.out", fmt->name);
 
-  TEST_ASSERT_EQUAL_INT_MESSAGE(0, fmt->compress_file(TEST_INPUT, comp, 6),
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, fmt->compress_file(TEST_INPUT, comp, 6, NULL),
                                 fmt->name);
 
   // Flip a byte in the middle of the compressed payload
@@ -99,7 +99,7 @@ static void detect_corruption(const StandaloneFormat *fmt) {
   fclose(f);
 
   // Decompression must fail (CRC/checksum or structural error)
-  TEST_ASSERT_EQUAL_INT_MESSAGE(-1, fmt->decompress_file(comp, out), fmt->name);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(-1, fmt->decompress_file(comp, out, NULL), fmt->name);
   PyErr_Clear();
 
   remove(comp);

@@ -1,6 +1,7 @@
 """Frontend API for Compresso library."""
 
-from ._job import JobResult, ProgressCallback
+from .._core import Cancelled, CancelToken
+from ._job import JobHandle, JobResult, ProgressCallback
 from .api import (
     CompressionJob,
     CompressionOptions,
@@ -18,6 +19,7 @@ from .archive_api import (
     ExtractJob,
     ExtractOptions,
     ExtractPlan,
+    OverwriteMode,
     plan_archive,
     plan_extraction,
 )
@@ -27,6 +29,8 @@ __all__ = [
     "ArchiveJob",
     "ArchiveOptions",
     "ArchivePlan",
+    "CancelToken",
+    "Cancelled",
     "CompressionJob",
     "CompressionOptions",
     "CompressionPlan",
@@ -35,7 +39,9 @@ __all__ = [
     "ExtractJob",
     "ExtractOptions",
     "ExtractPlan",
+    "JobHandle",
     "JobResult",
+    "OverwriteMode",
     "ProgressCallback",
     "plan_archive",
     "plan_compression",

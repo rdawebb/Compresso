@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #define BZIP2_CHUNK 65536 // 64KB
 #include "../common.h"
+#include "../fsutil.h"
 #include <Python.h>
 #include <bzlib.h>
 
@@ -80,7 +81,8 @@ static int bzip2_decompress_buffer(const unsigned char *input,
 
 // ---- Stream Compression/Decompression ----
 
-static int bzip2_compress_stream(FILE *src, FILE *dst, int level) {
+static int bzip2_compress_stream(FILE *src, FILE *dst, int level,
+                                 CoreContext *ctx) {
   int bzerr;
   int blockSize100k = bzip2_block_size_from_level(level);
 
@@ -104,6 +106,12 @@ static int bzip2_compress_stream(FILE *src, FILE *dst, int level) {
       break;
     }
 
+    int advance = ctx_advance(ctx, nread);
+    if (advance != 0) {
+      ret = advance;
+      break;
+    }
+
     if (nread > 0) {
       BZ2_bzWrite(&bzerr, bzf, buffer, (int)nread);
       if (bzerr != BZ_OK) {
@@ -117,8 +125,9 @@ static int bzip2_compress_stream(FILE *src, FILE *dst, int level) {
     }
   }
 
-  BZ2_bzWriteClose(&bzerr, bzf, 0, NULL, NULL);
-  if (bzerr != BZ_OK) {
+  // Abandon rather than flush when the run is being torn down
+  BZ2_bzWriteClose(&bzerr, bzf, ret != 0, NULL, NULL);
+  if (bzerr != BZ_OK && ret == 0) {
     ret = -1; // error closing bzip2 stream
   }
 
@@ -127,7 +136,8 @@ static int bzip2_compress_stream(FILE *src, FILE *dst, int level) {
       return ret;
 }
 
-static int bzip2_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
+static int bzip2_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
+                                   CoreContext *ctx) {
   (void)orig_size; // unused
 
   int bzerr;
@@ -153,6 +163,13 @@ static int bzip2_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size) {
       }
       if (bzerr == BZ_STREAM_END) {
         break; // end of stream
+      }
+
+      // BZ2_bzRead does the reading, so no per-chunk input delta to report
+      int advance = ctx_set_position(ctx, (uint64_t)fs_ftell(src));
+      if (advance != 0) {
+        ret = advance;
+        break;
       }
     } else {
       ret = -1; // read error

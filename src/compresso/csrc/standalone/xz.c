@@ -19,12 +19,14 @@ static uint32_t xz_level_to_preset(int level) {
 }
 
 static int xz_compress_file(const char *input_path, const char *output_path,
-                            int level) {
+                            int level, CoreContext *ctx) {
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
+
+  ctx_begin_stage_stream(ctx, input);
 
   FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
@@ -62,6 +64,13 @@ static int xz_compress_file(const char *input_path, const char *output_path,
       }
       strm.next_in = in_buf;
       strm.avail_in = nread;
+
+      int advance = ctx_advance(ctx, nread);
+      if (advance != 0) {
+        return_code = advance;
+        break;
+      }
+
       if (feof(input)) {
         action = LZMA_FINISH;
       }
@@ -94,25 +103,19 @@ static int xz_compress_file(const char *input_path, const char *output_path,
 
       lzma_end(&strm);
 
-  if (return_code != 0) {
-    if (!PyErr_Occurred())
-      PyErr_SetString(comp_BackendError, "xz compression failed");
-    fclose(input);
-    fclose(output);
-    return -1;
-  }
-
-  fclose(input);
-  fclose(output);
-  return 0;
+  return codec_finish_file(return_code, input, output, output_path,
+                           "xz compression failed");
 }
 
-static int xz_decompress_file(const char *input_path, const char *output_path) {
+static int xz_decompress_file(const char *input_path, const char *output_path,
+                              CoreContext *ctx) {
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }
+
+  ctx_begin_stage_stream(ctx, input);
 
   FILE *output = fs_fopen(output_path, "wb");
   if (!output) {
@@ -148,6 +151,13 @@ static int xz_decompress_file(const char *input_path, const char *output_path) {
       }
       strm.next_in = in_buf;
       strm.avail_in = nread;
+
+      int advance = ctx_advance(ctx, nread);
+      if (advance != 0) {
+        return_code = advance;
+        break;
+      }
+
       if (feof(input)) {
         action = LZMA_FINISH;
       }
@@ -181,7 +191,7 @@ static int xz_decompress_file(const char *input_path, const char *output_path) {
 
       lzma_end(&strm);
 
-  if (return_code != 0) {
+  if (return_code != 0 && return_code != COMP_CANCELLED) {
     if (!PyErr_Occurred()) {
       if (final_ret == LZMA_MEMLIMIT_ERROR) {
         PyErr_Format(comp_BackendError,
@@ -197,14 +207,10 @@ static int xz_decompress_file(const char *input_path, const char *output_path) {
         PyErr_SetString(comp_BackendError, "xz decompression failed");
       }
     }
-    fclose(input);
-    fclose(output);
-    return -1;
   }
 
-  fclose(input);
-  fclose(output);
-  return 0;
+  return codec_finish_file(return_code, input, output, output_path,
+                           "xz decompression failed");
 }
 
 static char *xz_get_original_name(const char *compressed_path) {

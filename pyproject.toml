@@ -7,7 +7,7 @@ name = "compresso"
 version = "0.1.0"
 description = "A fast C-based Python compression tool supporting multiple algorithms"
 authors = [{ name = "Rob Webb" }]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "pygments>=2.20.0",
     "tabulate>=0.9.0,<1.0.0",
@@ -29,7 +29,10 @@ dev = [
 compresso = "compresso.cli:main"
 comp = "compresso.cli:main"
 
+[tool.setuptools.package-data]
+compresso = ["py.typed", "*.pyi"]
+
 [tool.ruff.lint.per-file-ignores]
-# Every function in cli.py deliberately ends in a last-resort `except Exception`,
-# so the blind-except rule is turned off here rather than annotated on each one
-"src/compresso/cli.py" = ["BLE001"]
+# Every command deliberately ends in a last-resort `except Exception`, so the
+# blind-except rule is turned off across the CLI rather than annotated on each
+"src/compresso/cli/*.py" = ["BLE001"]
