@@ -535,7 +535,7 @@ class TestSmartCompress:
         result = runner.invoke(app, ["compress", str(source_tree), "-q"])
 
         assert result.exit_code == EXIT_OK
-        assert (source_tree.parent / f"{source_tree.name}.tar.zst").exists()
+        assert (source_tree.parent / f"{source_tree.name}.zip").exists()
 
     def test_several_files_become_an_archive(
         self, payload: Path, temp_dir: Path

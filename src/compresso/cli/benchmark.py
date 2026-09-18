@@ -39,6 +39,8 @@ def benchmark(
 ) -> None:
     """Run compression benchmarks on a file.
 
+    \f
+
     Args:
         file: The path to the file to benchmark.
         algos: Comma-separated list of algorithms to use (default: all available).

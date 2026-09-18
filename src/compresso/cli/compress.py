@@ -234,6 +234,8 @@ def compress(
     a recognisable extension on `-o` picks the format on its own, and `-f`
     overrides it.
 
+    \f
+
     Args:
         inputs: The files and directories to compress.
         output: Where to write (default: named after the first input).

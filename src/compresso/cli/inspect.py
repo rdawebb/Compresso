@@ -26,6 +26,8 @@ def inspect(
 ) -> None:
     """Inspect a compressed file and show metadata.
 
+    \f
+
     Args:
         file: The path to the compressed file.
         output_json: If True, output metadata in JSON format.

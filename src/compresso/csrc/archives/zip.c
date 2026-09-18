@@ -336,6 +336,16 @@ static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
   // ZIP doesn't store Unix permissions by default
   entry->mode = (entry->type == ENTRY_DIR) ? 0755 : 0644;
 
+  // A directory has no data and so nothing worth reporting
+  if (entry->type != ENTRY_DIR) {
+    entry->has_compression_detail = 1;
+    entry->compressed_size =
+        (st.valid & ZIP_STAT_COMP_SIZE) ? (uint64_t)st.comp_size : 0;
+    entry->crc = (st.valid & ZIP_STAT_CRC) ? (uint32_t)st.crc : 0;
+    entry->method =
+        (st.valid & ZIP_STAT_COMP_METHOD) ? (uint16_t)st.comp_method : 0;
+  }
+
   reader->current_index++;
 
   return 1; // Entry retrieved

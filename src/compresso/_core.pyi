@@ -1,7 +1,7 @@
 """Type stubs for the _core C extension module."""
 
 from collections.abc import Callable
-from typing import Literal, TypeAlias, TypedDict
+from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 class Error(Exception):
     """Base error for compression operations."""
@@ -116,15 +116,29 @@ def format_is_archive(format: str) -> bool:
 
 EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "special"]
 
-def list_archive_contents(
-    archive_path: str,
-) -> list[tuple[str, int, EntryTypeName, str | None]]:
-    """List the `(path, size, type, link_target)` of each entry in an archive.
+class ArchiveEntryDict(TypedDict):
+    """One archive entry, as `list_archive_contents` reports it.
 
-    `size` is the uncompressed size the archive declares for the entry (0 for
-    directories), it is not trusted for extraction limits; `link_target` is
-    the stored target of a symlink, and None for every other type.
+    `compressed_size`, `crc` and `method` are present only for a container that
+    compresses each entry separately. tar compresses the whole stream at once,
+    so those keys are absent rather than None.
     """
+
+    path: str
+    type: EntryTypeName
+    # Uncompressed size as the archive declares it (0 for directories); not
+    # trusted for extraction limits, which count the bytes actually written
+    size: int
+    mtime: int
+    mode: int
+    # The stored target of a symlink, and None for every other type
+    link_target: str | None
+    compressed_size: NotRequired[int]
+    crc: NotRequired[int]
+    method: NotRequired[int]
+
+def list_archive_contents(archive_path: str) -> list[ArchiveEntryDict]:
+    """Describe each entry in an archive."""
 
 def compress_standalone(
     input_path: str,

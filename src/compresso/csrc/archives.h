@@ -28,6 +28,13 @@ typedef struct {
   uint32_t mode;        // Unix permissions
   char *symlink_target; // Target of the symlink (if applicable)
   void *internal_data;  // Backend-specific data
+
+  // Per-entry compression detail, which only a container that compresses each
+  // entry separately has; zero means "not recorded"
+  int has_compression_detail;
+  uint64_t compressed_size; // Stored size of this entry's data
+  uint32_t crc;             // CRC-32 of the uncompressed data
+  uint16_t method;          // The container's own compression method code
 } ArchiveEntry;
 
 // ---- Archive Backend Interface ----

@@ -928,9 +928,43 @@ static const char *entry_type_name(EntryType type) {
   }
 }
 
-// Collect (path, size, type, link_target) tuples from an already-open reader
-// into a new Python list; size is the declared uncompressed size, 0 for
-// directories, and link_target is None for anything but a symlink
+// `compressed_size`, `crc` and `method` are present only for a container that
+// compresses each entry separately; tar compresses the whole stream, so those
+// keys are absent rather than None
+static PyObject *entry_to_dict(const ArchiveEntry *entry) {
+  // "z" converts a NULL target to None
+  PyObject *item = Py_BuildValue(
+      "{s:s, s:s, s:K, s:L, s:I, s:z}", "path", entry->path ? entry->path : "",
+      "type", entry_type_name(entry->type), "size",
+      (unsigned long long)entry->size, "mtime", (long long)entry->mtime, "mode",
+      (unsigned int)entry->mode, "link_target",
+      entry->type == ENTRY_SYMLINK ? entry->symlink_target : NULL);
+
+  if (!item || !entry->has_compression_detail)
+    return item;
+
+  PyObject *detail = Py_BuildValue("{s:K, s:I, s:I}", "compressed_size",
+                                   (unsigned long long)entry->compressed_size,
+                                   "crc", (unsigned int)entry->crc, "method",
+                                   (unsigned int)entry->method);
+
+  if (!detail) {
+    Py_DECREF(item);
+    return NULL;
+  }
+
+  int merged = PyDict_Update(item, detail);
+  Py_DECREF(detail);
+
+  if (merged < 0) {
+    Py_DECREF(item);
+    return NULL;
+  }
+
+  return item;
+}
+
+// Collect one dict per entry from an already-open reader into a new Python list
 static PyObject *read_archive_entries(const CArchive *archive, void *reader) {
   PyObject *list = PyList_New(0);
   if (!list)
@@ -940,11 +974,7 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader) {
   int ret;
 
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
-    // "z" converts a NULL target to None
-    PyObject *item = Py_BuildValue(
-        "(sKsz)", entry.path ? entry.path : "", (unsigned long long)entry.size,
-        entry_type_name(entry.type),
-        entry.type == ENTRY_SYMLINK ? entry.symlink_target : NULL);
+    PyObject *item = entry_to_dict(&entry);
     entry_reset(&entry);
 
     if (!item) {

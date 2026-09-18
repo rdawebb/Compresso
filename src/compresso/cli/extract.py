@@ -250,6 +250,8 @@ def extract(
     Extraction refuses to touch an existing file unless either `--overwrite`
     or `--skip-existing` is explicitly used.
 
+    \f
+
     Args:
         inputs: The archives or compressed files to unpack.
         output: Where to write (default: beside the input); a directory for
