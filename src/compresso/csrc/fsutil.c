@@ -113,6 +113,31 @@ int fs_mkdir_p(const char *path, uint32_t mode) {
 #include <sys/utime.h>
 #include <wchar.h>
 #include <windows.h>
+#include <winioctl.h>
+
+// A reparse point's data buffer to decode a symlink/junction target
+typedef struct _COMPRESSO_REPARSE_DATA_BUFFER {
+  ULONG ReparseTag;
+  USHORT ReparseDataLength;
+  USHORT Reserved;
+  union {
+    struct {
+      USHORT SubstituteNameOffset;
+      USHORT SubstituteNameLength;
+      USHORT PrintNameOffset;
+      USHORT PrintNameLength;
+      ULONG Flags;
+      WCHAR PathBuffer[1];
+    } SymbolicLinkReparseBuffer;
+    struct {
+      USHORT SubstituteNameOffset;
+      USHORT SubstituteNameLength;
+      USHORT PrintNameOffset;
+      USHORT PrintNameLength;
+      WCHAR PathBuffer[1];
+    } MountPointReparseBuffer;
+  };
+} COMPRESSO_REPARSE_DATA_BUFFER;
 
 // A UTF-8 byte never becomes more than one UTF-16 code unit, so FS_PATH_MAX
 // wide characters always hold the conversion of an FS_PATH_MAX-byte path
@@ -190,23 +215,57 @@ int fs_readlink(const char *path, char *buf, size_t buf_size) {
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
     return -1;
 
-  // Reading the literal target would mean decoding the raw reparse buffer;
-  // resolving the link gives an absolute target
-  HANDLE handle = fs_open_for_metadata(wpath);
+  // FILE_FLAG_OPEN_REPARSE_POINT keeps the handle on the link itself instead
+  // of following it, so the reparse buffer below is the link's own data
+  HANDLE handle = CreateFileW(
+      wpath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+      NULL);
   if (handle == INVALID_HANDLE_VALUE) {
     errno = ENOENT;
     return -1;
   }
 
-  wchar_t wtarget[FS_PATH_MAX];
-  DWORD n = GetFinalPathNameByHandleW(handle, wtarget, FS_PATH_MAX,
-                                      FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  char reparse_buf[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
+  DWORD bytes_returned = 0;
+  BOOL ok =
+      DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, NULL, 0, reparse_buf,
+                      sizeof(reparse_buf), &bytes_returned, NULL);
   CloseHandle(handle);
 
-  if (n == 0 || n >= FS_PATH_MAX) {
+  if (!ok) {
     errno = EINVAL;
     return -1;
   }
+
+  const COMPRESSO_REPARSE_DATA_BUFFER *rdb =
+      (const COMPRESSO_REPARSE_DATA_BUFFER *)reparse_buf;
+  const char *path_buffer;
+  USHORT print_name_offset, print_name_length;
+
+  if (rdb->ReparseTag == IO_REPARSE_TAG_SYMLINK) {
+    path_buffer = (const char *)rdb->SymbolicLinkReparseBuffer.PathBuffer;
+    print_name_offset = rdb->SymbolicLinkReparseBuffer.PrintNameOffset;
+    print_name_length = rdb->SymbolicLinkReparseBuffer.PrintNameLength;
+  } else if (rdb->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT) {
+    path_buffer = (const char *)rdb->MountPointReparseBuffer.PathBuffer;
+    print_name_offset = rdb->MountPointReparseBuffer.PrintNameOffset;
+    print_name_length = rdb->MountPointReparseBuffer.PrintNameLength;
+  } else {
+    // Not a symlink or junction; nothing this reads knows how to decode
+    errno = EINVAL;
+    return -1;
+  }
+
+  size_t name_wchars = print_name_length / sizeof(WCHAR);
+  if (name_wchars == 0 || name_wchars >= FS_PATH_MAX) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  wchar_t wtarget[FS_PATH_MAX];
+  memcpy(wtarget, path_buffer + print_name_offset, name_wchars * sizeof(WCHAR));
+  wtarget[name_wchars] = L'\0';
 
   return fs_narrow(wtarget, buf, (int)buf_size);
 }
