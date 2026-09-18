@@ -108,6 +108,12 @@ def extract_archive(
     treat 0 as unlimited.
     """
 
+def detect_format(file_path: str) -> str:
+    """Name a file's format, from its magic bytes and then its extension."""
+
+def format_is_archive(format: str) -> bool:
+    """Return whether a format's container can hold more than one entry."""
+
 EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "special"]
 
 def list_archive_contents(

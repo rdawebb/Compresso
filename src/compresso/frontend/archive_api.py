@@ -243,7 +243,8 @@ def plan_extraction(
 
     Args:
         archive: Source archive path.
-        output_dir: Directory to extract into. If None, the current directory.
+        output_dir: Directory to extract into. If None, the directory holding
+            the archive.
         files: Optional subset of entry paths to extract. If None, extracts all.
         options: Extraction policy. If None, defaults are used.
 
@@ -251,7 +252,7 @@ def plan_extraction(
         ExtractPlan: The resulting plan.
     """
     archive_path = Path(archive)
-    out_dir = Path.cwd() if output_dir is None else Path(output_dir)
+    out_dir = archive_path.resolve().parent if output_dir is None else Path(output_dir)
     opts = ExtractOptions() if options is None else options
 
     try:
@@ -418,7 +419,7 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
 
         Args:
             archive: Path to the archive file.
-            output_dir: Directory to extract to. If None, extracts to current directory.
+            output_dir: Directory to extract to. If None, extracts beside the archive.
             files: Optional list of files to extract from the archive. If None, extracts all files.
             options: Extraction policy. If None, defaults are used.
 

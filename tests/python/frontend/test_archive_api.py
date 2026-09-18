@@ -124,6 +124,28 @@ class TestExtractJob:
         assert isinstance(result, JobResult)
         assert result.ok is False
 
+    def test_output_dir_defaults_to_the_archives_own_directory(
+        self, temp_dir: Path, monkeypatch
+    ):
+        """Test that omitting output_dir plans beside the archive, not in the cwd."""
+        nested: Path = temp_dir / "nested"
+        nested.mkdir()
+        monkeypatch.chdir(temp_dir)
+
+        plan = ExtractJob.from_archive(nested / "missing.tar.zst").plan
+
+        assert plan.output_dir == nested.resolve()
+
+    def test_output_dir_default_ignores_a_relative_archive_path(
+        self, temp_dir: Path, monkeypatch
+    ):
+        """Test that a relative archive path still resolves to a real directory."""
+        monkeypatch.chdir(temp_dir)
+
+        plan = ExtractJob.from_archive("missing.tar.zst").plan
+
+        assert plan.output_dir == temp_dir.resolve()
+
 
 class TestArchiveRoundTrip:
     """Test end-to-end archive -> extract round-trip."""
