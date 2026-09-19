@@ -78,21 +78,23 @@ def benchmark(
                             EXIT_USAGE,
                         )
 
-        app.echo(message=f"Running benchmarks on: {file}")
-        app.echo(message=f"Repeats: {repeats}")
+        lines: list[str] = [
+            f"Running benchmarks on: {file}",
+            f"Repeats: {repeats}",
+        ]
         if algo_list:
-            app.echo(message=f"Algorithms: {', '.join(algo_list)}")
+            lines.append(f"Algorithms: {', '.join(algo_list)}")
 
         if strategy_list:
-            app.echo(message=f"Strategies: {', '.join(strategy_list)}")
+            lines.append(f"Strategies: {', '.join(strategy_list)}")
 
         if level_list is not None:
             level_str: str = ", ".join(
                 str(object=level) if level is not None else "auto"
                 for level in level_list
             )
-            app.echo(message=f"Levels: {level_str}")
-        app.echo()
+            lines.append(f"Levels: {level_str}")
+        print("\n".join(lines) + "\n")
 
         results = benchmark_file(
             src=file,
@@ -110,9 +112,9 @@ def benchmark(
         print_results(results)
 
         if update_cache:
-            app.echo()
+            print()
             succeed("Speed cache updated\n")
-            app.echo()
+            print()
 
     except KeyboardInterrupt:
         cancelled("Benchmark")

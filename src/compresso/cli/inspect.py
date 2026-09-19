@@ -101,23 +101,25 @@ def _inspect_archive(file: Path, output_json: bool, show_entries: bool) -> None:
                 }
                 for entry in plan.entries
             ]
-        app.echo(message=json.dumps(obj=data, indent=2))
+        print(json.dumps(obj=data, indent=2))
         return
 
-    app.echo(message=f"File:          {file}")
-    app.echo(message=f"Format:        {fmt}")
-    app.echo(message=f"Entries:       {len(plan.entries)}")
-    app.echo(message=f"Total size:    {format_size(size_bytes=total_size)}")
-    app.echo(message=f"Archive size:  {format_size(size_bytes=archive_size)}")
+    lines: list[str] = [
+        f"File:          {file}",
+        f"Format:        {fmt}",
+        f"Entries:       {len(plan.entries)}",
+        f"Total size:    {format_size(size_bytes=total_size)}",
+        f"Archive size:  {format_size(size_bytes=archive_size)}",
+    ]
 
     if total_size:
         ratio: int | float = (archive_size / total_size) * 100
-        app.echo(message=f"Compression:   {ratio:.1f}% of original")
+        lines.append(f"Compression:   {ratio:.1f}% of original")
+
+    print("\n".join(lines))
 
     if show_entries:
-        app.echo()
-        for entry in plan.entries:
-            app.echo(message=_entry_detail_line(entry))
+        print("\n" + "\n".join(_entry_detail_line(entry) for entry in plan.entries))
 
 
 def inspect(
@@ -171,11 +173,10 @@ def inspect(
                 "estimated_decomp_s": result.estimated_decomp_s,
                 "reason": result.reason,
             }
-            app.echo(message=json.dumps(obj=data, indent=2))
+            print(json.dumps(obj=data, indent=2))
             return
 
-        app.echo(message=f"File: {result.path}")
-        app.echo()
+        print(f"File: {result.path}\n")
 
         if not result.is_compresso:
             reason = f"\n  Reason: {result.reason}" if result.reason else ""
@@ -185,51 +186,47 @@ def inspect(
             reason = f"\n  Reason: {result.reason}" if result.reason else ""
             fail(f"Invalid file header{reason}", EXIT_USAGE)
 
-        succeed("Valid Compresso file")
-        app.echo()
-        app.echo(
-            message=f"Algorithm:       {result.algo_name or 'Unknown'} (ID: {result.algo_id})"
-        )
-        app.echo(message=f"Version:         {result.version}")
-        app.echo()
+        succeed("Valid Compresso file\n")
+
+        lines: list[str] = [
+            f"Algorithm:       {result.algo_name or 'Unknown'} (ID: {result.algo_id})",
+            f"Version:         {result.version}",
+            "",
+        ]
 
         if result.level is not None:
-            app.echo(message=f"Level:           {result.level}")
+            lines.append(f"Level:           {result.level}")
 
         else:
-            app.echo(message="Level:           auto")
+            lines.append("Level:           auto")
 
         if result.orig_size:
-            app.echo(
-                message=f"Original size:   {format_size(size_bytes=result.orig_size)}"
-            )
+            lines.append(f"Original size:   {format_size(size_bytes=result.orig_size)}")
 
         compressed_size: int = file.stat().st_size
-        app.echo(message=f"Compressed size: {format_size(size_bytes=compressed_size)}")
+        lines.append(f"Compressed size: {format_size(size_bytes=compressed_size)}")
 
         if result.orig_size:
             ratio: int | float = (compressed_size / result.orig_size) * 100
-            app.echo(message=f"Compression:     {ratio:.1f}% of original")
+            lines.append(f"Compression:     {ratio:.1f}% of original")
 
-        app.echo()
-        app.echo(
-            message=f"Backend available:  {'Yes' if result.backend_available else 'No'}"
-        )
-        app.echo(
-            message=f"Streaming support:  {'Yes' if result.has_streaming else 'No'}"
-        )
-        app.echo(
-            message=f"Can decompress:     {'Yes' if result.can_decompress else 'No'}"
-        )
+        lines += [
+            "",
+            f"Backend available:  {'Yes' if result.backend_available else 'No'}",
+            f"Streaming support:  {'Yes' if result.has_streaming else 'No'}",
+            f"Can decompress:     {'Yes' if result.can_decompress else 'No'}",
+        ]
 
         if result.estimated_decomp_s:
-            app.echo(
-                message=f"Est. decomp time:   {format_time(seconds=result.estimated_decomp_s)}\n"
+            lines.append(
+                f"Est. decomp time:   {format_time(seconds=result.estimated_decomp_s)}"
             )
+            lines.append("")
+
+        print("\n".join(lines))
 
         if not result.can_decompress and result.reason:
-            app.echo()
-            app.echo(message=app.style(text=f"⚠ {result.reason}", fg="yellow"))
+            app.echo(message=app.style(text=f"\n⚠ {result.reason}", fg="yellow"))
 
     except KeyboardInterrupt:
         cancelled("Inspection")

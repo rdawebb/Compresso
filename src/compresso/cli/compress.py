@@ -71,14 +71,16 @@ def _compress_one_file(
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
     if not quiet:
-        app.echo(message=f"Compressing: {plan.src}")
-        app.echo(message=f"Output:      {plan.dest}")
-        app.echo(message=f"Algorithm:   {plan.backend_name}")
+        lines: list[str] = [
+            f"Compressing: {plan.src}",
+            f"Output:      {plan.dest}",
+            f"Algorithm:   {plan.backend_name}",
+        ]
         if not fmt:
-            app.echo(message=f"Strategy:    {strategy}")
+            lines.append(f"Strategy:    {strategy}")
         if level is not None:
-            app.echo(message=f"Level:       {level}")
-        app.echo()
+            lines.append(f"Level:       {level}")
+        print("\n".join(lines) + "\n")
 
     start_time: float = time.time()
 
@@ -102,21 +104,16 @@ def _compress_one_file(
     )
 
     if not quiet:
-        succeed("Compression successful!")
-        app.echo()
-        app.echo(
-            message=f"  Original size:   {format_size(size_bytes=plan.input_size)}"
+        print()
+        succeed("Compression successful!\n")
+        print(
+            f"  Original size:   {format_size(size_bytes=plan.input_size)}\n"
+            f"  Compressed size: {format_size(size_bytes=compressed_size)}\n"
+            f"  Ratio:           {ratio:.1f}% of original\n"
+            f"  Time:            {format_time(seconds=elapsed)}\n"
+            f"  Speed:           {speed_mbs:.2f} MB/s\n"
+            f"  Saved:           {format_size(size_bytes=plan.input_size - compressed_size)}\n"
         )
-        app.echo(
-            message=f"  Compressed size: {format_size(size_bytes=compressed_size)}"
-        )
-        app.echo(message=f"  Ratio:           {ratio:.1f}% of original")
-        app.echo(message=f"  Time:            {format_time(seconds=elapsed)}")
-        app.echo(message=f"  Speed:           {speed_mbs:.2f} MB/s")
-        app.echo(
-            message=f"  Saved:           {format_size(size_bytes=plan.input_size - compressed_size)}"
-        )
-        app.echo()
 
 
 def _archive_many(
@@ -149,13 +146,12 @@ def _archive_many(
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
     if not quiet:
-        app.echo(message=f"Archiving:   {plan.entry_count} source(s)")
-        app.echo(message=f"Output:      {plan.output}")
-        app.echo(message=f"Format:      {plan.options.format}")
-        app.echo(
-            message=f"Input size:  {format_size(size_bytes=plan.total_input_size)}"
+        print(
+            f"Archiving:   {plan.entry_count} source(s)\n"
+            f"Output:      {plan.output}\n"
+            f"Format:      {plan.options.format}\n"
+            f"Input size:  {format_size(size_bytes=plan.total_input_size)}\n"
         )
-        app.echo()
 
     start_time: float = time.time()
 
@@ -175,13 +171,13 @@ def _archive_many(
     archive_size: int = plan.output.stat().st_size
 
     if not quiet:
+        print()
         succeed("Archive created!")
-        app.echo(
-            message=f"  Input size:   {format_size(size_bytes=plan.total_input_size)}"
+        print(
+            f"  Input size:   {format_size(size_bytes=plan.total_input_size)}\n"
+            f"  Archive size: {format_size(size_bytes=archive_size)}\n"
+            f"  Time:         {format_time(seconds=elapsed)}\n"
         )
-        app.echo(message=f"  Archive size: {format_size(size_bytes=archive_size)}")
-        app.echo(message=f"  Time:         {format_time(seconds=elapsed)}")
-        app.echo()
 
 
 def compress(

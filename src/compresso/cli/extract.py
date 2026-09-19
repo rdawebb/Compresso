@@ -57,7 +57,7 @@ def list_entries(entries: list[ArchiveEntry]) -> None:
         target = f" -> {entry.link_target}" if entry.is_symlink else ""
 
         # "1023.99 KB" is the widest format_size gives
-        app.echo(message=f"{size:>10}  {'  ' * depth}{entry.path}{target}")
+        print(f"{size:>10}  {'  ' * depth}{entry.path}{target}")
 
 
 def _extract_archive(
@@ -89,10 +89,11 @@ def _extract_archive(
         return
 
     if not quiet:
-        app.echo(message=f"Extracting: {plan.archive}")
-        app.echo(message=f"Output dir: {plan.output_dir}")
-        app.echo(message=f"Entries:    {len(plan.entries)}")
-        app.echo()
+        print(
+            f"Extracting: {plan.archive}\n"
+            f"Output dir: {plan.output_dir}\n"
+            f"Entries:    {len(plan.entries)}\n"
+        )
 
     start_time: float = time.time()
 
@@ -113,9 +114,10 @@ def _extract_archive(
 
     if not quiet:
         succeed("Extraction successful!")
-        app.echo(message=f"  Entries: {len(plan.entries)}")
-        app.echo(message=f"  Time:    {format_time(seconds=elapsed)}")
-        app.echo()
+        print(
+            f"  Entries: {len(plan.entries)}\n"
+            f"  Time:    {format_time(seconds=elapsed)}\n"
+        )
 
 
 def _decompress_one_file(
@@ -148,12 +150,14 @@ def _decompress_one_file(
     insp = plan.inspection
 
     if not quiet:
-        app.echo(message=f"Decompressing: {plan.src}")
-        app.echo(message=f"Output:        {plan.dest}")
-        app.echo(message=f"Format:        {plan.format or insp.algo_name}")
+        lines: list[str] = [
+            f"Decompressing: {plan.src}",
+            f"Output:        {plan.dest}",
+            f"Format:        {plan.format or insp.algo_name}",
+        ]
         if insp.orig_size:
-            app.echo(message=f"Original size: {format_size(size_bytes=insp.orig_size)}")
-        app.echo()
+            lines.append(f"Original size: {format_size(size_bytes=insp.orig_size)}")
+        print("\n".join(lines) + "\n")
 
     start_time: float = time.time()
 
@@ -178,17 +182,13 @@ def _decompress_one_file(
     )
 
     if not quiet:
-        succeed("Decompression successful!")
-        app.echo()
-        app.echo(
-            message=f"  Compressed size:   {format_size(size_bytes=compressed_size)}"
+        succeed("Decompression successful!\n")
+        print(
+            f"  Compressed size:   {format_size(size_bytes=compressed_size)}\n"
+            f"  Decompressed size: {format_size(size_bytes=decompressed_size)}\n"
+            f"  Time:              {format_time(seconds=elapsed)}\n"
+            f"  Speed:             {speed_mbs:.2f} MB/s\n"
         )
-        app.echo(
-            message=f"  Decompressed size: {format_size(size_bytes=decompressed_size)}"
-        )
-        app.echo(message=f"  Time:              {format_time(seconds=elapsed)}")
-        app.echo(message=f"  Speed:             {speed_mbs:.2f} MB/s")
-        app.echo()
 
 
 def extract(
