@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Annotated
 
-from .._core import BackendError, Error, HeaderError, detect_format, format_is_archive
+from .._core import BackendError, Error, HeaderError
 from ..frontend.api import DecompressionJob
 from ..frontend.archive_api import (
     ArchiveEntry,
@@ -15,7 +15,7 @@ from ..frontend.archive_api import (
     OverwriteMode,
 )
 from ._app import app
-from ._dispatch import resolve_single_output
+from ._dispatch import looks_like_archive, resolve_single_output
 from ._render import (
     BAR_THRESHOLD,
     EXIT_USAGE,
@@ -58,22 +58,6 @@ def list_entries(entries: list[ArchiveEntry]) -> None:
 
         # "1023.99 KB" is the widest format_size gives
         app.echo(message=f"{size:>10}  {'  ' * depth}{entry.path}{target}")
-
-
-def _looks_like_archive(path: Path) -> bool:
-    """Return whether `path`'s own bytes say it holds many entries.
-
-    Args:
-        path: The path to check.
-
-    Returns:
-        True if the path looks like an archive, False otherwise.
-    """
-    try:
-        return bool(format_is_archive(detect_format(str(object=path))))
-
-    except Exception:
-        return False
 
 
 def _extract_archive(
@@ -239,6 +223,7 @@ def extract(
     ] = False,
 ) -> None:
     """Unpack archives and compressed files.
+    \f
 
     Each input is identified by its own magic bytes rather than its name: an
     archive is unpacked into a directory, and a single-file container, a
@@ -249,8 +234,6 @@ def extract(
 
     Extraction refuses to touch an existing file unless either `--overwrite`
     or `--skip-existing` is explicitly used.
-
-    \f
 
     Args:
         inputs: The archives or compressed files to unpack.
@@ -283,7 +266,7 @@ def extract(
 
     try:
         for source in inputs:
-            if _looks_like_archive(source):
+            if looks_like_archive(source):
                 _extract_archive(source, output, list_only, options, quiet)
 
             else:

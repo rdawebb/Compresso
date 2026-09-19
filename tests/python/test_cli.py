@@ -354,6 +354,73 @@ class TestInspectAndList:
         assert result.exit_code == EXIT_OK
         assert "zstd" in result.output
 
+    def test_inspect_archive_summary_omits_entries(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that inspecting an archive shows only a summary by default."""
+        archive = temp_dir / "out.zip"
+        runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(archive), "-f", "zip", "-q"]
+        )
+
+        result = runner.invoke(app, ["inspect", str(archive)])
+
+        assert result.exit_code == EXIT_OK
+        assert "Format:" in result.output
+        assert "Entries:       4" in result.output
+        assert "f0.bin" not in result.output
+
+    def test_inspect_archive_json_omits_entries_by_default(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that --json without --entries has no entries key."""
+        import json
+
+        archive = temp_dir / "out.zip"
+        runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(archive), "-f", "zip", "-q"]
+        )
+
+        result = runner.invoke(app, ["inspect", str(archive), "--json"])
+
+        assert result.exit_code == EXIT_OK
+        data = json.loads(result.output)
+        assert data["is_archive"] is True
+        assert data["entry_count"] == 4
+        assert "entries" not in data
+
+    def test_inspect_entries_lists_each_entry(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that --entries lists each entry's own detail."""
+        archive = temp_dir / "out.zip"
+        runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(archive), "-f", "zip", "-q"]
+        )
+
+        result = runner.invoke(app, ["inspect", str(archive), "--entries"])
+
+        assert result.exit_code == EXIT_OK
+        assert "f0.bin" in result.output
+
+    def test_inspect_entries_json_lists_each_entry(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that --entries --json includes a populated entries list."""
+        import json
+
+        archive = temp_dir / "out.zip"
+        runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(archive), "-f", "zip", "-q"]
+        )
+
+        result = runner.invoke(app, ["inspect", str(archive), "--entries", "--json"])
+
+        assert result.exit_code == EXIT_OK
+        data = json.loads(result.output)
+        assert len(data["entries"]) == 4
+        assert any("f0.bin" in entry["path"] for entry in data["entries"])
+
 
 class TestExitCodes:
     """Test 0 success, 1 the operation failed, 2 the request could not be made."""

@@ -38,7 +38,6 @@ def benchmark(
     ] = False,
 ) -> None:
     """Run compression benchmarks on a file.
-
     \f
 
     Args:

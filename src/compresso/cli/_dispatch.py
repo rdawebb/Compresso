@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .._core import detect_format, format_is_archive
 from ..frontend.api import STANDALONE_FORMATS, canonical_standalone_format
 
 # Formats whose container holds many entries
@@ -49,6 +50,22 @@ def infer_format(output: Path | None) -> str | None:
             return candidate
 
     return None
+
+
+def looks_like_archive(path: Path) -> bool:
+    """Return whether `path`'s own bytes say it holds many entries.
+
+    Args:
+        path: The path to check.
+
+    Returns:
+        True if the path looks like an archive, False otherwise.
+    """
+    try:
+        return bool(format_is_archive(detect_format(str(object=path))))
+
+    except Exception:
+        return False
 
 
 def is_archive_format(fmt: str | None) -> bool:

@@ -227,14 +227,13 @@ def compress(
     ] = False,
 ) -> None:
     """Compress files or directories.
+    \f
 
     One file becomes a single-file container: a Compresso `.comp` by default,
     or `-f gz`/`zst`/`xz`/`bz2`/`lz4` for a standalone one; a directory, or
     more than one input, becomes an archive (`zip` unless told otherwise);
     a recognisable extension on `-o` picks the format on its own, and `-f`
     overrides it.
-
-    \f
 
     Args:
         inputs: The files and directories to compress.
