@@ -44,7 +44,7 @@ def stored_names(archive: Path) -> set[str]:
     Returns:
         The set of stored entry names.
     """
-    return {name.rstrip("/") for name, *_ in list_archive_contents(str(archive))}
+    return {entry["path"].rstrip("/") for entry in list_archive_contents(str(archive))}
 
 
 class TestStoredEntryNames:

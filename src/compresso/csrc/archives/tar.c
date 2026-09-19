@@ -48,7 +48,9 @@ static void *tar_create_writer(const char *output_path, int compression_level) {
 }
 
 static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
-                         FILE *data, CoreContext *ctx) {
+                         FILE *data, const char *source_path,
+                         CoreContext *ctx) {
+  (void)source_path; // tar streams from the already-open `data`
   TarWriter *writer = (TarWriter *)writer_ptr;
   struct archive_entry *ae = archive_entry_new();
 

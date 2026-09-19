@@ -551,7 +551,8 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
 
   const StandaloneFormat *fmt = find_standalone_format(format);
   if (!fmt) {
-    PyErr_Format(PyExc_ValueError, "Format not supported: %s", format);
+    PyErr_Format(PyExc_ValueError, "Format cannot compress a single file: %s",
+                 format_name_string(format));
     return NULL;
   }
 
@@ -632,7 +633,8 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
   const StandaloneFormat *fmt = find_standalone_format(format);
 
   if (!fmt) {
-    PyErr_Format(PyExc_ValueError, "Unsupported format: %s", format);
+    PyErr_Format(PyExc_ValueError, "Format cannot decompress a single file: %s",
+                 format_name_string(format));
     goto fail;
   }
 

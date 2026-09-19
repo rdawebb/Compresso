@@ -21,9 +21,23 @@ from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 _NON_ARCHIVE_FORMATS = {"gz", "gzip", "bz2", "bzip2", "xz", "zst", "zstd", "lz4"}
 
 
-@dataclass
+@dataclass(frozen=True)
 class ArchiveEntry:
-    """Represents a file or directory in an archive."""
+    """One file, directory or symlink recorded in an archive.
+
+    Attributes:
+        path: The entry's path within the archive.
+        size: Uncompressed size in bytes; 0 for a directory.
+        is_dir: Whether the entry is a directory.
+        is_symlink: Whether the entry is a symbolic link.
+        mtime: Modification time, in seconds since the epoch.
+        mode: Unix permission bits.
+        link_target: A symlink's stored target, None for anything else.
+        compressed_size: Stored size of this entry's data, or None for a
+            container that compresses the whole stream at once.
+        crc: CRC-32 of the uncompressed data, or None as above.
+        method: The container's own compression method code, or None as above.
+    """
 
     path: str
     size: int = 0
@@ -32,6 +46,9 @@ class ArchiveEntry:
     mtime: float = 0.0
     mode: int = 0
     link_target: str | None = None
+    compressed_size: int | None = None
+    crc: int | None = None
+    method: int | None = None
 
 
 @dataclass
@@ -243,7 +260,8 @@ def plan_extraction(
 
     Args:
         archive: Source archive path.
-        output_dir: Directory to extract into. If None, the current directory.
+        output_dir: Directory to extract into. If None, the directory holding
+            the archive.
         files: Optional subset of entry paths to extract. If None, extracts all.
         options: Extraction policy. If None, defaults are used.
 
@@ -251,7 +269,7 @@ def plan_extraction(
         ExtractPlan: The resulting plan.
     """
     archive_path = Path(archive)
-    out_dir = Path.cwd() if output_dir is None else Path(output_dir)
+    out_dir = archive_path.resolve().parent if output_dir is None else Path(output_dir)
     opts = ExtractOptions() if options is None else options
 
     try:
@@ -286,13 +304,19 @@ def plan_extraction(
     try:
         entries: list[ArchiveEntry] = [
             ArchiveEntry(
-                path=name,
-                size=size,
-                is_dir=kind == "dir",
-                is_symlink=kind == "symlink",
-                link_target=target,
+                path=raw["path"],
+                size=raw["size"],
+                is_dir=raw["type"] == "dir",
+                is_symlink=raw["type"] == "symlink",
+                mtime=raw["mtime"],
+                mode=raw["mode"],
+                link_target=raw["link_target"],
+                # Absent for a container without per-entry compression
+                compressed_size=raw.get("compressed_size"),
+                crc=raw.get("crc"),
+                method=raw.get("method"),
             )
-            for name, size, kind, target in list_archive_contents(str(archive_path))
+            for raw in list_archive_contents(str(archive_path))
         ]
 
     except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
@@ -418,7 +442,7 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
 
         Args:
             archive: Path to the archive file.
-            output_dir: Directory to extract to. If None, extracts to current directory.
+            output_dir: Directory to extract to. If None, extracts beside the archive.
             files: Optional list of files to extract from the archive. If None, extracts all files.
             options: Extraction policy. If None, defaults are used.
 

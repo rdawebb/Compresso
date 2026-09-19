@@ -8,6 +8,7 @@ from compresso import (
     BackendError,
     Error,
     HeaderError,
+    _core,
     compress_file,
     decompress_file,
 )
@@ -276,3 +277,41 @@ class TestDecompressFile:
         decompress_file(str(compressed_file), str(decompressed_file), "")
 
         assert decompressed_file.read_text(encoding="utf-8") == content
+
+
+class TestStandaloneFormatErrors:
+    """Test refusing a format the single-file entry points cannot use.
+
+    An archive format resolves to a real `Format` but has no standalone
+    handler, so it reaches the "not supported" branch.
+    """
+
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
+    def test_archive_format_is_refused_not_fatal(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str
+    ):
+        """Test that an archive format raises rather than reading a bad pointer."""
+        with pytest.raises(ValueError, match="cannot compress a single file"):
+            _core.compress_standalone(
+                str(sample_text_file), str(temp_dir / f"out.{fmt}"), fmt, 3
+            )
+
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
+    def test_archive_format_is_refused_when_decompressing(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str
+    ):
+        """Test that the decompression side has the same defect."""
+        with pytest.raises(ValueError, match="cannot decompress a single file"):
+            _core.decompress_standalone(
+                str(sample_text_file), str(temp_dir / "out.bin"), fmt
+            )
+
+    @pytest.mark.parametrize("fmt", ["bogus", "comp", ""])
+    def test_unknown_format_is_refused(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str
+    ):
+        """Test that a name that resolves to no format at all is refused earlier."""
+        with pytest.raises(ValueError):
+            _core.compress_standalone(
+                str(sample_text_file), str(temp_dir / "out.bin"), fmt, 3
+            )

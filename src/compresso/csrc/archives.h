@@ -28,6 +28,13 @@ typedef struct {
   uint32_t mode;        // Unix permissions
   char *symlink_target; // Target of the symlink (if applicable)
   void *internal_data;  // Backend-specific data
+
+  // Per-entry compression detail, which only a container that compresses each
+  // entry separately has; zero means "not recorded"
+  int has_compression_detail;
+  uint64_t compressed_size; // Stored size of this entry's data
+  uint32_t crc;             // CRC-32 of the uncompressed data
+  uint16_t method;          // The container's own compression method code
 } ArchiveEntry;
 
 // ---- Archive Backend Interface ----
@@ -46,8 +53,10 @@ typedef struct CArchive {
   void *(*create_writer)(const char *output_path, int compression_level);
 
   // `ctx` is NULL-tolerant and covers this entry's data only
+  // `source_path` is the entry's original filesystem path, valid for the
+  // duration of this call only
   int (*add_entry)(void *writer, const ArchiveEntry *entry, FILE *data,
-                   CoreContext *ctx);
+                   const char *source_path, CoreContext *ctx);
 
   // Some backends defer the real work to here, so this takes a context too
   int (*close_writer)(void *writer, CoreContext *ctx);

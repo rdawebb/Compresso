@@ -23,6 +23,7 @@ from compresso.frontend.archive_api import (
     ExtractPlan,
     OverwriteMode,
     plan_archive,
+    plan_extraction,
 )
 
 
@@ -123,6 +124,28 @@ class TestExtractJob:
 
         assert isinstance(result, JobResult)
         assert result.ok is False
+
+    def test_output_dir_defaults_to_the_archives_own_directory(
+        self, temp_dir: Path, monkeypatch
+    ):
+        """Test that omitting output_dir plans beside the archive, not in the cwd."""
+        nested: Path = temp_dir / "nested"
+        nested.mkdir()
+        monkeypatch.chdir(temp_dir)
+
+        plan = ExtractJob.from_archive(nested / "missing.tar.zst").plan
+
+        assert plan.output_dir == nested.resolve()
+
+    def test_output_dir_default_ignores_a_relative_archive_path(
+        self, temp_dir: Path, monkeypatch
+    ):
+        """Test that a relative archive path still resolves to a real directory."""
+        monkeypatch.chdir(temp_dir)
+
+        plan = ExtractJob.from_archive("missing.tar.zst").plan
+
+        assert plan.output_dir == temp_dir.resolve()
 
 
 class TestArchiveRoundTrip:
@@ -863,3 +886,118 @@ class TestExtractionIsAllOrNothing:
 
         assert result.ok, result.error
         assert (out_dir / "..data").read_bytes() == b"xxxxx"
+
+
+class TestArchiveEntryMetadata:
+    """Test what `plan_extraction` reports about each entry."""
+
+    @staticmethod
+    def _entries(tmp: Path, fmt: str, ext: str) -> dict[str, ArchiveEntry]:
+        """Test that a small tree is archived and return its entries keyed by path."""
+        tree = tmp / "tree"
+        tree.mkdir()
+        (tree / "big.bin").write_bytes(b"compressible " * 4000)
+        (tree / "small.txt").write_text("hello")
+        (tree / "nested").mkdir()
+
+        archive = tmp / f"out{ext}"
+        assert (
+            ArchiveJob.from_paths(
+                sources=[tree], output=archive, options=ArchiveOptions(format=fmt)
+            )
+            .run()
+            .ok
+        )
+
+        plan = plan_extraction(archive, tmp / "dest")
+        assert plan.can_run, plan.reason_if_unavailable
+        return {e.path.rstrip("/"): e for e in plan.entries}
+
+    def test_entry_is_immutable(self, temp_dir: Path) -> None:
+        """Test that entries describe an archive that has already been written."""
+        entry = ArchiveEntry(path="a.txt")
+
+        with pytest.raises((AttributeError, TypeError)):
+            entry.path = "b.txt"  # ty: ignore[invalid-assignment] - intended
+
+    @pytest.mark.parametrize(("fmt", "ext"), [("tar", ".tar"), ("zip", ".zip")])
+    def test_mtime_is_reported(self, temp_dir: Path, fmt: str, ext: str) -> None:
+        """Test that mtime crosses the boundary rather than staying at its default."""
+        entries = self._entries(temp_dir, fmt, ext)
+
+        entry = entries["tree/big.bin"]
+        assert entry.mtime > 0
+        # Written moments ago, so it cannot be far from now
+        assert abs(entry.mtime - (temp_dir / "tree" / "big.bin").stat().st_mtime) < 60
+
+    @pytest.mark.parametrize(("fmt", "ext"), [("tar", ".tar"), ("zip", ".zip")])
+    def test_mode_is_reported(self, temp_dir: Path, fmt: str, ext: str) -> None:
+        """Test that mode is reported as permission bits rather than 0."""
+        entries = self._entries(temp_dir, fmt, ext)
+
+        assert entries["tree/big.bin"].mode & 0o400, "expected a readable file mode"
+        assert entries["tree/nested"].mode & 0o100, "expected a searchable dir mode"
+
+    @pytest.mark.parametrize(("fmt", "ext"), [("tar", ".tar"), ("zip", ".zip")])
+    def test_size_and_type_still_reported(
+        self, temp_dir: Path, fmt: str, ext: str
+    ) -> None:
+        """Test that the fields that already worked keep working."""
+        entries = self._entries(temp_dir, fmt, ext)
+
+        assert entries["tree/big.bin"].size == len(b"compressible " * 4000)
+        assert entries["tree/nested"].is_dir is True
+        assert entries["tree/big.bin"].is_dir is False
+
+    def test_zip_reports_per_entry_compression(self, temp_dir: Path) -> None:
+        """Test that zip compresses each entry, so it can say how well."""
+        entries = self._entries(temp_dir, "zip", ".zip")
+        entry = entries["tree/big.bin"]
+
+        assert entry.compressed_size is not None
+        assert 0 < entry.compressed_size < entry.size
+        assert entry.crc is not None
+        assert entry.method is not None
+
+    def test_tar_omits_per_entry_compression(self, temp_dir: Path) -> None:
+        """Test that tar compresses the whole stream, so there is nothing to report."""
+        entries = self._entries(temp_dir, "tar", ".tar")
+        entry = entries["tree/big.bin"]
+
+        assert entry.compressed_size is None
+        assert entry.crc is None
+        assert entry.method is None
+
+    def test_zip_crc_matches_the_content(self, temp_dir: Path) -> None:
+        """Test that the CRC reported is the one zip actually stored."""
+        import zlib
+
+        entries = self._entries(temp_dir, "zip", ".zip")
+        payload = b"compressible " * 4000
+
+        assert entries["tree/big.bin"].crc == zlib.crc32(payload)
+
+    def test_symlink_target_is_reported(self, temp_dir: Path) -> None:
+        """Test that tar records a symlink as one, with its target."""
+        tree = temp_dir / "tree"
+        tree.mkdir()
+        (tree / "real.txt").write_text("hello")
+        os.symlink("real.txt", tree / "link")
+
+        archive = temp_dir / "out.tar"
+        assert (
+            ArchiveJob.from_paths(
+                sources=[tree], output=archive, options=ArchiveOptions(format="tar")
+            )
+            .run()
+            .ok
+        )
+
+        entries = {
+            e.path.rstrip("/"): e
+            for e in plan_extraction(archive, temp_dir / "dest").entries
+        }
+
+        assert entries["tree/link"].is_symlink is True
+        assert entries["tree/link"].link_target == "real.txt"
+        assert entries["tree/real.txt"].link_target is None
