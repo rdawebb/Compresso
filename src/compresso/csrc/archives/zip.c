@@ -58,11 +58,10 @@ static void *zip_create_writer(const char *output_path, int compression_level) {
 }
 
 static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
-                         FILE *data, CoreContext *ctx) {
+                         FILE *data, const char *source_path,
+                         CoreContext *ctx) {
   ZipWriter *writer = (ZipWriter *)writer_ptr;
 
-  // No progress is reported here; libzip buffers each source and compresses
-  // everything inside zip_close
   int cancelled = ctx_advance(ctx, 0);
   if (cancelled != 0) {
     // Remembered so the close discards the buffered sources
@@ -96,33 +95,11 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
       return -1;
     }
 
-    // Read file contents into memory (libzip requires seekable sources)
-    fseek(data, 0, SEEK_END);
-    long file_size = ftell(data);
-    fseek(data, 0, SEEK_SET);
-
-    if (file_size < 0) {
-      PyErr_SetString(PyExc_IOError, "Failed to get file size");
-      return -1;
-    }
-
-    char *buffer = safe_malloc(file_size);
-    if (!buffer) {
-      return -1;
-    }
-
-    size_t read = fread(buffer, 1, file_size, data);
-    if (read != (size_t)file_size) {
-      free(buffer);
-      PyErr_SetString(PyExc_IOError, "Failed to read file data");
-      return -1;
-    }
-
-    // Create ZIP source from buffer
-    zip_source_t *source = zip_source_buffer(
-        writer->archive, buffer, (zip_uint64_t)file_size, 1); // 1 = free buffer
+    // libzip opens, reads and closes the file itself, lazily, usually from
+    // zip_close - so neither the whole file nor an open fd is held here
+    zip_source_t *source = zip_source_file(writer->archive, source_path, 0,
+                                           ZIP_LENGTH_TO_END);
     if (!source) {
-      free(buffer);
       PyErr_Format(PyExc_IOError, "Failed to create ZIP source: %s",
                    zip_strerror(writer->archive));
       return -1;
@@ -151,6 +128,8 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
       zip_file_set_mtime(writer->archive, (zip_uint64_t)idx, entry->mtime, 0);
     }
 
+    // No progress is reported here; libzip buffers each source and compresses
+    // everything inside zip_close
     return 0;
   }
 

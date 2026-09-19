@@ -228,7 +228,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, full_path);
         return -1;
       }
-      int ret = archive->add_entry(writer, ae, f, ctx);
+      int ret = archive->add_entry(writer, ae, f, full_path, ctx);
       fclose(f);
       entry_free(ae);
       if (ret != 0) {
@@ -236,7 +236,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
         return ret;
       }
     } else if (ae->type == ENTRY_DIR) {
-      archive->add_entry(writer, ae, NULL, ctx);
+      archive->add_entry(writer, ae, NULL, full_path, ctx);
       entry_free(ae);
       int ret =
           add_directory_recursive(writer, archive, full_path, prefix_len, ctx);
@@ -245,7 +245,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
         return ret;
       }
     } else {
-      archive->add_entry(writer, ae, NULL, ctx);
+      archive->add_entry(writer, ae, NULL, full_path, ctx);
       entry_free(ae);
     }
   }
@@ -535,7 +535,7 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
           create_entry_from_path(input_paths[i], prefix_len);
       if (!dir_entry)
         return -1;
-      int dir_ret = archive->add_entry(writer, dir_entry, NULL, ctx);
+      int dir_ret = archive->add_entry(writer, dir_entry, NULL, input_paths[i], ctx);
       entry_free(dir_entry);
       if (dir_ret != 0)
         return dir_ret;
@@ -556,7 +556,7 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
         return -1;
       }
 
-      int ret = archive->add_entry(writer, entry, f, ctx);
+      int ret = archive->add_entry(writer, entry, f, input_paths[i], ctx);
       fclose(f);
       entry_free(entry);
 

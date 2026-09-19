@@ -53,8 +53,10 @@ typedef struct CArchive {
   void *(*create_writer)(const char *output_path, int compression_level);
 
   // `ctx` is NULL-tolerant and covers this entry's data only
+  // `source_path` is the entry's original filesystem path, valid for the
+  // duration of this call only
   int (*add_entry)(void *writer, const ArchiveEntry *entry, FILE *data,
-                   CoreContext *ctx);
+                   const char *source_path, CoreContext *ctx);
 
   // Some backends defer the real work to here, so this takes a context too
   int (*close_writer)(void *writer, CoreContext *ctx);
