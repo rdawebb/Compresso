@@ -111,6 +111,53 @@ int fs_conflict_path(const char *path, int n, char *out, size_t out_size) {
   return 0;
 }
 
+int fs_resolve_conflict(const char *path, int overwrite_existing,
+                        char *resolved, size_t resolved_size) {
+  size_t len = strlen(path);
+  if (len >= resolved_size) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  memcpy(resolved, path, len + 1);
+
+  if (overwrite_existing == 2) // OVERWRITE: unconditional
+    return 0;
+
+  fs_stat st;
+  if (fs_stat_path(resolved, &st) != 0)
+    return 0; // Nothing there yet
+
+  if (overwrite_existing == 0) { // ERROR
+    errno = EEXIST;
+    return -1;
+  }
+
+  if (overwrite_existing == 1) // SKIP
+    return 1;
+
+  // RENAME: probe "name 2", "name 3", ... until one is free
+  for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
+    char candidate[FS_PATH_MAX];
+    if (fs_conflict_path(path, n, candidate, sizeof(candidate)) != 0) {
+      errno = ENAMETOOLONG;
+      return -1;
+    }
+
+    if (fs_stat_path(candidate, &st) != 0) {
+      size_t clen = strlen(candidate);
+      if (clen >= resolved_size) {
+        errno = ENAMETOOLONG;
+        return -1;
+      }
+      memcpy(resolved, candidate, clen + 1);
+      return 0;
+    }
+  }
+
+  errno = EEXIST;
+  return -1;
+}
+
 int fs_mkdir_p(const char *path, uint32_t mode) {
   char tmp[FS_PATH_MAX];
   size_t len = strlen(path);

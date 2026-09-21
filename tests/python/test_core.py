@@ -87,7 +87,7 @@ class TestCompressFile:
             str(sample_text_file), str(output_file), "zlib", "balanced", 6
         )
 
-        assert result == 0
+        assert result == str(output_file)
         assert output_file.exists()
         assert output_file.stat().st_size > 0
 
@@ -102,7 +102,7 @@ class TestCompressFile:
             str(sample_text_file), str(output_file), algo, "balanced", 6
         )
 
-        assert result == 0
+        assert result == str(output_file)
         assert output_file.exists()
 
     @pytest.mark.parametrize("strategy", ["fast", "balanced", "max_ratio"])
@@ -116,7 +116,7 @@ class TestCompressFile:
             str(sample_text_file), str(output_file), "zlib", strategy, 6
         )
 
-        assert result == 0
+        assert result == str(output_file)
         assert output_file.exists()
 
     @pytest.mark.parametrize("level", [1, 3, 6, 9])
@@ -130,7 +130,7 @@ class TestCompressFile:
             str(sample_text_file), str(output_file), "zlib", "balanced", level
         )
 
-        assert result == 0
+        assert result == str(output_file)
         assert output_file.exists()
 
     def test_compress_nonexistent_file(self, temp_dir: Path):
@@ -156,7 +156,7 @@ class TestCompressFile:
             str(large_compressible_file), str(output_file), "zlib", "balanced", 6
         )
 
-        assert result == 0
+        assert result == str(output_file)
         assert output_file.exists()
         # Highly compressible content should be much smaller
         assert output_file.stat().st_size < large_compressible_file.stat().st_size / 10

@@ -42,10 +42,18 @@ def compress_file(
     strategy: str,
     level: int,
     *,
+    overwrite: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
-) -> int:
-    """Compress a file using the specified algorithm and strategy."""
+) -> str:
+    """Compress a file using the specified algorithm and strategy.
+
+    `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
+    applied to the destination file.
+
+    Returns the path actually written, which RENAME may have changed from
+    `dst_path`; SKIP returns `dst_path` unchanged and writes nothing.
+    """
 
 def decompress_file(
     src_path: str,
@@ -154,10 +162,18 @@ def compress_standalone(
     format: str,
     compression_level: int = ...,
     *,
+    overwrite: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
-) -> None:
-    """Compress a file into a standalone container (.gz, .bz2, .xz, .zst, .lz4)."""
+) -> str:
+    """Compress a file into a standalone container (.gz, .bz2, .xz, .zst, .lz4).
+
+    `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
+    applied to the destination file.
+
+    Returns the path actually written, which RENAME may have changed from
+    `output_path`; SKIP returns `output_path` unchanged and writes nothing.
+    """
 
 def decompress_standalone(
     input_path: str,

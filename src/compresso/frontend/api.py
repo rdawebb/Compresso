@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Self
 
@@ -21,6 +21,7 @@ from ..backend.file_inspect import InspectResult
 from ..backend.file_inspect import inspect as inspect_file
 from ..backend.speeds import get_estimated_speeds
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
+from .archive_api import _OVERWRITE_CODES, OverwriteMode
 
 MB = 1024 * 1024
 
@@ -75,12 +76,14 @@ class CompressionOptions:
             Compresso container, which is the only one that records the
             algorithm used; a standalone format is chosen by `algo` instead and
             ignores `strategy`.
+        overwrite: What to do when the destination file already exists.
     """
 
     algo: str | None = None
     strategy: str = "balanced"
     level: int | None = None
     format: str | None = None
+    overwrite: OverwriteMode = OverwriteMode.RENAME
 
 
 @dataclass(frozen=True)
@@ -164,6 +167,25 @@ def plan_compression(
 
     else:
         dest_path = Path(dest)
+
+    try:
+        # Plain strings still work at runtime
+        options = replace(options, overwrite=OverwriteMode(options.overwrite))
+
+    except ValueError:
+        return CompressionPlan(
+            src=src_path,
+            dest=dest_path,
+            options=options,
+            input_size=0,
+            backend_name=None,
+            estimated_seconds=None,
+            can_compress=False,
+            reason_if_unavailable=(
+                f"Unknown overwrite mode: {options.overwrite!r} "
+                f"(expected one of {', '.join(OverwriteMode)})"
+            ),
+        )
 
     if options.format and standalone is None:
         return CompressionPlan(
@@ -347,6 +369,12 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
     ) -> JobResult:
         """Run the compression job.
 
+        A destination that already exists is handled per `plan.options.overwrite`
+        (default `RENAME`, the same numbered-sibling behavior archiving and
+        extraction use); when that renames the file, `self.plan.dest` (and the
+        plan on the returned `JobResult`) is updated to the path actually
+        written.
+
         Args:
             progress: Optional progress callback, invoked with
                 `(fraction, done_bytes, total_bytes)`; raising aborts the job
@@ -378,26 +406,32 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
             if standalone:
                 # A standalone container has no Compresso header to record the
                 # algorithm in, so the format itself is the codec
-                compress_standalone(
+                actual_path = compress_standalone(
                     input_path=str(object=self.plan.src),
                     output_path=str(object=self.plan.dest),
                     format=standalone,
                     compression_level=lvl,
+                    overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
                     progress=to_core_progress(progress, total),
                     cancel=cancel,
                 )
 
             else:
-                compress_file(
+                actual_path = compress_file(
                     src_path=str(object=self.plan.src),
                     dst_path=str(object=self.plan.dest),
                     algo=self.plan.backend_name or "",
                     strategy=self.plan.options.strategy or "",
                     level=lvl,
+                    overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
                     progress=to_core_progress(progress, total),
                     cancel=cancel,
                 )
 
+            # RENAME may have picked a different name than what was requested;
+            # keep `self.plan.dest` truthful for callers that inspect it after
+            # a successful run
+            self.plan = replace(self.plan, dest=Path(actual_path))
             return JobResult(
                 ok=True,
                 error=None,

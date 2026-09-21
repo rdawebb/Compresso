@@ -209,6 +209,55 @@ class TestCompressRoundTrip:
         )
         assert restored.read_bytes() == payload.read_bytes()
 
+    def test_compress_renames_clashing_output_by_default(
+        self, payload: Path, temp_dir: Path
+    ) -> None:
+        """Test that compressing twice to the same output renames the second file
+        rather than overwriting the first."""
+        dest = temp_dir / "out.comp"
+
+        first = runner.invoke(app, ["compress", str(payload), "-o", str(dest), "-q"])
+        assert first.exit_code == EXIT_OK
+        original_bytes = dest.read_bytes()
+
+        second = runner.invoke(app, ["compress", str(payload), "-o", str(dest), "-q"])
+        assert second.exit_code == EXIT_OK
+
+        suffix = " 2" if sys.platform == "darwin" else " (2)"
+        renamed = temp_dir / f"out{suffix}.comp"
+
+        assert dest.read_bytes() == original_bytes
+        assert renamed.is_file()
+
+    def test_compress_error_on_conflict_refuses_existing_output(
+        self, payload: Path, temp_dir: Path
+    ) -> None:
+        """Test that --error-on-conflict refuses to touch an existing output."""
+        dest = temp_dir / "out.comp"
+        runner.invoke(app, ["compress", str(payload), "-o", str(dest), "-q"])
+
+        result = runner.invoke(
+            app,
+            ["compress", str(payload), "-o", str(dest), "--error-on-conflict", "-q"],
+        )
+        assert result.exit_code == EXIT_FAILED
+
+    def test_compress_skip_existing_leaves_the_output_untouched(
+        self, payload: Path, temp_dir: Path
+    ) -> None:
+        """Test that --skip-existing leaves the first output as-is and still succeeds."""
+        dest = temp_dir / "out.comp"
+        runner.invoke(app, ["compress", str(payload), "-o", str(dest), "-q"])
+        original_bytes = dest.read_bytes()
+
+        result = runner.invoke(
+            app,
+            ["compress", str(payload), "-o", str(dest), "--skip-existing", "-q"],
+        )
+
+        assert result.exit_code == EXIT_OK
+        assert dest.read_bytes() == original_bytes
+
 
 class TestArchiveRoundTrip:
     """Test archive and extract, end to end."""

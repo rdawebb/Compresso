@@ -176,21 +176,28 @@ static PyObject *encode_fs_path_list(PyObject *list, const char ***out_paths,
 
 static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
                                   PyObject *kwargs) {
-  static char *kwlist[] = {"src_path", "dst_path", "algo",   "strategy",
-                           "level",    "progress", "cancel", NULL};
+  static char *kwlist[] = {"src_path", "dst_path", "algo",
+                           "strategy", "level",    "overwrite",
+                           "progress", "cancel",   NULL};
 
   PyObject *src_path_obj;
   PyObject *dst_path_obj;
   const char *algo_name = NULL;
   const char *strategy_name = NULL;
   int level = -1;
+  int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OO|ssi$OO", kwlist, &src_path_obj, &dst_path_obj,
-          &algo_name, &strategy_name, &level, &progress, &cancel)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|ssi$iOO", kwlist,
+                                   &src_path_obj, &dst_path_obj, &algo_name,
+                                   &strategy_name, &level, &overwrite_existing,
+                                   &progress, &cancel)) {
     return NULL; // Error already set
+  }
+
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    return NULL;
   }
 
   CoreContext ctx;
@@ -226,7 +233,10 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  int return_code = compress_file(src_path, dst_path, algo, strat, level, &ctx);
+  char actual_path[FS_PATH_MAX];
+  int return_code =
+      compress_file(src_path, dst_path, algo, strat, level, overwrite_existing,
+                    actual_path, sizeof(actual_path), &ctx);
 
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
@@ -240,7 +250,8 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  return PyLong_FromLong(0);
+  // The path actually written, which RENAME may have changed vs asked for
+  return PyUnicode_DecodeFSDefault(actual_path);
 }
 
 static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
@@ -307,9 +318,9 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
 
 static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
                                    PyObject *kwargs) {
-  static char *kwlist[] = {"output_path", "format",     "input_paths",
-                           "compression_level", "overwrite", "progress",
-                           "cancel",      NULL};
+  static char *kwlist[] = {
+      "output_path", "format",   "input_paths", "compression_level",
+      "overwrite",   "progress", "cancel",      NULL};
 
   PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
@@ -326,11 +337,7 @@ static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
     return NULL; // Error already set
   }
 
-  if (overwrite_existing < 0 || overwrite_existing > 3) {
-    PyErr_Format(PyExc_ValueError,
-                 "overwrite must be 0 (error), 1 (skip), 2 (overwrite) or "
-                 "3 (rename), not %d",
-                 overwrite_existing);
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
     return NULL;
   }
 
@@ -437,11 +444,7 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   policy.max_total_size = (uint64_t)max_total_size;
   policy.max_depth = (uint32_t)max_depth;
 
-  if (policy.overwrite_existing < 0 || policy.overwrite_existing > 3) {
-    PyErr_Format(PyExc_ValueError,
-                 "overwrite must be 0 (error), 1 (skip), 2 (overwrite) or "
-                 "3 (rename), not %d",
-                 policy.overwrite_existing);
+  if (validate_overwrite_arg(policy.overwrite_existing) != 0) {
     return NULL;
   }
 
@@ -537,19 +540,25 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
                                         PyObject *kwargs) {
   static char *kwlist[] = {
       "input_path", "output_path", "format", "compression_level",
-      "progress",   "cancel",      NULL};
+      "overwrite",  "progress",    "cancel", NULL};
 
   PyObject *input_path_obj = NULL;
   PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
   int compression_level = -1;
+  int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OOs|i$OO", kwlist, &input_path_obj, &output_path_obj,
-          &format_name, &compression_level, &progress, &cancel)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOs|i$iOO", kwlist,
+                                   &input_path_obj, &output_path_obj,
+                                   &format_name, &compression_level,
+                                   &overwrite_existing, &progress, &cancel)) {
     return NULL; // Error already set
+  }
+
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    return NULL;
   }
 
   CoreContext ctx;
@@ -581,7 +590,10 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
     return NULL; // Error already set
   }
 
-  int rc = fmt->compress_file(input_path, output_path, compression_level, &ctx);
+  char actual_path[FS_PATH_MAX];
+  int rc = compress_standalone_file(fmt, input_path, output_path,
+                                    compression_level, overwrite_existing,
+                                    actual_path, sizeof(actual_path), &ctx);
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
   if (rc != 0) {
@@ -593,7 +605,9 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  Py_RETURN_NONE;
+  // The path actually written, which RENAME may have changed from what was
+  // asked for
+  return PyUnicode_DecodeFSDefault(actual_path);
 }
 
 static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
@@ -764,7 +778,8 @@ static PyMethodDef CoreMethods[] = {
      "Extract an archive file to a specified directory, subject to the "
      "keyword-only extraction policy."},
     {"list_archive_contents", (PyCFunction)py_list_archive_contents,
-     METH_VARARGS | METH_KEYWORDS, "List the (path, size, type, link_target) of each entry in an archive "
+     METH_VARARGS | METH_KEYWORDS,
+     "List the (path, size, type, link_target) of each entry in an archive "
      "file."},
 
     {"compress_standalone", (PyCFunction)py_compress_standalone,

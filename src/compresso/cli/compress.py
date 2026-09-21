@@ -38,6 +38,7 @@ def _compress_one_file(
     algo: str | None,
     strategy: str,
     level: int | None,
+    overwrite: OverwriteMode,
     quiet: bool,
 ) -> None:
     """Compress a single file into a one-file container.
@@ -49,6 +50,7 @@ def _compress_one_file(
         algo: The algorithm to use for compression.
         strategy: The strategy to use for compression.
         level: The compression level to use.
+        overwrite: What to do when the destination file already exists.
         quiet: Whether to suppress progress output.
     """
     algo_lower: str | None = algo.lower() if algo else None
@@ -57,6 +59,7 @@ def _compress_one_file(
         strategy=strategy.lower(),
         level=level,
         format=fmt,
+        overwrite=overwrite,
     )
 
     job = CompressionJob.from_file(src=source, dest=None, options=options)
@@ -95,7 +98,10 @@ def _compress_one_file(
 
     exit_for_result(result, "Compression")
 
-    compressed_size: int = plan.dest.stat().st_size
+    # RENAME may have written somewhere other than `dest`; job.plan is updated
+    # in place on success to reflect the path actually written
+    actual_dest: Path = job.plan.dest
+    compressed_size: int = actual_dest.stat().st_size
     ratio: int | float = (
         (compressed_size / plan.input_size) * 100 if plan.input_size > 0 else 0
     )
@@ -106,6 +112,8 @@ def _compress_one_file(
     if not quiet:
         print()
         succeed("Compression successful!\n")
+        if actual_dest != dest:
+            print(f"  Renamed to:      {actual_dest}")
         print(
             f"  Original size:   {format_size(size_bytes=plan.input_size)}\n"
             f"  Compressed size: {format_size(size_bytes=compressed_size)}\n"
@@ -259,10 +267,10 @@ def compress(
     a recognisable extension on `-o` picks the format on its own, and `-f`
     overrides it.
 
-    When creating an archive, a clashing output name by default gets a
-    platform-native numbered sibling (`name 2.ext` on macOS, `name (2).ext`
-    elsewhere); use `--overwrite`, `--skip-existing`, or `--error-on-conflict`
-    to change that. Single-file compression always overwrites.
+    A clashing output name by default gets a platform-native numbered sibling
+    (`name 2.ext` on macOS, `name (2).ext` elsewhere), for an archive and a
+    single-file container alike; use `--overwrite`, `--skip-existing`, or
+    `--error-on-conflict` to change that.
 
     Args:
         inputs: The files and directories to compress.
@@ -271,10 +279,10 @@ def compress(
         algo: Algorithm for the Compresso container (default: auto).
         strategy: Strategy for the Compresso container (default: balanced).
         level: Compression level (default: the format's own).
-        overwrite: If True, replace an existing output archive.
-        skip_existing: If True, leave an existing output archive untouched.
+        overwrite: If True, replace an existing output.
+        skip_existing: If True, leave an existing output untouched.
         error_on_conflict: If True, fail instead of renaming a clashing
-            output archive.
+            output.
         quiet: If True, suppress all output.
     """
     if sum([overwrite, skip_existing, error_on_conflict]) > 1:
@@ -325,6 +333,7 @@ def compress(
                 algo=algo,
                 strategy=strategy,
                 level=level,
+                overwrite=overwrite_mode,
                 quiet=quiet,
             )
 

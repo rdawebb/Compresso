@@ -28,10 +28,6 @@ ExtractionPolicy extraction_policy_default(void) {
   return EXTRACTION_POLICY_DEFAULT;
 }
 
-// Bounds the "name 2", "name 3", ... probe used by create_archive and
-// extract_entries, so a pathological conflict can't loop forever
-#define FS_MAX_CONFLICT_ATTEMPTS 1000
-
 // ---- ArchiveEntry Helpers ----
 
 static ArchiveEntry *entry_alloc(void) {
@@ -575,67 +571,6 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
 
 // ---- Archive Operations ----
 
-// Applies the ExtractionPolicy.overwrite_existing scheme to output_path
-// before any archive bytes are written; writes the safe-to-create path into
-// `resolved`. Returns 1 to skip writing (SKIP found a destination), 0 to
-// proceed with `resolved`, -1 on error (PyErr set)
-//
-// Uses a plain stat rather than the exclusive-open probe extract_entries
-// uses for files: a codec pipeline only produces output_path at the very
-// end of create_archive, so there's no atomic point to check against, and a
-// concurrent creator can still win the race
-static int resolve_archive_output_path(const char *output_path,
-                                       int overwrite_existing, char *resolved,
-                                       size_t resolved_size) {
-  size_t len = strlen(output_path);
-  if (len >= resolved_size) {
-    PyErr_Format(PyExc_ValueError, "Archive path too long: %s", output_path);
-    return -1;
-  }
-  memcpy(resolved, output_path, len + 1);
-
-  if (overwrite_existing == 2) // OVERWRITE: today's unconditional truncate
-    return 0;
-
-  fs_stat st;
-  if (fs_stat_path(resolved, &st) != 0)
-    return 0;
-
-  if (overwrite_existing == 0) { // ERROR
-    errno = EEXIST;
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, resolved);
-    return -1;
-  }
-
-  if (overwrite_existing == 1) // SKIP: leave the existing archive untouched
-    return 1;
-
-  // RENAME: probe "name 2", "name 3", ... until one is free
-  for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
-    char candidate[FS_PATH_MAX];
-    if (fs_conflict_path(output_path, n, candidate, sizeof(candidate)) != 0) {
-      PyErr_Format(PyExc_ValueError, "Archive path too long to rename: %s",
-                   output_path);
-      return -1;
-    }
-
-    if (fs_stat_path(candidate, &st) != 0) {
-      size_t clen = strlen(candidate);
-      if (clen >= resolved_size) {
-        PyErr_Format(PyExc_ValueError, "Archive path too long to rename: %s",
-                     output_path);
-        return -1;
-      }
-      memcpy(resolved, candidate, clen + 1);
-      return 0;
-    }
-  }
-
-  PyErr_Format(PyExc_OSError, "Too many conflicting names for: %s",
-               output_path);
-  return -1;
-}
-
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths,
                    int overwrite_existing, char *out_actual_path,
@@ -657,17 +592,25 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   }
 
   char resolved_path[FS_PATH_MAX];
-  int resolve_ret = resolve_archive_output_path(
-      output_path, overwrite_existing, resolved_path, sizeof(resolved_path));
+  int resolve_ret = fs_resolve_conflict(output_path, overwrite_existing,
+                                        resolved_path, sizeof(resolved_path));
   if (resolve_ret != 0) {
-    if (resolve_ret > 0 && out_actual_path) {
-      size_t len = strlen(resolved_path);
-      if (len >= out_actual_path_size)
-        len = out_actual_path_size - 1;
-      memcpy(out_actual_path, resolved_path, len);
-      out_actual_path[len] = '\0';
+    if (resolve_ret > 0) { // SKIP is a successful no-op
+      if (out_actual_path) {
+        size_t len = strlen(resolved_path);
+        if (len >= out_actual_path_size)
+          len = out_actual_path_size - 1;
+        memcpy(out_actual_path, resolved_path, len);
+        out_actual_path[len] = '\0';
+      }
+      return 0;
     }
-    return resolve_ret > 0 ? 0 : -1; // SKIP is a successful no-op
+    if (errno == ENAMETOOLONG) {
+      PyErr_Format(PyExc_ValueError, "Archive path too long: %s", output_path);
+    } else {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_path);
+    }
+    return -1;
   }
   output_path = resolved_path;
 

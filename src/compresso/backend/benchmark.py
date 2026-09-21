@@ -22,7 +22,7 @@ def compress(
     algo: str | None = None,
     strategy: str = "balanced",
     level: int | None = None,
-) -> int:
+) -> str:
     """Compress a file using the specified algorithm and strategy.
 
     Args:
@@ -33,7 +33,7 @@ def compress(
         level: Compression level to use (default: None)
 
     Returns:
-        The number of bytes written to the output file
+        The path actually written to.
     """
     lvl: int = -1 if level is None else int(level)
     return compress_file(
@@ -42,6 +42,9 @@ def compress(
         algo=algo or "",
         strategy=strategy or "",
         level=lvl,
+        # dest_path is a NamedTemporaryFile that already exists by design,
+        # not a user-facing conflict
+        overwrite=2,
     )
 
 

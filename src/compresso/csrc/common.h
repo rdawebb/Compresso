@@ -218,8 +218,13 @@ void set_backend_error(const CBackend *backend, const char *op,
 
 // ---- Public API ----
 
+// `overwrite_existing` follows the same 0-3 scheme as create_archive's
+// parameter of the same name; on success the path actually written (which
+// RENAME may have changed) is copied into `out_actual_path`
 int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
-                  Strategy strategy, int level, CoreContext *ctx);
+                  Strategy strategy, int level, int overwrite_existing,
+                  char *out_actual_path, size_t out_actual_path_size,
+                  CoreContext *ctx);
 
 int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
                     CoreContext *ctx);
