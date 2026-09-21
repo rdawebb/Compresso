@@ -85,6 +85,16 @@ int fs_mkstemp(char *template_path);
 // component only
 int fs_mkdir_p(const char *path, uint32_t mode);
 
+// Create `path` (parent must already exist), failing with errno EEXIST if
+// it's already there; unlike fs_mkdir_p's internal helper, which tolerates
+// EEXIST for idempotency, plain mkdir(2)/_wmkdir is atomic against a racer
+int fs_mkdir_exclusive(const char *path, uint32_t mode);
+
+// Write the n-th (n >= 2) conflict-suffixed variant of `path` into `out`
+// (at least FS_PATH_MAX bytes): "name N.ext" on macOS, "name (N).ext"
+// elsewhere; returns -1 if the result would not fit in `out_size`
+int fs_conflict_path(const char *path, int n, char *out, size_t out_size);
+
 // Apply POSIX permission bits to an existing path; on Windows only the
 // read-only bit is honoured
 int fs_chmod(const char *path, uint32_t mode);

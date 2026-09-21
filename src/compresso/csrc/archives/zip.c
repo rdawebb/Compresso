@@ -9,6 +9,10 @@
 #include <time.h>
 #include <zip.h>
 
+#ifndef ZIP_LENGTH_TO_END
+#define ZIP_LENGTH_TO_END 0
+#endif
+
 // ---- ZIP Writer ----
 
 // Below libzip 1.6, progress callbacks are not available
@@ -97,8 +101,8 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
 
     // libzip opens, reads and closes the file itself, lazily, usually from
     // zip_close - so neither the whole file nor an open fd is held here
-    zip_source_t *source = zip_source_file(writer->archive, source_path, 0,
-                                           ZIP_LENGTH_TO_END);
+    zip_source_t *source =
+        zip_source_file(writer->archive, source_path, 0, ZIP_LENGTH_TO_END);
     if (!source) {
       PyErr_Format(PyExc_IOError, "Failed to create ZIP source: %s",
                    zip_strerror(writer->archive));

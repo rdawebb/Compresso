@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "common.h"
+#include "fsutil.h"
 #include "standalone.h"
 #include "validate.h"
 #include <Python.h>
@@ -306,22 +307,31 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
 
 static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
                                    PyObject *kwargs) {
-  static char *kwlist[] = {"output_path",       "format",   "input_paths",
-                           "compression_level", "progress", "cancel",
-                           NULL};
+  static char *kwlist[] = {"output_path", "format",     "input_paths",
+                           "compression_level", "overwrite", "progress",
+                           "cancel",      NULL};
 
   PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
   PyObject *input_paths_obj = NULL;
   int compression_level = -1;
+  int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OsO|i$OO", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OsO|i$iOO", kwlist,
                                    &output_path_obj, &format_name,
                                    &input_paths_obj, &compression_level,
-                                   &progress, &cancel)) {
+                                   &overwrite_existing, &progress, &cancel)) {
     return NULL; // Error already set
+  }
+
+  if (overwrite_existing < 0 || overwrite_existing > 3) {
+    PyErr_Format(PyExc_ValueError,
+                 "overwrite must be 0 (error), 1 (skip), 2 (overwrite) or "
+                 "3 (rename), not %d",
+                 overwrite_existing);
+    return NULL;
   }
 
   CompressionPipeline pipe = pipeline_from_name(format_name, compression_level);
@@ -364,7 +374,10 @@ static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  int result = create_archive(output_path, &pipe, input_paths, num_paths, &ctx);
+  char actual_path[FS_PATH_MAX];
+  int result = create_archive(output_path, &pipe, input_paths, num_paths,
+                              overwrite_existing, actual_path,
+                              sizeof(actual_path), &ctx);
 
   Py_DECREF(output_path_bytes);
   Py_DECREF(paths_keepalive);
@@ -378,7 +391,9 @@ static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  Py_RETURN_NONE;
+  // The path actually written, which RENAME may have changed from what was
+  // asked for
+  return PyUnicode_DecodeFSDefault(actual_path);
 }
 
 static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
@@ -422,10 +437,10 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   policy.max_total_size = (uint64_t)max_total_size;
   policy.max_depth = (uint32_t)max_depth;
 
-  if (policy.overwrite_existing < 0 || policy.overwrite_existing > 2) {
+  if (policy.overwrite_existing < 0 || policy.overwrite_existing > 3) {
     PyErr_Format(PyExc_ValueError,
-                 "overwrite must be 0 (error), 1 (skip) or 2 (overwrite), "
-                 "not %d",
+                 "overwrite must be 0 (error), 1 (skip), 2 (overwrite) or "
+                 "3 (rename), not %d",
                  policy.overwrite_existing);
     return NULL;
   }

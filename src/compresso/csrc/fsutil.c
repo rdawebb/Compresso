@@ -79,6 +79,38 @@ int fs_is_stream_path(const char *path) {
 #endif
 }
 
+int fs_conflict_path(const char *path, int n, char *out, size_t out_size) {
+  char *last_sep = fs_last_sep(path);
+  const char *base = last_sep ? last_sep + 1 : path;
+
+  // Skip leading dots so a hidden file's name is not mistaken for an extension
+  const char *scan = base;
+  while (*scan == '.')
+    scan++;
+
+  const char *dot = strrchr(scan, '.');
+
+  // Handle tarball double-extension
+  if (dot && (size_t)(dot - scan) >= 4 && strncmp(dot - 4, ".tar", 4) == 0)
+    dot -= 4;
+
+  size_t stem_len = dot ? (size_t)(dot - path) : strlen(path);
+  const char *ext = dot ? dot : "";
+
+#if defined(__APPLE__)
+  int written =
+      snprintf(out, out_size, "%.*s %d%s", (int)stem_len, path, n, ext);
+#else
+  int written =
+      snprintf(out, out_size, "%.*s (%d)%s", (int)stem_len, path, n, ext);
+#endif
+
+  if (written < 0 || (size_t)written >= out_size)
+    return -1;
+
+  return 0;
+}
+
 int fs_mkdir_p(const char *path, uint32_t mode) {
   char tmp[FS_PATH_MAX];
   size_t len = strlen(path);
@@ -441,6 +473,16 @@ static int fs_mkdir_one(const char *path, uint32_t mode) {
   return 0;
 }
 
+int fs_mkdir_exclusive(const char *path, uint32_t mode) {
+  (void)mode; // Windows has no POSIX permission bits on directories
+
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+
+  return _wmkdir(wpath); // EEXIST left on errno, unlike fs_mkdir_one
+}
+
 int fs_chmod(const char *path, uint32_t mode) {
   wchar_t wpath[FS_PATH_MAX];
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
@@ -585,6 +627,10 @@ static int fs_mkdir_one(const char *path, uint32_t mode) {
   if (mkdir(path, (mode_t)mode) != 0 && errno != EEXIST)
     return -1;
   return 0;
+}
+
+int fs_mkdir_exclusive(const char *path, uint32_t mode) {
+  return mkdir(path, (mode_t)mode); // EEXIST left on errno, unlike fs_mkdir_one
 }
 
 int fs_chmod(const char *path, uint32_t mode) {

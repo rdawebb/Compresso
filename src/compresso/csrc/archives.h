@@ -83,7 +83,7 @@ typedef struct {
                       // files
   int allow_absolute_paths; // always 0; field exists for documentation/future
                             // use
-  int overwrite_existing;   // 0 = error, 1 = skip, 2 = overwrite
+  int overwrite_existing;   // 0 = error, 1 = skip, 2 = overwrite, 3 = rename
   int allow_special_files;  // 0 = reject device nodes, FIFOs, sockets (default)
   int preserve_permissions; // 1 = restore mode bits, 0 = apply umask
   int preserve_timestamps;  // 1 = restore mtime, 0 = use current time
@@ -177,9 +177,13 @@ int pipeline_is_valid(const CompressionPipeline *p);
 
 // ---- High-Level Operations ----
 
+// `overwrite_existing` follows the same 0-3 scheme as
+// `ExtractionPolicy.overwrite_existing`; on success, the path actually written
+// (which RENAME may have changed) is copied into `out_actual_path`
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths,
-                   CoreContext *ctx);
+                   int overwrite_existing, char *out_actual_path,
+                   size_t out_actual_path_size, CoreContext *ctx);
 
 // Entries are validated against `policy` (NULL = extraction_policy_default())
 // in a first pass over the archive

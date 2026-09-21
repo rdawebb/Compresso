@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -281,10 +282,41 @@ class TestArchiveRoundTrip:
             "    0.00 B" + " " * 2 + "x/y.txt",
         ]
 
-    def test_extract_refuses_to_overwrite_by_default(
+    def test_extract_renames_clashing_top_level_dir_by_default(
         self, source_tree: Path, temp_dir: Path
     ) -> None:
-        """Test that extract refuses to overwrite by default."""
+        """Test that a repeat extraction renames the clashing top-level directory."""
+        archive = temp_dir / "out.tar"
+        dest = temp_dir / "dest"
+        runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
+        )
+
+        first = runner.invoke(app, ["extract", str(archive), "-o", str(dest), "-q"])
+        assert first.exit_code == EXIT_OK
+        before = sorted(p.name for p in dest.rglob("*") if p.is_file())
+
+        second = runner.invoke(app, ["extract", str(archive), "-o", str(dest), "-q"])
+        assert second.exit_code == EXIT_OK
+
+        after = sorted(p.name for p in dest.rglob("*") if p.is_file())
+        assert len(after) == 2 * len(before)
+        # No individual file was renamed; the set of file names is unchanged
+        assert after == sorted(before + before)
+
+        suffix = " 2" if sys.platform == "darwin" else " (2)"
+        top_level = sorted(p.name for p in dest.iterdir())
+        assert top_level == sorted([source_tree.name, source_tree.name + suffix])
+
+        renamed_dir = dest / (source_tree.name + suffix)
+        assert sorted(p.name for p in renamed_dir.iterdir()) == sorted(
+            p.name for p in (dest / source_tree.name).iterdir()
+        )
+
+    def test_extract_error_on_conflict_still_refuses(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that --error-on-conflict reproduces the old refuse-by-default behavior."""
         archive = temp_dir / "out.tar"
         dest = temp_dir / "dest"
         runner.invoke(
@@ -299,10 +331,93 @@ class TestArchiveRoundTrip:
         )
         assert (
             runner.invoke(
-                app, ["extract", str(archive), "-o", str(dest), "-q"]
+                app,
+                [
+                    "extract",
+                    str(archive),
+                    "-o",
+                    str(dest),
+                    "--error-on-conflict",
+                    "-q",
+                ],
             ).exit_code
             == EXIT_FAILED
         )
+
+    def test_compress_renames_clashing_archive_by_default(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that archiving twice to the same output renames the second archive rather
+        than overwriting the first."""
+        archive = temp_dir / "out.tar"
+
+        first = runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
+        )
+        assert first.exit_code == EXIT_OK
+        original_bytes = archive.read_bytes()
+
+        second = runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
+        )
+        assert second.exit_code == EXIT_OK
+
+        suffix = " 2" if sys.platform == "darwin" else " (2)"
+        renamed = temp_dir / f"out{suffix}.tar"
+
+        assert archive.read_bytes() == original_bytes
+        assert renamed.is_file()
+
+    def test_compress_error_on_conflict_still_refuses(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that --error-on-conflict refuses to touch an existing archive."""
+        archive = temp_dir / "out.tar"
+        runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "compress",
+                str(source_tree),
+                "-o",
+                str(archive),
+                "-f",
+                "tar",
+                "--error-on-conflict",
+                "-q",
+            ],
+        )
+        assert result.exit_code == EXIT_FAILED
+
+    def test_compress_skip_existing_leaves_the_archive_untouched(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that --skip-existing leaves the first archive as-is and still succeeds."""
+        archive = temp_dir / "out.tar"
+        runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
+        )
+        original_bytes = archive.read_bytes()
+
+        result = runner.invoke(
+            app,
+            [
+                "compress",
+                str(source_tree),
+                "-o",
+                str(archive),
+                "-f",
+                "tar",
+                "--skip-existing",
+                "-q",
+            ],
+        )
+
+        assert result.exit_code == EXIT_OK
+        assert archive.read_bytes() == original_bytes
 
     @pytest.mark.parametrize("flag", ["--overwrite", "--skip-existing"])
     def test_extract_over_existing_with_a_flag(
@@ -454,10 +569,18 @@ class TestExitCodes:
         result = runner.invoke(app, ["extract", str(payload)])
         assert result.exit_code == EXIT_USAGE
 
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            ["--overwrite", "--skip-existing"],
+            ["--overwrite", "--error-on-conflict"],
+            ["--skip-existing", "--error-on-conflict"],
+        ],
+    )
     def test_mutually_exclusive_flags_are_usage(
-        self, source_tree: Path, temp_dir: Path
+        self, source_tree: Path, temp_dir: Path, flags: list[str]
     ) -> None:
-        """Test that --overwrite with --skip-existing is contradictory."""
+        """Test that combining any two overwrite-mode flags is contradictory."""
         archive = temp_dir / "out.tar"
         runner.invoke(
             app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
@@ -465,13 +588,33 @@ class TestExitCodes:
 
         result = runner.invoke(
             app,
+            ["extract", str(archive), *flags, "-o", str(temp_dir / "d")],
+        )
+        assert result.exit_code == EXIT_USAGE
+        assert "mutually exclusive" in result.output
+
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            ["--overwrite", "--skip-existing"],
+            ["--overwrite", "--error-on-conflict"],
+            ["--skip-existing", "--error-on-conflict"],
+        ],
+    )
+    def test_compress_mutually_exclusive_flags_are_usage(
+        self, source_tree: Path, temp_dir: Path, flags: list[str]
+    ) -> None:
+        """Test that combining any two archive overwrite-mode flags is contradictory."""
+        result = runner.invoke(
+            app,
             [
-                "extract",
-                str(archive),
-                "--overwrite",
-                "--skip-existing",
+                "compress",
+                str(source_tree),
                 "-o",
-                str(temp_dir / "d"),
+                str(temp_dir / "out.tar"),
+                "-f",
+                "tar",
+                *flags,
             ],
         )
         assert result.exit_code == EXIT_USAGE
@@ -501,7 +644,10 @@ class TestExitCodes:
         )
         runner.invoke(app, ["extract", str(archive), "-o", str(dest), "-q"])
 
-        result = runner.invoke(app, ["extract", str(archive), "-o", str(dest), "-q"])
+        result = runner.invoke(
+            app,
+            ["extract", str(archive), "-o", str(dest), "--error-on-conflict", "-q"],
+        )
         assert result.exit_code == EXIT_FAILED
 
 

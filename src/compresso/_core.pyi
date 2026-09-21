@@ -79,10 +79,18 @@ def create_archive(
     input_paths: list[str],
     compression_level: int = ...,
     *,
+    overwrite: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
-) -> None:
-    """Create an archive from the given input paths in the given format."""
+) -> str:
+    """Create an archive from the given input paths in the given format.
+
+    `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
+    applied to the single destination archive.
+
+    Returns the path actually written, which RENAME may have changed from
+    `output_path`; SKIP returns `output_path` unchanged and writes nothing.
+    """
 
 def extract_archive(
     archive_path: str,
@@ -103,9 +111,9 @@ def extract_archive(
     The keyword-only arguments are the extraction policy; each defaults to the
     value in `extraction_policy_default()` in the C extension.
 
-    `overwrite` is 0 = error, 1 = skip, 2 = overwrite; `allow_symlinks` is 0 = deny,
-    1 = allow, 2 = rewrite to regular files; `max_total_size` and `max_depth`
-    treat 0 as unlimited.
+    `overwrite` is 0 = error, 1 = skip, 2 = overwrite, 3 = rename;
+    `allow_symlinks` is 0 = deny, 1 = allow, 2 = rewrite to regular files;
+    `max_total_size` and `max_depth` treat 0 as unlimited.
     """
 
 def detect_format(file_path: str) -> str:

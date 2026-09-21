@@ -211,6 +211,12 @@ def extract(
     skip_existing: Annotated[
         bool, app.Option("--skip-existing", help="Leave files that already exist")
     ] = False,
+    error_on_conflict: Annotated[
+        bool,
+        app.Option(
+            "--error-on-conflict", help="Fail instead of renaming a clashing file"
+        ),
+    ] = False,
     max_total_size: Annotated[
         int | None,
         app.Option(
@@ -232,8 +238,9 @@ def extract(
 
     The result is written beside its input unless `-o` is provided.
 
-    Extraction refuses to touch an existing file unless either `--overwrite`
-    or `--skip-existing` is explicitly used.
+    By default, a clashing name gets a platform-native numbered sibling
+    (`name 2.ext` on macOS, `name (2).ext` elsewhere); use `--overwrite`,
+    `--skip-existing`, or `--error-on-conflict` to change that.
 
     Args:
         inputs: The archives or compressed files to unpack.
@@ -243,12 +250,14 @@ def extract(
         list_only: If True, list archive contents without extracting.
         overwrite: If True, replace files that already exist.
         skip_existing: If True, leave files that already exist untouched.
+        error_on_conflict: If True, fail instead of renaming a clashing file.
         max_total_size: Cap on total extracted bytes (default: no cap).
         quiet: If True, suppress all output.
     """
-    if overwrite and skip_existing:
+    if sum([overwrite, skip_existing, error_on_conflict]) > 1:
         fail(
-            "Error: --overwrite and --skip-existing are mutually exclusive",
+            "Error: --overwrite, --skip-existing and --error-on-conflict "
+            "are mutually exclusive",
             EXIT_USAGE,
         )
 
@@ -259,8 +268,10 @@ def extract(
         mode = OverwriteMode.OVERWRITE
     elif skip_existing:
         mode = OverwriteMode.SKIP
-    else:
+    elif error_on_conflict:
         mode = OverwriteMode.ERROR
+    else:
+        mode = OverwriteMode.RENAME
 
     options = ExtractOptions(overwrite=mode, max_total_size=max_total_size or 0)
 

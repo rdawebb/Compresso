@@ -8,7 +8,7 @@ from typing import Annotated
 
 from .._core import BackendError, Error, HeaderError
 from ..frontend.api import CompressionJob, CompressionOptions
-from ..frontend.archive_api import ArchiveJob, ArchiveOptions
+from ..frontend.archive_api import ArchiveJob, ArchiveOptions, OverwriteMode
 from ._app import app
 from ._dispatch import (
     DEFAULT_ARCHIVE_FORMAT,
@@ -121,6 +121,7 @@ def _archive_many(
     output: Path | None,
     fmt: str,
     level: int | None,
+    overwrite: OverwriteMode,
     quiet: bool,
 ) -> None:
     """Pack several paths, or a directory, into one archive.
@@ -130,13 +131,16 @@ def _archive_many(
         output: The path to the output file or directory.
         fmt: The format to use for compression.
         level: The compression level to use.
+        overwrite: What to do when the destination archive already exists.
         quiet: Whether to suppress progress output.
     """
     destination: Path = (
         output if output is not None else default_archive_output(sources[0], fmt)
     )
 
-    options = ArchiveOptions(format=fmt.lower(), compression_level=level)
+    options = ArchiveOptions(
+        format=fmt.lower(), compression_level=level, overwrite=overwrite
+    )
     job = ArchiveJob.from_paths(
         sources=[str(object=s) for s in sources], output=destination, options=options
     )
@@ -168,11 +172,16 @@ def _archive_many(
 
     exit_for_result(result, "Archive")
 
-    archive_size: int = plan.output.stat().st_size
+    # RENAME may have written somewhere other than `destination`; job.plan is
+    # updated in place on success to reflect the path actually written
+    actual_output: Path = job.plan.output
+    archive_size: int = actual_output.stat().st_size
 
     if not quiet:
         print()
         succeed("Archive created!")
+        if actual_output != destination:
+            print(f"  Renamed to:   {actual_output}")
         print(
             f"  Input size:   {format_size(size_bytes=plan.total_input_size)}\n"
             f"  Archive size: {format_size(size_bytes=archive_size)}\n"
@@ -218,6 +227,25 @@ def compress(
         int | None,
         app.Option("--level", "-l", min=0, max=9, help="Compression level (0-9)"),
     ] = None,
+    overwrite: Annotated[
+        bool,
+        app.Option(
+            "--overwrite", help="Replace an archive that already exists at the output"
+        ),
+    ] = False,
+    skip_existing: Annotated[
+        bool,
+        app.Option(
+            "--skip-existing", help="Leave an existing output archive untouched"
+        ),
+    ] = False,
+    error_on_conflict: Annotated[
+        bool,
+        app.Option(
+            "--error-on-conflict",
+            help="Fail instead of renaming a clashing output archive",
+        ),
+    ] = False,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
@@ -231,6 +259,11 @@ def compress(
     a recognisable extension on `-o` picks the format on its own, and `-f`
     overrides it.
 
+    When creating an archive, a clashing output name by default gets a
+    platform-native numbered sibling (`name 2.ext` on macOS, `name (2).ext`
+    elsewhere); use `--overwrite`, `--skip-existing`, or `--error-on-conflict`
+    to change that. Single-file compression always overwrites.
+
     Args:
         inputs: The files and directories to compress.
         output: Where to write (default: named after the first input).
@@ -238,8 +271,28 @@ def compress(
         algo: Algorithm for the Compresso container (default: auto).
         strategy: Strategy for the Compresso container (default: balanced).
         level: Compression level (default: the format's own).
+        overwrite: If True, replace an existing output archive.
+        skip_existing: If True, leave an existing output archive untouched.
+        error_on_conflict: If True, fail instead of renaming a clashing
+            output archive.
         quiet: If True, suppress all output.
     """
+    if sum([overwrite, skip_existing, error_on_conflict]) > 1:
+        fail(
+            "Error: --overwrite, --skip-existing and --error-on-conflict "
+            "are mutually exclusive",
+            EXIT_USAGE,
+        )
+
+    if overwrite:
+        overwrite_mode = OverwriteMode.OVERWRITE
+    elif skip_existing:
+        overwrite_mode = OverwriteMode.SKIP
+    elif error_on_conflict:
+        overwrite_mode = OverwriteMode.ERROR
+    else:
+        overwrite_mode = OverwriteMode.RENAME
+
     try:
         if not inputs:
             fail("Error: No input paths given", EXIT_USAGE)
@@ -260,6 +313,7 @@ def compress(
                 output=output,
                 fmt=chosen or DEFAULT_ARCHIVE_FORMAT,
                 level=level,
+                overwrite=overwrite_mode,
                 quiet=quiet,
             )
 
