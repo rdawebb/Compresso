@@ -1,7 +1,7 @@
 """Type stubs for the _core C extension module."""
 
 from collections.abc import Callable
-from typing import Literal, TypeAlias, TypedDict
+from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 class Error(Exception):
     """Base error for compression operations."""
@@ -42,10 +42,18 @@ def compress_file(
     strategy: str,
     level: int,
     *,
+    overwrite: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
-) -> int:
-    """Compress a file using the specified algorithm and strategy."""
+) -> str:
+    """Compress a file using the specified algorithm and strategy.
+
+    `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
+    applied to the destination file.
+
+    Returns the path actually written, which RENAME may have changed from
+    `dst_path`; SKIP returns `dst_path` unchanged and writes nothing.
+    """
 
 def decompress_file(
     src_path: str,
@@ -79,10 +87,18 @@ def create_archive(
     input_paths: list[str],
     compression_level: int = ...,
     *,
+    overwrite: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
-) -> None:
-    """Create an archive from the given input paths in the given format."""
+) -> str:
+    """Create an archive from the given input paths in the given format.
+
+    `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
+    applied to the single destination archive.
+
+    Returns the path actually written, which RENAME may have changed from
+    `output_path`; SKIP returns `output_path` unchanged and writes nothing.
+    """
 
 def extract_archive(
     archive_path: str,
@@ -103,22 +119,42 @@ def extract_archive(
     The keyword-only arguments are the extraction policy; each defaults to the
     value in `extraction_policy_default()` in the C extension.
 
-    `overwrite` is 0 = error, 1 = skip, 2 = overwrite; `allow_symlinks` is 0 = deny,
-    1 = allow, 2 = rewrite to regular files; `max_total_size` and `max_depth`
-    treat 0 as unlimited.
+    `overwrite` is 0 = error, 1 = skip, 2 = overwrite, 3 = rename;
+    `allow_symlinks` is 0 = deny, 1 = allow, 2 = rewrite to regular files;
+    `max_total_size` and `max_depth` treat 0 as unlimited.
     """
+
+def detect_format(file_path: str) -> str:
+    """Name a file's format, from its magic bytes and then its extension."""
+
+def format_is_archive(format: str) -> bool:
+    """Return whether a format's container can hold more than one entry."""
 
 EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "special"]
 
-def list_archive_contents(
-    archive_path: str,
-) -> list[tuple[str, int, EntryTypeName, str | None]]:
-    """List the `(path, size, type, link_target)` of each entry in an archive.
+class ArchiveEntryDict(TypedDict):
+    """One archive entry, as `list_archive_contents` reports it.
 
-    `size` is the uncompressed size the archive declares for the entry (0 for
-    directories), it is not trusted for extraction limits; `link_target` is
-    the stored target of a symlink, and None for every other type.
+    `compressed_size`, `crc` and `method` are present only for a container that
+    compresses each entry separately. tar compresses the whole stream at once,
+    so those keys are absent rather than None.
     """
+
+    path: str
+    type: EntryTypeName
+    # Uncompressed size as the archive declares it (0 for directories); not
+    # trusted for extraction limits, which count the bytes actually written
+    size: int
+    mtime: int
+    mode: int
+    # The stored target of a symlink, and None for every other type
+    link_target: str | None
+    compressed_size: NotRequired[int]
+    crc: NotRequired[int]
+    method: NotRequired[int]
+
+def list_archive_contents(archive_path: str) -> list[ArchiveEntryDict]:
+    """Describe each entry in an archive."""
 
 def compress_standalone(
     input_path: str,
@@ -126,10 +162,18 @@ def compress_standalone(
     format: str,
     compression_level: int = ...,
     *,
+    overwrite: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
-) -> None:
-    """Compress a file into a standalone container (.gz, .bz2, .xz, .zst, .lz4)."""
+) -> str:
+    """Compress a file into a standalone container (.gz, .bz2, .xz, .zst, .lz4).
+
+    `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
+    applied to the destination file.
+
+    Returns the path actually written, which RENAME may have changed from
+    `output_path`; SKIP returns `output_path` unchanged and writes nothing.
+    """
 
 def decompress_standalone(
     input_path: str,

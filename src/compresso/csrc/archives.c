@@ -228,7 +228,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, full_path);
         return -1;
       }
-      int ret = archive->add_entry(writer, ae, f, ctx);
+      int ret = archive->add_entry(writer, ae, f, full_path, ctx);
       fclose(f);
       entry_free(ae);
       if (ret != 0) {
@@ -236,7 +236,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
         return ret;
       }
     } else if (ae->type == ENTRY_DIR) {
-      archive->add_entry(writer, ae, NULL, ctx);
+      archive->add_entry(writer, ae, NULL, full_path, ctx);
       entry_free(ae);
       int ret =
           add_directory_recursive(writer, archive, full_path, prefix_len, ctx);
@@ -245,7 +245,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
         return ret;
       }
     } else {
-      archive->add_entry(writer, ae, NULL, ctx);
+      archive->add_entry(writer, ae, NULL, full_path, ctx);
       entry_free(ae);
     }
   }
@@ -535,7 +535,8 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
           create_entry_from_path(input_paths[i], prefix_len);
       if (!dir_entry)
         return -1;
-      int dir_ret = archive->add_entry(writer, dir_entry, NULL, ctx);
+      int dir_ret =
+          archive->add_entry(writer, dir_entry, NULL, input_paths[i], ctx);
       entry_free(dir_entry);
       if (dir_ret != 0)
         return dir_ret;
@@ -556,7 +557,7 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
         return -1;
       }
 
-      int ret = archive->add_entry(writer, entry, f, ctx);
+      int ret = archive->add_entry(writer, entry, f, input_paths[i], ctx);
       fclose(f);
       entry_free(entry);
 
@@ -572,7 +573,8 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
 
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths,
-                   CoreContext *ctx) {
+                   int overwrite_existing, char *out_actual_path,
+                   size_t out_actual_path_size, CoreContext *ctx) {
   if (!pipeline_is_valid(pipeline) || pipeline->archive == ARCHIVE_NONE) {
     char name[32];
     pipeline_display_name(pipeline, name, sizeof(name));
@@ -588,6 +590,29 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
     PyErr_SetString(comp_Error, "Archive backend not available");
     return -1;
   }
+
+  char resolved_path[FS_PATH_MAX];
+  int resolve_ret = fs_resolve_conflict(output_path, overwrite_existing,
+                                        resolved_path, sizeof(resolved_path));
+  if (resolve_ret != 0) {
+    if (resolve_ret > 0) { // SKIP is a successful no-op
+      if (out_actual_path) {
+        size_t len = strlen(resolved_path);
+        if (len >= out_actual_path_size)
+          len = out_actual_path_size - 1;
+        memcpy(out_actual_path, resolved_path, len);
+        out_actual_path[len] = '\0';
+      }
+      return 0;
+    }
+    if (errno == ENAMETOOLONG) {
+      PyErr_Format(PyExc_ValueError, "Archive path too long: %s", output_path);
+    } else {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_path);
+    }
+    return -1;
+  }
+  output_path = resolved_path;
 
   // Write archive to a temp file, then compress via the standalone codec
   char *tmp_path = NULL;
@@ -638,6 +663,14 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   // itself, so this covers the archive written straight to the destination.
   if (ret != 0) {
     fs_unlink(output_path);
+  }
+
+  if (ret == 0 && out_actual_path) {
+    size_t len = strlen(output_path);
+    if (len >= out_actual_path_size)
+      len = out_actual_path_size - 1;
+    memcpy(out_actual_path, output_path, len);
+    out_actual_path[len] = '\0';
   }
 
   return ret;
@@ -715,6 +748,86 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
   return ret < 0 ? -1 : 0;
 }
 
+// Redirects entries under a renamed directory, since output paths come from
+// the archive's literal strings rather than a live directory handle;
+// old_prefix is the raw archive path so later raw entries match directly;
+// new_prefix is the resolved on-disk path
+typedef struct {
+  char old_prefix[FS_PATH_MAX];
+  char new_prefix[FS_PATH_MAX];
+  size_t old_len;
+} PathRename;
+
+static int push_rename(PathRename **renames, size_t *num_renames,
+                       size_t *cap_renames, const char *raw_relative,
+                       const char *actual_relative) {
+  if (*num_renames == *cap_renames) {
+    size_t new_cap = *cap_renames ? *cap_renames * 2 : 4;
+    PathRename *grown = realloc(*renames, new_cap * sizeof(**renames));
+    if (!grown) {
+      PyErr_NoMemory();
+      return -1;
+    }
+    *renames = grown;
+    *cap_renames = new_cap;
+  }
+
+  PathRename *r = &(*renames)[*num_renames];
+
+  // Trim any trailing separator so this prefix matches at a component
+  // boundary
+  size_t raw_len = strlen(raw_relative);
+  while (raw_len > 0 && FS_IS_SEP(raw_relative[raw_len - 1]))
+    raw_len--;
+
+  int n = snprintf(r->old_prefix, sizeof(r->old_prefix), "%.*s/", (int)raw_len,
+                   raw_relative);
+  if (n < 0 || (size_t)n >= sizeof(r->old_prefix)) {
+    PyErr_SetString(PyExc_ValueError, "Archive entry path too long to rename");
+    return -1;
+  }
+  r->old_len = (size_t)n;
+
+  n = snprintf(r->new_prefix, sizeof(r->new_prefix), "%s/", actual_relative);
+  if (n < 0 || (size_t)n >= sizeof(r->new_prefix)) {
+    PyErr_SetString(PyExc_ValueError, "Archive entry path too long to rename");
+    return -1;
+  }
+
+  (*num_renames)++;
+  return 0;
+}
+
+// Probes names until an exclusive mkdir succeeds, then records the rename so
+// nested entries redirect to the directory actually created
+static int rename_conflicting_dir(const char *output_dir, const char *out_path,
+                                  uint32_t dir_mode, const char *entry_path,
+                                  PathRename **renames, size_t *num_renames,
+                                  size_t *cap_renames) {
+  char candidate[FS_PATH_MAX];
+
+  for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
+    if (fs_conflict_path(out_path, n, candidate, sizeof(candidate)) != 0) {
+      PyErr_Format(PyExc_ValueError,
+                   "Archive entry path too long to rename: %s", entry_path);
+      return -1;
+    }
+
+    if (fs_mkdir_exclusive(candidate, dir_mode) == 0) {
+      return push_rename(renames, num_renames, cap_renames, entry_path,
+                         candidate + strlen(output_dir) + 1);
+    }
+    if (errno != EEXIST) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, candidate);
+      return -1;
+    }
+  }
+
+  PyErr_Format(PyExc_OSError, "Too many conflicting names for entry: %s",
+               entry_path);
+  return -1;
+}
+
 // Read and write each entry from an already-open reader
 static int extract_entries(const CArchive *archive, void *reader,
                            const char *output_dir, const char *resolved_root,
@@ -723,6 +836,10 @@ static int extract_entries(const CArchive *archive, void *reader,
   ArchiveEntry entry = {0};
   uint64_t written_total = 0;
   int ret;
+  int result;
+
+  PathRename *renames = NULL;
+  size_t num_renames = 0, cap_renames = 0;
 
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
     // Catches a cancel between entries; extract_entry_data catches one during
@@ -730,7 +847,8 @@ static int extract_entries(const CArchive *archive, void *reader,
     int cancelled = ctx_advance(ctx, 0);
     if (cancelled != 0) {
       entry_reset(&entry);
-      return cancelled;
+      result = cancelled;
+      goto cleanup;
     }
 
     if (!entry.path) {
@@ -739,12 +857,28 @@ static int extract_entries(const CArchive *archive, void *reader,
       continue;
     }
 
+    // Redirect through any directory renamed earlier in this pass; longest
+    // match wins so a doubly-renamed ancestor composes in one step
+    char rewritten[FS_PATH_MAX];
+    const char *effective_path = entry.path;
+    size_t best_len = 0;
+    for (size_t i = 0; i < num_renames; i++) {
+      if (renames[i].old_len > best_len &&
+          strncmp(entry.path, renames[i].old_prefix, renames[i].old_len) == 0) {
+        snprintf(rewritten, sizeof(rewritten), "%s%s", renames[i].new_prefix,
+                 entry.path + renames[i].old_len);
+        effective_path = rewritten;
+        best_len = renames[i].old_len;
+      }
+    }
+
     // Re-checked rather than trusted from the first pass
-    if (validate_entry_path(output_dir, resolved_root, entry.path,
-                            path_depth(entry.path), policy) != 0 ||
+    if (validate_entry_path(output_dir, resolved_root, effective_path,
+                            path_depth(effective_path), policy) != 0 ||
         check_entry_policy(&entry, policy) != 0) {
       entry_reset(&entry);
-      return -1;
+      result = -1;
+      goto cleanup;
     }
 
     if (!entry_is_selected(&entry, files, num_files)) {
@@ -754,14 +888,78 @@ static int extract_entries(const CArchive *archive, void *reader,
     }
 
     char out_path[FS_PATH_MAX];
-    snprintf(out_path, sizeof(out_path), "%s/%s", output_dir, entry.path);
+    snprintf(out_path, sizeof(out_path), "%s/%s", output_dir, effective_path);
 
     if (entry.type == ENTRY_DIR) {
       uint32_t dir_mode = policy->preserve_permissions ? entry.mode : 0755;
+
+      // Strip the entry's trailing separator (e.g. "d/") so a stat of a
+      // same-named file below resolves the file
+      size_t out_len = strlen(out_path);
+      while (out_len > 0 && FS_IS_SEP(out_path[out_len - 1]))
+        out_path[--out_len] = '\0';
+
+      fs_stat existing;
+      int found_existing = fs_stat_path(out_path, &existing) == 0;
+      int existing_is_dir = found_existing && existing.type == FS_TYPE_DIR;
+
+      if (found_existing && existing_is_dir &&
+          policy->overwrite_existing == 3) {
+        // RENAME: rename the clashing directory rather than merge into it
+        if (rename_conflicting_dir(output_dir, out_path, dir_mode, entry.path,
+                                   &renames, &num_renames, &cap_renames) != 0) {
+          entry_reset(&entry);
+          result = -1;
+          goto cleanup;
+        }
+
+        entry_reset(&entry);
+        continue;
+      }
+
+      if (found_existing && !existing_is_dir) {
+        if (policy->overwrite_existing == 2) {
+          if (fs_unlink(out_path) != 0) {
+            PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+            entry_reset(&entry);
+            result = -1;
+            goto cleanup;
+          }
+        } else if (policy->overwrite_existing == 1) {
+          // SKIP: nested entries under this dir fail on their own with a
+          // clear NotADirectoryError when they try to write through it
+          entry_reset(&entry);
+          archive->skip_entry_data(reader);
+          continue;
+        } else if (policy->overwrite_existing == 3) {
+          // RENAME: probe names as above; no extra containment check needed;
+          // the winning candidate is a sibling of out_path, and that parent's
+          // containment was already established to reach this fs_stat_path call
+          if (rename_conflicting_dir(output_dir, out_path, dir_mode, entry.path,
+                                     &renames, &num_renames,
+                                     &cap_renames) != 0) {
+            entry_reset(&entry);
+            result = -1;
+            goto cleanup;
+          }
+
+          entry_reset(&entry);
+          continue;
+        } else {
+          PyErr_Format(PyExc_OSError,
+                       "Cannot create directory, a file already exists: %s",
+                       out_path);
+          entry_reset(&entry);
+          result = -1;
+          goto cleanup;
+        }
+      }
+
       if (prepare_output_dir(resolved_root, out_path, dir_mode, entry.path) !=
           0) {
         entry_reset(&entry);
-        return -1;
+        result = -1;
+        goto cleanup;
       }
     } else if (entry.type == ENTRY_FILE) {
       char *last_slash = fs_last_sep(out_path);
@@ -772,13 +970,55 @@ static int extract_entries(const CArchive *archive, void *reader,
         *last_slash = saved;
         if (rc != 0) {
           entry_reset(&entry);
-          return -1;
+          result = -1;
+          goto cleanup;
         }
       }
 
       // Modes 0 and 1 both need the exclusive open
       FILE *f = policy->overwrite_existing == 2 ? fs_fopen(out_path, "wb")
                                                 : fs_fopen_exclusive(out_path);
+
+      if (!f && errno == EEXIST && policy->overwrite_existing == 3) {
+        // RENAME: try names until one is free; each attempt is its own
+        // exclusive open, so this stays race-free
+        char candidate[FS_PATH_MAX];
+        for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
+          if (fs_conflict_path(out_path, n, candidate, sizeof(candidate)) !=
+              0) {
+            PyErr_Format(PyExc_ValueError,
+                         "Archive entry path too long to rename: %s",
+                         entry.path);
+            entry_reset(&entry);
+            result = -1;
+            goto cleanup;
+          }
+
+          f = fs_fopen_exclusive(candidate);
+          if (f || errno != EEXIST)
+            break;
+        }
+
+        if (f) {
+          size_t len = strlen(candidate);
+          if (len >= sizeof(out_path))
+            len = sizeof(out_path) - 1;
+          memcpy(out_path, candidate, len);
+          out_path[len] = '\0';
+        } else if (errno != EEXIST) {
+          PyErr_SetFromErrnoWithFilename(PyExc_OSError, candidate);
+          entry_reset(&entry);
+          result = -1;
+          goto cleanup;
+        } else {
+          PyErr_Format(PyExc_OSError,
+                       "Too many conflicting names for entry: %s", entry.path);
+          entry_reset(&entry);
+          result = -1;
+          goto cleanup;
+        }
+      }
+
       if (!f) {
         if (errno == EEXIST && policy->overwrite_existing == 1) {
           entry_reset(&entry);
@@ -787,7 +1027,8 @@ static int extract_entries(const CArchive *archive, void *reader,
         }
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
         entry_reset(&entry);
-        return -1;
+        result = -1;
+        goto cleanup;
       }
 
       uint64_t remaining = policy->max_total_size > 0
@@ -806,7 +1047,8 @@ static int extract_entries(const CArchive *archive, void *reader,
         // completed are kept, as documented
         if (data_ret == COMP_CANCELLED)
           fs_unlink(out_path);
-        return data_ret;
+        result = data_ret;
+        goto cleanup;
       }
 
       fclose(f);
@@ -822,7 +1064,11 @@ static int extract_entries(const CArchive *archive, void *reader,
     entry_reset(&entry);
   }
 
-  return ret < 0 ? -1 : 0;
+  result = ret < 0 ? -1 : 0;
+
+cleanup:
+  free(renames);
+  return result;
 }
 
 int extract_archive(const char *archive_path, const char *output_dir,
@@ -928,9 +1174,43 @@ static const char *entry_type_name(EntryType type) {
   }
 }
 
-// Collect (path, size, type, link_target) tuples from an already-open reader
-// into a new Python list; size is the declared uncompressed size, 0 for
-// directories, and link_target is None for anything but a symlink
+// `compressed_size`, `crc` and `method` are present only for a container that
+// compresses each entry separately; tar compresses the whole stream, so those
+// keys are absent rather than None
+static PyObject *entry_to_dict(const ArchiveEntry *entry) {
+  // "z" converts a NULL target to None
+  PyObject *item = Py_BuildValue(
+      "{s:s, s:s, s:K, s:L, s:I, s:z}", "path", entry->path ? entry->path : "",
+      "type", entry_type_name(entry->type), "size",
+      (unsigned long long)entry->size, "mtime", (long long)entry->mtime, "mode",
+      (unsigned int)entry->mode, "link_target",
+      entry->type == ENTRY_SYMLINK ? entry->symlink_target : NULL);
+
+  if (!item || !entry->has_compression_detail)
+    return item;
+
+  PyObject *detail = Py_BuildValue("{s:K, s:I, s:I}", "compressed_size",
+                                   (unsigned long long)entry->compressed_size,
+                                   "crc", (unsigned int)entry->crc, "method",
+                                   (unsigned int)entry->method);
+
+  if (!detail) {
+    Py_DECREF(item);
+    return NULL;
+  }
+
+  int merged = PyDict_Update(item, detail);
+  Py_DECREF(detail);
+
+  if (merged < 0) {
+    Py_DECREF(item);
+    return NULL;
+  }
+
+  return item;
+}
+
+// Collect one dict per entry from an already-open reader into a new Python list
 static PyObject *read_archive_entries(const CArchive *archive, void *reader) {
   PyObject *list = PyList_New(0);
   if (!list)
@@ -940,11 +1220,7 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader) {
   int ret;
 
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
-    // "z" converts a NULL target to None
-    PyObject *item = Py_BuildValue(
-        "(sKsz)", entry.path ? entry.path : "", (unsigned long long)entry.size,
-        entry_type_name(entry.type),
-        entry.type == ENTRY_SYMLINK ? entry.symlink_target : NULL);
+    PyObject *item = entry_to_dict(&entry);
     entry_reset(&entry);
 
     if (!item) {

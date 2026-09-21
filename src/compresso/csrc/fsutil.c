@@ -79,6 +79,85 @@ int fs_is_stream_path(const char *path) {
 #endif
 }
 
+int fs_conflict_path(const char *path, int n, char *out, size_t out_size) {
+  char *last_sep = fs_last_sep(path);
+  const char *base = last_sep ? last_sep + 1 : path;
+
+  // Skip leading dots so a hidden file's name is not mistaken for an extension
+  const char *scan = base;
+  while (*scan == '.')
+    scan++;
+
+  const char *dot = strrchr(scan, '.');
+
+  // Handle tarball double-extension
+  if (dot && (size_t)(dot - scan) >= 4 && strncmp(dot - 4, ".tar", 4) == 0)
+    dot -= 4;
+
+  size_t stem_len = dot ? (size_t)(dot - path) : strlen(path);
+  const char *ext = dot ? dot : "";
+
+#if defined(__APPLE__)
+  int written =
+      snprintf(out, out_size, "%.*s %d%s", (int)stem_len, path, n, ext);
+#else
+  int written =
+      snprintf(out, out_size, "%.*s (%d)%s", (int)stem_len, path, n, ext);
+#endif
+
+  if (written < 0 || (size_t)written >= out_size)
+    return -1;
+
+  return 0;
+}
+
+int fs_resolve_conflict(const char *path, int overwrite_existing,
+                        char *resolved, size_t resolved_size) {
+  size_t len = strlen(path);
+  if (len >= resolved_size) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  memcpy(resolved, path, len + 1);
+
+  if (overwrite_existing == 2) // OVERWRITE: unconditional
+    return 0;
+
+  fs_stat st;
+  if (fs_stat_path(resolved, &st) != 0)
+    return 0; // Nothing there yet
+
+  if (overwrite_existing == 0) { // ERROR
+    errno = EEXIST;
+    return -1;
+  }
+
+  if (overwrite_existing == 1) // SKIP
+    return 1;
+
+  // RENAME: probe "name 2", "name 3", ... until one is free
+  for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
+    char candidate[FS_PATH_MAX];
+    if (fs_conflict_path(path, n, candidate, sizeof(candidate)) != 0) {
+      errno = ENAMETOOLONG;
+      return -1;
+    }
+
+    if (fs_stat_path(candidate, &st) != 0) {
+      size_t clen = strlen(candidate);
+      if (clen >= resolved_size) {
+        errno = ENAMETOOLONG;
+        return -1;
+      }
+      memcpy(resolved, candidate, clen + 1);
+      return 0;
+    }
+  }
+
+  errno = EEXIST;
+  return -1;
+}
+
 int fs_mkdir_p(const char *path, uint32_t mode) {
   char tmp[FS_PATH_MAX];
   size_t len = strlen(path);
@@ -113,6 +192,31 @@ int fs_mkdir_p(const char *path, uint32_t mode) {
 #include <sys/utime.h>
 #include <wchar.h>
 #include <windows.h>
+#include <winioctl.h>
+
+// A reparse point's data buffer to decode a symlink/junction target
+typedef struct _COMPRESSO_REPARSE_DATA_BUFFER {
+  ULONG ReparseTag;
+  USHORT ReparseDataLength;
+  USHORT Reserved;
+  union {
+    struct {
+      USHORT SubstituteNameOffset;
+      USHORT SubstituteNameLength;
+      USHORT PrintNameOffset;
+      USHORT PrintNameLength;
+      ULONG Flags;
+      WCHAR PathBuffer[1];
+    } SymbolicLinkReparseBuffer;
+    struct {
+      USHORT SubstituteNameOffset;
+      USHORT SubstituteNameLength;
+      USHORT PrintNameOffset;
+      USHORT PrintNameLength;
+      WCHAR PathBuffer[1];
+    } MountPointReparseBuffer;
+  };
+} COMPRESSO_REPARSE_DATA_BUFFER;
 
 // A UTF-8 byte never becomes more than one UTF-16 code unit, so FS_PATH_MAX
 // wide characters always hold the conversion of an FS_PATH_MAX-byte path
@@ -190,23 +294,57 @@ int fs_readlink(const char *path, char *buf, size_t buf_size) {
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
     return -1;
 
-  // Reading the literal target would mean decoding the raw reparse buffer;
-  // resolving the link gives an absolute target
-  HANDLE handle = fs_open_for_metadata(wpath);
+  // FILE_FLAG_OPEN_REPARSE_POINT keeps the handle on the link itself instead
+  // of following it, so the reparse buffer below is the link's own data
+  HANDLE handle = CreateFileW(
+      wpath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+      NULL);
   if (handle == INVALID_HANDLE_VALUE) {
     errno = ENOENT;
     return -1;
   }
 
-  wchar_t wtarget[FS_PATH_MAX];
-  DWORD n = GetFinalPathNameByHandleW(handle, wtarget, FS_PATH_MAX,
-                                      FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  char reparse_buf[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
+  DWORD bytes_returned = 0;
+  BOOL ok =
+      DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, NULL, 0, reparse_buf,
+                      sizeof(reparse_buf), &bytes_returned, NULL);
   CloseHandle(handle);
 
-  if (n == 0 || n >= FS_PATH_MAX) {
+  if (!ok) {
     errno = EINVAL;
     return -1;
   }
+
+  const COMPRESSO_REPARSE_DATA_BUFFER *rdb =
+      (const COMPRESSO_REPARSE_DATA_BUFFER *)reparse_buf;
+  const char *path_buffer;
+  USHORT print_name_offset, print_name_length;
+
+  if (rdb->ReparseTag == IO_REPARSE_TAG_SYMLINK) {
+    path_buffer = (const char *)rdb->SymbolicLinkReparseBuffer.PathBuffer;
+    print_name_offset = rdb->SymbolicLinkReparseBuffer.PrintNameOffset;
+    print_name_length = rdb->SymbolicLinkReparseBuffer.PrintNameLength;
+  } else if (rdb->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT) {
+    path_buffer = (const char *)rdb->MountPointReparseBuffer.PathBuffer;
+    print_name_offset = rdb->MountPointReparseBuffer.PrintNameOffset;
+    print_name_length = rdb->MountPointReparseBuffer.PrintNameLength;
+  } else {
+    // Not a symlink or junction; nothing this reads knows how to decode
+    errno = EINVAL;
+    return -1;
+  }
+
+  size_t name_wchars = print_name_length / sizeof(WCHAR);
+  if (name_wchars == 0 || name_wchars >= FS_PATH_MAX) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  wchar_t wtarget[FS_PATH_MAX];
+  memcpy(wtarget, path_buffer + print_name_offset, name_wchars * sizeof(WCHAR));
+  wtarget[name_wchars] = L'\0';
 
   return fs_narrow(wtarget, buf, (int)buf_size);
 }
@@ -382,6 +520,16 @@ static int fs_mkdir_one(const char *path, uint32_t mode) {
   return 0;
 }
 
+int fs_mkdir_exclusive(const char *path, uint32_t mode) {
+  (void)mode; // Windows has no POSIX permission bits on directories
+
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+
+  return _wmkdir(wpath); // EEXIST left on errno, unlike fs_mkdir_one
+}
+
 int fs_chmod(const char *path, uint32_t mode) {
   wchar_t wpath[FS_PATH_MAX];
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
@@ -526,6 +674,10 @@ static int fs_mkdir_one(const char *path, uint32_t mode) {
   if (mkdir(path, (mode_t)mode) != 0 && errno != EEXIST)
     return -1;
   return 0;
+}
+
+int fs_mkdir_exclusive(const char *path, uint32_t mode) {
+  return mkdir(path, (mode_t)mode); // EEXIST left on errno, unlike fs_mkdir_one
 }
 
 int fs_chmod(const char *path, uint32_t mode) {

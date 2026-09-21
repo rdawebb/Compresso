@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import algos, archive, benchmark, compress, decompress, extract, inspect
+from . import algos, benchmark, compress, extract, inspect
 from ._app import app
 
 __all__ = ["app", "main"]
@@ -10,8 +10,6 @@ __all__ = ["app", "main"]
 # The order commands are listed in `--help`
 _COMMAND_MODULES = (
     compress,
-    decompress,
-    archive,
     extract,
     inspect,
     benchmark,

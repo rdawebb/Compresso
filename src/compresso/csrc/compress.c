@@ -4,6 +4,7 @@
 #include "fsutil.h"
 #include "standalone.h"
 #include <Python.h>
+#include <errno.h>
 #include <string.h>
 
 static int decompress_compresso_file(const char *src_path, const char *dst_path,
@@ -122,7 +123,9 @@ static int UNUSED write_memory_to_file(const char *path,
 // ---- Public API ----
 
 int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
-                  Strategy strategy, int level, CoreContext *ctx) {
+                  Strategy strategy, int level, int overwrite_existing,
+                  char *out_actual_path, size_t out_actual_path_size,
+                  CoreContext *ctx) {
   init_backends();
 
   const CBackend *backend = NULL;
@@ -130,6 +133,33 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   int return_code = 0;
   FILE *src = NULL;
   FILE *dst = NULL;
+
+  // Resolved before anything is opened, so ERROR/SKIP never touch the
+  // existing destination; must `return` directly rather than `goto done`,
+  // since codec_finish_file() below unconditionally unlinks dst_path on
+  // failure, which would delete the file these modes are protecting
+  char resolved_dst[FS_PATH_MAX];
+  int resolve_rc = fs_resolve_conflict(dst_path, overwrite_existing,
+                                       resolved_dst, sizeof(resolved_dst));
+  if (resolve_rc < 0) {
+    if (errno == ENAMETOOLONG) {
+      PyErr_Format(PyExc_ValueError, "Output path too long: %s", dst_path);
+    } else {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, dst_path);
+    }
+    return -1;
+  }
+  if (resolve_rc > 0) { // SKIP: leave dst_path untouched
+    if (out_actual_path) {
+      size_t len = strlen(dst_path);
+      if (len >= out_actual_path_size)
+        len = out_actual_path_size - 1;
+      memcpy(out_actual_path, dst_path, len);
+      out_actual_path[len] = '\0';
+    }
+    return 0;
+  }
+  dst_path = resolved_dst;
 
   if (algo != ALGO_NONE) {
     backend = find_backend_by_id(algo);
@@ -302,7 +332,15 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   }
 
 done:
-  return codec_finish_file(return_code, src, dst, dst_path, NULL);
+  return_code = codec_finish_file(return_code, src, dst, dst_path, NULL);
+  if (return_code == 0 && out_actual_path) {
+    size_t len = strlen(dst_path);
+    if (len >= out_actual_path_size)
+      len = out_actual_path_size - 1;
+    memcpy(out_actual_path, dst_path, len);
+    out_actual_path[len] = '\0';
+  }
+  return return_code;
 }
 
 int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,

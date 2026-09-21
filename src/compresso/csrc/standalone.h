@@ -27,6 +27,16 @@ typedef struct {
 
 } StandaloneFormat;
 
+// Compress `input_path` into `output_path` via `fmt`, applying
+// `overwrite_existing` to the destination; on success (including SKIP), copies
+// the path actually written (which RENAME may have changed) into
+// `out_actual_path`; returns 0 on success, -1 on error (PyErr set)
+int compress_standalone_file(const StandaloneFormat *fmt,
+                             const char *input_path, const char *output_path,
+                             int level, int overwrite_existing,
+                             char *out_actual_path, size_t out_actual_path_size,
+                             CoreContext *ctx);
+
 // Get standalone format handlers
 const StandaloneFormat *get_gzip_format(void);
 const StandaloneFormat *get_bzip2_format(void);

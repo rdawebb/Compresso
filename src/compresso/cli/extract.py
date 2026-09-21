@@ -1,4 +1,4 @@
-"""The `extract` command."""
+"""The `extract` command, which also answers to `decompress`."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 from .._core import BackendError, Error, HeaderError
+from ..frontend.api import DecompressionJob
 from ..frontend.archive_api import (
     ArchiveEntry,
     ExtractJob,
@@ -14,6 +15,7 @@ from ..frontend.archive_api import (
     OverwriteMode,
 )
 from ._app import app
+from ._dispatch import looks_like_archive, resolve_single_output
 from ._render import (
     BAR_THRESHOLD,
     EXIT_USAGE,
@@ -55,17 +57,149 @@ def list_entries(entries: list[ArchiveEntry]) -> None:
         target = f" -> {entry.link_target}" if entry.is_symlink else ""
 
         # "1023.99 KB" is the widest format_size gives
-        app.echo(message=f"{size:>10}  {'  ' * depth}{entry.path}{target}")
+        print(f"{size:>10}  {'  ' * depth}{entry.path}{target}")
+
+
+def _extract_archive(
+    source: Path,
+    output_dir: Path | None,
+    list_only: bool,
+    options: ExtractOptions,
+    quiet: bool,
+) -> None:
+    """Unpack one archive.
+
+    Args:
+        source: The path to the archive to extract.
+        output_dir: The directory to extract to.
+        list_only: Whether to list entries only.
+        options: The extract options.
+        quiet: Whether to suppress output.
+    """
+    job = ExtractJob.from_archive(
+        archive=source, output_dir=output_dir, options=options
+    )
+    plan = job.plan
+
+    if not plan.can_run:
+        fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
+
+    if list_only:
+        list_entries(job.list_contents())
+        return
+
+    if not quiet:
+        print(
+            f"Extracting: {plan.archive}\n"
+            f"Output dir: {plan.output_dir}\n"
+            f"Entries:    {len(plan.entries)}\n"
+        )
+
+    start_time: float = time.time()
+
+    # Progress covers the bytes written out; a compressed archive also reports
+    # the pass that decompresses it, so the job's own total wins
+    extracted_size: int = sum(entry.size for entry in plan.entries)
+
+    with progress_bar(
+        "Extracting",
+        extracted_size,
+        enabled=not quiet and extracted_size > BAR_THRESHOLD,
+    ) as on_progress:
+        result = job.run(progress=on_progress)
+
+    elapsed: float = time.time() - start_time
+
+    exit_for_result(result, "Extraction")
+
+    if not quiet:
+        succeed("Extraction successful!")
+        print(
+            f"  Entries: {len(plan.entries)}\n"
+            f"  Time:    {format_time(seconds=elapsed)}\n"
+        )
+
+
+def _decompress_one_file(
+    source: Path, output: Path | None, list_only: bool, quiet: bool
+) -> None:
+    """Unpack one single-file container: a `.comp` or a standalone codec.
+
+    Args:
+        source: The path to the single-file container.
+        output: The output path.
+        list_only: Whether to list entries only.
+        quiet: Whether to suppress output.
+    """
+    if list_only:
+        fail(
+            f"Error: {source.name} holds a single file, so there is nothing to list",
+            EXIT_USAGE,
+        )
+
+    job = DecompressionJob.from_file(src=source, dest=None)
+    dest: Path = resolve_single_output(output, job.plan.dest)
+    if dest != job.plan.dest:
+        job = DecompressionJob.from_file(src=source, dest=dest)
+
+    plan = job.plan
+
+    if not plan.can_run:
+        fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
+
+    insp = plan.inspection
+
+    if not quiet:
+        lines: list[str] = [
+            f"Decompressing: {plan.src}",
+            f"Output:        {plan.dest}",
+            f"Format:        {plan.format or insp.algo_name}",
+        ]
+        if insp.orig_size:
+            lines.append(f"Original size: {format_size(size_bytes=insp.orig_size)}")
+        print("\n".join(lines) + "\n")
+
+    start_time: float = time.time()
+
+    # Progress counts the compressed bytes read, so the source's size is the
+    # denominator rather than the size it expands to
+    compressed_size: int = plan.src.stat().st_size
+
+    with progress_bar(
+        "Decompressing",
+        compressed_size,
+        enabled=not quiet and compressed_size > BAR_THRESHOLD,
+    ) as on_progress:
+        result = job.run(progress=on_progress)
+
+    elapsed: float = time.time() - start_time
+
+    exit_for_result(result, "Decompression")
+
+    decompressed_size: int = plan.dest.stat().st_size
+    speed_mbs: int | float = (
+        (decompressed_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+    )
+
+    if not quiet:
+        succeed("Decompression successful!\n")
+        print(
+            f"  Compressed size:   {format_size(size_bytes=compressed_size)}\n"
+            f"  Decompressed size: {format_size(size_bytes=decompressed_size)}\n"
+            f"  Time:              {format_time(seconds=elapsed)}\n"
+            f"  Speed:             {speed_mbs:.2f} MB/s\n"
+        )
 
 
 def extract(
-    archive: Annotated[Path, app.Argument(help="Archive to extract")],
-    output_dir: Annotated[
+    inputs: Annotated[list[Path], app.Argument(help="Archives or compressed files")],
+    output: Annotated[
         Path | None,
         app.Option(
             "--output-dir",
+            "--output",
             "-o",
-            help="Directory to extract into (default: current directory)",
+            help="Where to write (default: beside the input)",
         ),
     ] = None,
     list_only: Annotated[
@@ -76,6 +210,12 @@ def extract(
     ] = False,
     skip_existing: Annotated[
         bool, app.Option("--skip-existing", help="Leave files that already exist")
+    ] = False,
+    error_on_conflict: Annotated[
+        bool,
+        app.Option(
+            "--error-on-conflict", help="Fail instead of renaming a clashing file"
+        ),
     ] = False,
     max_total_size: Annotated[
         int | None,
@@ -88,79 +228,60 @@ def extract(
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
 ) -> None:
-    """Extract an archive, or list its contents.
+    """Unpack archives and compressed files.
+    \f
 
-    Extraction refuses to touch an existing file unless either `--overwrite`
-    or `--skip-existing` flags are explicitly used.
+    Each input is identified by its own magic bytes rather than its name: an
+    archive is unpacked into a directory, and a single-file container, a
+    Compresso `.comp`, or a standalone `.gz`/`.bz2`/`.xz`/`.zst`/`.lz4`, is
+    decompressed to one file.
+
+    The result is written beside its input unless `-o` is provided.
+
+    By default, a clashing name gets a platform-native numbered sibling
+    (`name 2.ext` on macOS, `name (2).ext` elsewhere); use `--overwrite`,
+    `--skip-existing`, or `--error-on-conflict` to change that.
 
     Args:
-        archive: The path to the archive file.
-        output_dir: Directory to extract into (default: current directory).
-        list_only: If True, list contents without extracting.
+        inputs: The archives or compressed files to unpack.
+        output: Where to write (default: beside the input); a directory for
+            archives, and for one file either a directory to put it in or the
+            path to write.
+        list_only: If True, list archive contents without extracting.
         overwrite: If True, replace files that already exist.
         skip_existing: If True, leave files that already exist untouched.
+        error_on_conflict: If True, fail instead of renaming a clashing file.
         max_total_size: Cap on total extracted bytes (default: no cap).
-        quiet: If True, suppress all output (default: False).
+        quiet: If True, suppress all output.
     """
-    if overwrite and skip_existing:
+    if sum([overwrite, skip_existing, error_on_conflict]) > 1:
         fail(
-            "Error: --overwrite and --skip-existing are mutually exclusive",
+            "Error: --overwrite, --skip-existing and --error-on-conflict "
+            "are mutually exclusive",
             EXIT_USAGE,
         )
+
+    if not inputs:
+        fail("Error: No input files given", EXIT_USAGE)
 
     if overwrite:
         mode = OverwriteMode.OVERWRITE
     elif skip_existing:
         mode = OverwriteMode.SKIP
-    else:
+    elif error_on_conflict:
         mode = OverwriteMode.ERROR
+    else:
+        mode = OverwriteMode.RENAME
 
-    options = ExtractOptions(
-        overwrite=mode,
-        max_total_size=max_total_size or 0,
-    )
+    options = ExtractOptions(overwrite=mode, max_total_size=max_total_size or 0)
 
     try:
-        job = ExtractJob.from_archive(
-            archive=archive, output_dir=output_dir, options=options
-        )
-        plan = job.plan
+        for source in inputs:
+            if looks_like_archive(source):
+                _extract_archive(source, output, list_only, options, quiet)
 
-        if not plan.can_run:
-            fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
-
-        if list_only:
-            list_entries(job.list_contents())
-            return
-
-        if not quiet:
-            app.echo(message=f"Extracting: {plan.archive}")
-            app.echo(message=f"Output dir: {plan.output_dir}")
-            app.echo(message=f"Entries:    {len(plan.entries)}")
-            app.echo()
-
-        start_time: float = time.time()
-
-        # Progress covers the bytes written out; a compressed archive also
-        # reports the pass that decompresses it, so the job's own total wins
-        extracted_size: int = sum(entry.size for entry in plan.entries)
-
-        with progress_bar(
-            "Extracting",
-            extracted_size,
-            enabled=not quiet and extracted_size > BAR_THRESHOLD,
-        ) as on_progress:
-            result = job.run(progress=on_progress)
-
-        elapsed: float = time.time() - start_time
-
-        exit_for_result(result, "Extraction")
-
-        if not quiet:
-            succeed("Extraction successful!")
-            app.echo(message=f"  Entries: {len(plan.entries)}")
-            app.echo(message=f"  Time:    {format_time(seconds=elapsed)}")
-            app.echo()
+            else:
+                _decompress_one_file(source, output, list_only, quiet)
 
     except KeyboardInterrupt:
         cancelled("Extraction")
@@ -174,4 +295,4 @@ def extract(
 
 def register() -> None:
     """Attach this command to the app."""
-    app.command(aliases=["x", "ex"])(extract)
+    app.command(aliases=["x", "ex", "decompress", "d", "decomp"])(extract)

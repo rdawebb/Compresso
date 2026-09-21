@@ -26,3 +26,14 @@ int validate_compression_request(AlgoID algo, Strategy strategy, int level,
 
   return 0;
 }
+
+int validate_overwrite_arg(int overwrite_existing) {
+  if (overwrite_existing < 0 || overwrite_existing > 3) {
+    PyErr_Format(PyExc_ValueError,
+                 "overwrite must be 0 (error), 1 (skip), 2 (overwrite) or "
+                 "3 (rename), not %d",
+                 overwrite_existing);
+    return -1;
+  }
+  return 0;
+}

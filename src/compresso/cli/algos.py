@@ -15,8 +15,7 @@ def list_algos() -> None:
         if not caps:
             fail("No compression backends available")
 
-        app.echo(message=f"Available compression algorithms: {len(caps)}")
-        app.echo()
+        print(f"Available compression algorithms: {len(caps)}\n")
 
         for cap in caps:
             app.echo(message=app.style(text=f"● {cap.name}", fg="green", bold=True))
@@ -28,10 +27,9 @@ def list_algos() -> None:
             )
             app.echo(
                 message=app.style(
-                    text=f"  Streaming mode:  {'Yes' if cap.has_stream else 'No'}"
+                    text=f"  Streaming mode:  {'Yes' if cap.has_stream else 'No'}\n"
                 )
             )
-            app.echo()
 
     except KeyboardInterrupt:
         cancelled("Listing")

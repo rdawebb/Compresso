@@ -21,9 +21,23 @@ from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 _NON_ARCHIVE_FORMATS = {"gz", "gzip", "bz2", "bzip2", "xz", "zst", "zstd", "lz4"}
 
 
-@dataclass
+@dataclass(frozen=True)
 class ArchiveEntry:
-    """Represents a file or directory in an archive."""
+    """One file, directory or symlink recorded in an archive.
+
+    Attributes:
+        path: The entry's path within the archive.
+        size: Uncompressed size in bytes; 0 for a directory.
+        is_dir: Whether the entry is a directory.
+        is_symlink: Whether the entry is a symbolic link.
+        mtime: Modification time, in seconds since the epoch.
+        mode: Unix permission bits.
+        link_target: A symlink's stored target, None for anything else.
+        compressed_size: Stored size of this entry's data, or None for a
+            container that compresses the whole stream at once.
+        crc: CRC-32 of the uncompressed data, or None as above.
+        method: The container's own compression method code, or None as above.
+    """
 
     path: str
     size: int = 0
@@ -32,17 +46,59 @@ class ArchiveEntry:
     mtime: float = 0.0
     mode: int = 0
     link_target: str | None = None
+    compressed_size: int | None = None
+    crc: int | None = None
+    method: int | None = None
+
+
+class OverwriteMode(StrEnum):
+    """What archiving or extraction does when a destination already exists.
+
+    Attributes:
+        ERROR: Fail the operation.
+        SKIP: Leave the existing file untouched.
+        OVERWRITE: Replace the existing file.
+        RENAME: Write to a platform-native numbered sibling instead (e.g.
+            "name 2.ext" on macOS, "name (2).ext" elsewhere), leaving the
+            existing file untouched.
+    """
+
+    ERROR = "error"
+    SKIP = "skip"
+    OVERWRITE = "overwrite"
+    RENAME = "rename"
+
+
+# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h. Archive
+# creation applies the same codes to its single destination file.
+_OVERWRITE_CODES: dict[OverwriteMode, int] = {
+    OverwriteMode.ERROR: 0,
+    OverwriteMode.SKIP: 1,
+    OverwriteMode.OVERWRITE: 2,
+    OverwriteMode.RENAME: 3,
+}
 
 
 @dataclass
 class ArchiveOptions:
-    """Represents the options for an archive operation."""
+    """Represents the options for an archive operation.
+
+    Attributes:
+        format: The archive/compression format to write.
+        compression_level: The compression level to use, or None for the
+            format's default.
+        preserve_permissions: Whether to store each entry's mode bits.
+        preserve_timestamps: Whether to store each entry's modification time.
+        exclude_patterns: Glob patterns for paths to leave out of the archive.
+        overwrite: What to do when the destination archive already exists.
+    """
 
     format: str = "tar.zst"  # Default to tar with zstd
     compression_level: int | None = None
     preserve_permissions: bool = True
     preserve_timestamps: bool = True
     exclude_patterns: list[str] | None = None
+    overwrite: OverwriteMode = OverwriteMode.RENAME
 
 
 @dataclass(frozen=True)
@@ -69,28 +125,6 @@ class ArchivePlan:
     reason_if_unavailable: str | None
 
 
-class OverwriteMode(StrEnum):
-    """What extraction does when an entry's destination already exists.
-
-    Attributes:
-        ERROR: Fail the extraction.
-        SKIP: Leave the existing file untouched.
-        OVERWRITE: Replace the existing file.
-    """
-
-    ERROR = "error"
-    SKIP = "skip"
-    OVERWRITE = "overwrite"
-
-
-# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h
-_OVERWRITE_CODES: dict[OverwriteMode, int] = {
-    OverwriteMode.ERROR: 0,
-    OverwriteMode.SKIP: 1,
-    OverwriteMode.OVERWRITE: 2,
-}
-
-
 @dataclass
 class ExtractOptions:
     """Represents the policy applied while extracting an archive.
@@ -103,7 +137,7 @@ class ExtractOptions:
         preserve_timestamps: Whether to restore each entry's modification time.
     """
 
-    overwrite: OverwriteMode = OverwriteMode.ERROR
+    overwrite: OverwriteMode = OverwriteMode.RENAME
     max_total_size: int = 0
     max_depth: int = 32
     preserve_permissions: bool = True
@@ -166,6 +200,24 @@ def plan_archive(
 
     source_paths: list[Path] = [Path(s) for s in sources]
     output_path = Path(output)
+
+    try:
+        # Plain strings still work at runtime
+        options = replace(options, overwrite=OverwriteMode(options.overwrite))
+
+    except ValueError:
+        return ArchivePlan(
+            sources=source_paths,
+            output=output_path,
+            options=options,
+            total_input_size=0,
+            entry_count=len(source_paths),
+            can_run=False,
+            reason_if_unavailable=(
+                f"Unknown overwrite mode: {options.overwrite!r} "
+                f"(expected one of {', '.join(OverwriteMode)})"
+            ),
+        )
 
     if not source_paths:
         return ArchivePlan(
@@ -243,7 +295,8 @@ def plan_extraction(
 
     Args:
         archive: Source archive path.
-        output_dir: Directory to extract into. If None, the current directory.
+        output_dir: Directory to extract into. If None, the directory holding
+            the archive.
         files: Optional subset of entry paths to extract. If None, extracts all.
         options: Extraction policy. If None, defaults are used.
 
@@ -251,7 +304,7 @@ def plan_extraction(
         ExtractPlan: The resulting plan.
     """
     archive_path = Path(archive)
-    out_dir = Path.cwd() if output_dir is None else Path(output_dir)
+    out_dir = archive_path.resolve().parent if output_dir is None else Path(output_dir)
     opts = ExtractOptions() if options is None else options
 
     try:
@@ -286,13 +339,19 @@ def plan_extraction(
     try:
         entries: list[ArchiveEntry] = [
             ArchiveEntry(
-                path=name,
-                size=size,
-                is_dir=kind == "dir",
-                is_symlink=kind == "symlink",
-                link_target=target,
+                path=raw["path"],
+                size=raw["size"],
+                is_dir=raw["type"] == "dir",
+                is_symlink=raw["type"] == "symlink",
+                mtime=raw["mtime"],
+                mode=raw["mode"],
+                link_target=raw["link_target"],
+                # Absent for a container without per-entry compression
+                compressed_size=raw.get("compressed_size"),
+                crc=raw.get("crc"),
+                method=raw.get("method"),
             )
-            for name, size, kind, target in list_archive_contents(str(archive_path))
+            for raw in list_archive_contents(str(archive_path))
         ]
 
     except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
@@ -354,6 +413,11 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
     ) -> JobResult:
         """Create the archive.
 
+        A destination that already exists is handled per `plan.options.overwrite`
+        (default `RENAME`, the same numbered-sibling behavior extraction uses);
+        when that renames the file, `self.plan.output` (and the plan on the
+        returned `JobResult`) is updated to the path actually written.
+
         Args:
             progress: Optional progress callback, invoked with
                 `(fraction, done_bytes, total_bytes)`.
@@ -373,15 +437,20 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
 
         total: int = self.plan.total_input_size
         try:
-            create_archive(
+            actual_path = create_archive(
                 str(self.plan.output),
                 self.plan.options.format,
                 [str(s) for s in self.plan.sources],
                 self.plan.options.compression_level or -1,
+                overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )
 
+            # RENAME may have picked a different name than what was requested;
+            # keep `self.plan.output` truthful for callers that inspect it
+            # after a successful run
+            self.plan = replace(self.plan, output=Path(actual_path))
             return JobResult(ok=True, error=None, plan=self.plan)
 
         # Cancellation is a deliberate stop, not a failure; see
@@ -418,7 +487,7 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
 
         Args:
             archive: Path to the archive file.
-            output_dir: Directory to extract to. If None, extracts to current directory.
+            output_dir: Directory to extract to. If None, extracts beside the archive.
             files: Optional list of files to extract from the archive. If None, extracts all files.
             options: Extraction policy. If None, defaults are used.
 

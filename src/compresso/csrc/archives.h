@@ -28,6 +28,13 @@ typedef struct {
   uint32_t mode;        // Unix permissions
   char *symlink_target; // Target of the symlink (if applicable)
   void *internal_data;  // Backend-specific data
+
+  // Per-entry compression detail, which only a container that compresses each
+  // entry separately has; zero means "not recorded"
+  int has_compression_detail;
+  uint64_t compressed_size; // Stored size of this entry's data
+  uint32_t crc;             // CRC-32 of the uncompressed data
+  uint16_t method;          // The container's own compression method code
 } ArchiveEntry;
 
 // ---- Archive Backend Interface ----
@@ -46,8 +53,10 @@ typedef struct CArchive {
   void *(*create_writer)(const char *output_path, int compression_level);
 
   // `ctx` is NULL-tolerant and covers this entry's data only
+  // `source_path` is the entry's original filesystem path, valid for the
+  // duration of this call only
   int (*add_entry)(void *writer, const ArchiveEntry *entry, FILE *data,
-                   CoreContext *ctx);
+                   const char *source_path, CoreContext *ctx);
 
   // Some backends defer the real work to here, so this takes a context too
   int (*close_writer)(void *writer, CoreContext *ctx);
@@ -74,7 +83,7 @@ typedef struct {
                       // files
   int allow_absolute_paths; // always 0; field exists for documentation/future
                             // use
-  int overwrite_existing;   // 0 = error, 1 = skip, 2 = overwrite
+  int overwrite_existing;   // 0 = error, 1 = skip, 2 = overwrite, 3 = rename
   int allow_special_files;  // 0 = reject device nodes, FIFOs, sockets (default)
   int preserve_permissions; // 1 = restore mode bits, 0 = apply umask
   int preserve_timestamps;  // 1 = restore mtime, 0 = use current time
@@ -168,9 +177,13 @@ int pipeline_is_valid(const CompressionPipeline *p);
 
 // ---- High-Level Operations ----
 
+// `overwrite_existing` follows the same 0-3 scheme as
+// `ExtractionPolicy.overwrite_existing`; on success, the path actually written
+// (which RENAME may have changed) is copied into `out_actual_path`
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths,
-                   CoreContext *ctx);
+                   int overwrite_existing, char *out_actual_path,
+                   size_t out_actual_path_size, CoreContext *ctx);
 
 // Entries are validated against `policy` (NULL = extraction_policy_default())
 // in a first pass over the archive

@@ -85,6 +85,26 @@ int fs_mkstemp(char *template_path);
 // component only
 int fs_mkdir_p(const char *path, uint32_t mode);
 
+// Create `path` (parent must already exist), failing with errno EEXIST if
+// it's already there; unlike fs_mkdir_p's internal helper, which tolerates
+// EEXIST for idempotency, plain mkdir(2)/_wmkdir is atomic against a racer
+int fs_mkdir_exclusive(const char *path, uint32_t mode);
+
+// Write the n-th (n >= 2) conflict-suffixed variant of `path` into `out`
+// (at least FS_PATH_MAX bytes): "name N.ext" on macOS, "name (N).ext"
+// elsewhere; returns -1 if the result would not fit in `out_size`
+int fs_conflict_path(const char *path, int n, char *out, size_t out_size);
+
+#define FS_MAX_CONFLICT_ATTEMPTS 1000
+
+// Applies an overwrite scheme (0=error, 1=skip, 2=overwrite, 3=rename) to
+// `path`, writing the safe path into `resolved` (at least FS_PATH_MAX bytes);
+// only stat(2)s, never touches the dest; not race-free as a codec pipeline has
+// no atomic point to open against until its output is fully produced; returns 0
+// to proceed with `resolved`, 1 to skip, or -1/errno
+int fs_resolve_conflict(const char *path, int overwrite_existing,
+                        char *resolved, size_t resolved_size);
+
 // Apply POSIX permission bits to an existing path; on Windows only the
 // read-only bit is honoured
 int fs_chmod(const char *path, uint32_t mode);
