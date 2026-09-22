@@ -213,6 +213,8 @@ C_SOURCES = [
     "src/compresso/csrc/archives.c",
     "src/compresso/csrc/validate.c",
     "src/compresso/csrc/fsutil.c",
+    # Shared codec core
+    "src/compresso/csrc/codec/codec.c",
     # Compression algorithms
     "src/compresso/csrc/compression/py_zlib.c",
     "src/compresso/csrc/compression/py_bzip2.c",

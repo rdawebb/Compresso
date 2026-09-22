@@ -71,6 +71,7 @@ SOURCE_FILES = [
   File.join(SRC_DIR, 'fsutil.c'),
   File.join(SRC_DIR, 'registry.c'),
   File.join(SRC_DIR, 'strategy.c'),
+  File.join(SRC_DIR, 'codec', 'codec.c'),
   File.join(SRC_DIR, 'compression', 'py_zlib.c'),
   File.join(SRC_DIR, 'compression', 'py_bzip2.c'),
   File.join(SRC_DIR, 'compression', 'py_lzma.c'),
