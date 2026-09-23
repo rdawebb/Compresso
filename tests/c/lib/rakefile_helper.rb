@@ -71,6 +71,12 @@ SOURCE_FILES = [
   File.join(SRC_DIR, 'fsutil.c'),
   File.join(SRC_DIR, 'registry.c'),
   File.join(SRC_DIR, 'strategy.c'),
+  File.join(SRC_DIR, 'codec', 'codec.c'),
+  File.join(SRC_DIR, 'codec', 'zstd.c'),
+  File.join(SRC_DIR, 'codec', 'lz4.c'),
+  File.join(SRC_DIR, 'codec', 'lzma.c'),
+  File.join(SRC_DIR, 'codec', 'bzip2.c'),
+  File.join(SRC_DIR, 'codec', 'zlib.c'),
   File.join(SRC_DIR, 'compression', 'py_zlib.c'),
   File.join(SRC_DIR, 'compression', 'py_bzip2.c'),
   File.join(SRC_DIR, 'compression', 'py_lzma.c'),
@@ -94,8 +100,8 @@ def object_file_for(source_file)
 end
 
 def find_test_files
-  files = Dir.glob('test_*.c') + Dir.glob('compression/test_*.c') +
-          Dir.glob('standalone/test_*.c')
+  files = Dir.glob('test_*.c') + Dir.glob('codec/test_*.c') +
+          Dir.glob('compression/test_*.c') + Dir.glob('standalone/test_*.c')
   files.sort
 end
 

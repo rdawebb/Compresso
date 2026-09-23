@@ -182,10 +182,6 @@ const CBackend *get_snappy_backend(void);
 
 size_t snappy_decompressed_size(const unsigned char *input, size_t input_size);
 
-// ---- Internal Helper ----
-
-const CBackend *choose_backend(Strategy strat);
-
 // ---- Exception Objects ----
 
 extern PyObject *comp_Error;

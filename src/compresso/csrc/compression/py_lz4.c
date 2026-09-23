@@ -1,7 +1,5 @@
 #define PY_SSIZE_T_CLEAN
-#define LZ4_CHUNK 65536 // 64KB
-#define LZ4_OUT_CHUNK                                                          \
-  (LZ4_CHUNK + LZ4_CHUNK / 255 + 16) // worst-case output size for LZ4 frame
+#include "../codec/codec.h"
 #include "../common.h"
 #include <Python.h>
 #include <lz4frame.h>
@@ -101,155 +99,14 @@ static int lz4_decompress_buffer(const unsigned char *input, size_t input_size,
 
 static int lz4_compress_stream(FILE *src, FILE *dst, int level,
                                CoreContext *ctx) {
-  LZ4F_compressionContext_t cctx;
-  size_t ret = LZ4F_createCompressionContext(&cctx, LZ4F_VERSION);
-  if (LZ4F_isError(ret)) {
-    return -1; // failed to create compression context
-  }
-
-  LZ4F_preferences_t prefs;
-  memset(&prefs, 0, sizeof(prefs));
-  prefs.compressionLevel = LZ4_level_from_generic(level);
-
-  unsigned char input[LZ4_CHUNK];
-  unsigned char output[LZ4_OUT_CHUNK];
-
-  int return_code = 0;
-
-  Py_BEGIN_ALLOW_THREADS
-
-      size_t header_size =
-          LZ4F_compressBegin(cctx, output, LZ4_OUT_CHUNK, &prefs);
-  if (LZ4F_isError(header_size)) {
-    return_code = -1; // compression error
-    goto done_stream;
-  }
-  if (fwrite(output, 1, header_size, dst) != header_size || ferror(dst)) {
-    return_code = -1; // write error
-    goto done_stream;
-  }
-
-  for (;;) {
-    size_t nread = fread(input, 1, LZ4_CHUNK, src);
-    if (ferror(src)) {
-      return_code = -1; // read error
-      break;
-    }
-
-    int advance = ctx_advance(ctx, nread);
-    if (advance != 0) {
-      return_code = advance;
-      break;
-    }
-
-    if (nread == 0) {
-      size_t end_size = LZ4F_compressEnd(cctx, output, LZ4_OUT_CHUNK, NULL);
-      if (LZ4F_isError(end_size)) {
-        return_code = -1; // compression error
-        break;
-      }
-      if (end_size > 0) {
-        if (fwrite(output, 1, end_size, dst) != end_size || ferror(dst)) {
-          return_code = -1; // write error
-        }
-      }
-      break; // end of file
-    }
-
-    size_t src_size = nread;
-    size_t dst_size = LZ4_OUT_CHUNK;
-
-    size_t bytes =
-        LZ4F_compressUpdate(cctx, output, dst_size, input, src_size, NULL);
-    if (LZ4F_isError(bytes)) {
-      return_code = -1; // compression error
-      break;
-    }
-
-    if (bytes > 0) {
-      if (fwrite(output, 1, bytes, dst) != bytes || ferror(dst)) {
-        return_code = -1; // write error
-        break;
-      }
-    }
-  }
-
-done_stream:
-  Py_END_ALLOW_THREADS
-
-      LZ4F_freeCompressionContext(cctx);
-  return return_code;
+  CodecParams params = {.level = level};
+  return codec_run_stream(codec_lz4_ops(), &params, 0, src, dst, ctx);
 }
 
 static int lz4_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
                                  CoreContext *ctx) {
-  (void)orig_size; // unused parameter
-
-  LZ4F_decompressionContext_t dctx;
-  size_t ret = LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION);
-  if (LZ4F_isError(ret)) {
-    return -1; // failed to create decompression context
-  }
-
-  unsigned char input[LZ4_CHUNK];
-  unsigned char output[LZ4_OUT_CHUNK];
-
-  int return_code = 0;
-
-  Py_BEGIN_ALLOW_THREADS
-
-      size_t input_size = 0;
-  size_t input_pos = 0;
-
-  for (;;) {
-    if (input_pos == input_size) {
-      input_size = fread(input, 1, LZ4_CHUNK, src);
-      if (ferror(src)) {
-        return_code = -1; // read error
-        break;
-      }
-      input_pos = 0;
-
-      if (input_size == 0) {
-        break; // end of file
-      }
-
-      int advance = ctx_advance(ctx, input_size);
-      if (advance != 0) {
-        return_code = advance;
-        break;
-      }
-    }
-
-    size_t src_size = input_size - input_pos;
-    size_t dst_size = LZ4_OUT_CHUNK;
-
-    ret = LZ4F_decompress(dctx, output, &dst_size, input + input_pos, &src_size,
-                          NULL);
-
-    if (LZ4F_isError(ret)) {
-      return_code = -1; // decompression error
-      break;
-    }
-
-    input_pos += src_size;
-
-    if (dst_size > 0) {
-      if (fwrite(output, 1, dst_size, dst) != dst_size || ferror(dst)) {
-        return_code = -1; // write error
-        break;
-      }
-    }
-
-    if (ret == 0) {
-      break; // decompression completed
-    }
-  }
-
-  Py_END_ALLOW_THREADS
-
-      LZ4F_freeDecompressionContext(dctx);
-  return return_code;
+  CodecParams params = {.orig_size = orig_size};
+  return codec_run_stream(codec_lz4_ops(), &params, 1, src, dst, ctx);
 }
 
 // ---- Backend Definition ----

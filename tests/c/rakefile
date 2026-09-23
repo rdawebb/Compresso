@@ -38,6 +38,11 @@ namespace :test do
     run_single_test('test_router.c')
   end
 
+  desc "Run shared codec driver tests"
+  task :codec => [:prepare_for_tests] do
+    run_single_test('codec/test_codec.c')
+  end
+
   desc "Run compression tests"
   namespace :compression do
     desc "Run zlib tests"
