@@ -76,6 +76,7 @@ SOURCE_FILES = [
   File.join(SRC_DIR, 'codec', 'lz4.c'),
   File.join(SRC_DIR, 'codec', 'lzma.c'),
   File.join(SRC_DIR, 'codec', 'bzip2.c'),
+  File.join(SRC_DIR, 'codec', 'zlib.c'),
   File.join(SRC_DIR, 'compression', 'py_zlib.c'),
   File.join(SRC_DIR, 'compression', 'py_bzip2.c'),
   File.join(SRC_DIR, 'compression', 'py_lzma.c'),
