@@ -217,6 +217,7 @@ C_SOURCES = [
     "src/compresso/csrc/codec/codec.c",
     "src/compresso/csrc/codec/zstd.c",
     "src/compresso/csrc/codec/lz4.c",
+    "src/compresso/csrc/codec/lzma.c",
     # Compression algorithms
     "src/compresso/csrc/compression/py_zlib.c",
     "src/compresso/csrc/compression/py_bzip2.c",

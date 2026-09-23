@@ -80,5 +80,6 @@ int codec_run_file(const CodecOps *ops, const CodecParams *params,
 
 const CodecOps *codec_zstd_ops(void);
 const CodecOps *codec_lz4_ops(void);
+const CodecOps *codec_lzma_ops(void);
 
 #endif // CODEC_H

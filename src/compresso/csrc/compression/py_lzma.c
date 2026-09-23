@@ -1,6 +1,6 @@
 #define PY_SSIZE_T_CLEAN
-#define LZMA_CHUNK 65536                                // 64KB
 #define LZMA_DECOMPRESS_MEMLIMIT (512ULL * 1024 * 1024) // 512MB
+#include "../codec/codec.h"
 #include "../common.h"
 #include <Python.h>
 #include <lzma.h>
@@ -91,148 +91,14 @@ static int lzma_decompress_buffer(const unsigned char *input, size_t input_size,
 
 static int lzma_compress_stream(FILE *src, FILE *dst, int level,
                                 CoreContext *ctx) {
-  uint32_t preset = lzma_level_to_preset(level);
-
-  lzma_stream strm = LZMA_STREAM_INIT;
-  lzma_ret ret = lzma_easy_encoder(&strm, preset, LZMA_CHECK_CRC64);
-  if (ret != LZMA_OK) {
-    return -1; // initialisation failed
-  }
-
-  unsigned char input[LZMA_CHUNK];
-  unsigned char output[LZMA_CHUNK];
-
-  int return_code = 0;
-
-  Py_BEGIN_ALLOW_THREADS
-
-      lzma_action action = LZMA_RUN;
-
-  while (1) {
-    if (strm.avail_in == 0) {
-      size_t nread = fread(input, 1, LZMA_CHUNK, src);
-      if (ferror(src)) {
-        return_code = -1; // read error
-        break;
-      }
-
-      strm.next_in = input;
-      strm.avail_in = nread;
-
-      int advance = ctx_advance(ctx, nread);
-      if (advance != 0) {
-        return_code = advance;
-        break;
-      }
-
-      if (feof(src)) {
-        action = LZMA_FINISH;
-      }
-    }
-
-    strm.next_out = output;
-    strm.avail_out = LZMA_CHUNK;
-
-    ret = lzma_code(&strm, action);
-
-    size_t write_size = LZMA_CHUNK - strm.avail_out;
-    if (write_size > 0) {
-      if (fwrite(output, 1, write_size, dst) != write_size || ferror(dst)) {
-        return_code = -1; // write error
-        break;
-      }
-    }
-
-    if (ret == LZMA_STREAM_END) {
-      break; // finished
-    }
-
-    if (ret != LZMA_OK) {
-      return_code = -1; // compression error
-      break;
-    }
-  }
-
-  Py_END_ALLOW_THREADS
-
-      lzma_end(&strm);
-  return return_code;
+  CodecParams params = {.level = level, .extreme = 1};
+  return codec_run_stream(codec_lzma_ops(), &params, 0, src, dst, ctx);
 }
 
 static int lzma_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
                                   CoreContext *ctx) {
-  (void)orig_size; // unused parameter
-
-  lzma_stream strm = LZMA_STREAM_INIT;
-
-  uint64_t memlimit = LZMA_DECOMPRESS_MEMLIMIT;
-  uint32_t flags = 0;
-  lzma_ret ret = lzma_stream_decoder(&strm, memlimit, flags);
-  if (ret != LZMA_OK) {
-    return -1; // initialisation failed
-  }
-
-  unsigned char input[LZMA_CHUNK];
-  unsigned char output[LZMA_CHUNK];
-
-  int return_code = 0;
-
-  Py_BEGIN_ALLOW_THREADS
-
-      while (1) {
-    if (strm.avail_in == 0) {
-      size_t nread = fread(input, 1, LZMA_CHUNK, src);
-      if (ferror(src)) {
-        return_code = -1; // read error
-        break;
-      }
-
-      strm.next_in = input;
-      strm.avail_in = nread;
-
-      int advance = ctx_advance(ctx, nread);
-      if (advance != 0) {
-        return_code = advance;
-        break;
-      }
-    }
-
-    if (strm.avail_in == 0 && feof(src)) {
-      break; // end of file
-    }
-
-    strm.next_out = output;
-    strm.avail_out = LZMA_CHUNK;
-
-    ret = lzma_code(&strm, LZMA_RUN);
-
-    size_t write_size = LZMA_CHUNK - strm.avail_out;
-    if (write_size > 0) {
-      if (fwrite(output, 1, write_size, dst) != write_size || ferror(dst)) {
-        return_code = -1; // write error
-        break;
-      }
-    }
-
-    if (ret == LZMA_STREAM_END) {
-      break; // finished
-    }
-
-    if (ret != LZMA_OK) {
-      if (ret == LZMA_MEMLIMIT_ERROR) {
-        PyErr_Format(comp_BackendError,
-                     "LZMA decompression exceeded memory limit: %llu",
-                     (unsigned long long)LZMA_DECOMPRESS_MEMLIMIT);
-      }
-      return_code = -1; // decompression error
-      break;
-    }
-  }
-
-  Py_END_ALLOW_THREADS
-
-      lzma_end(&strm);
-  return return_code;
+  CodecParams params = {.orig_size = orig_size};
+  return codec_run_stream(codec_lzma_ops(), &params, 1, src, dst, ctx);
 }
 
 // ---- Backend Definition ----
