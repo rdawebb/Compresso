@@ -76,4 +76,8 @@ int codec_run_file(const CodecOps *ops, const CodecParams *params,
                    const char *output_path, CoreContext *ctx,
                    const char *failure_message);
 
+// ---- Engines ----
+
+const CodecOps *codec_zstd_ops(void);
+
 #endif // CODEC_H
