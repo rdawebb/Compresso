@@ -95,8 +95,8 @@ def object_file_for(source_file)
 end
 
 def find_test_files
-  files = Dir.glob('test_*.c') + Dir.glob('compression/test_*.c') +
-          Dir.glob('standalone/test_*.c')
+  files = Dir.glob('test_*.c') + Dir.glob('codec/test_*.c') +
+          Dir.glob('compression/test_*.c') + Dir.glob('standalone/test_*.c')
   files.sort
 end
 
