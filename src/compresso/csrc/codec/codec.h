@@ -38,6 +38,9 @@ typedef struct {
   int extreme;  // lzma: LZMA_PRESET_EXTREME
   int wrap;     // deflate: a CodecWrap
   uint64_t orig_size;
+
+  // Codec's name in an error message; NULL uses CodecOps.name
+  const char *label;
 } CodecParams;
 
 typedef struct CodecOps {
@@ -60,8 +63,8 @@ typedef struct CodecOps {
   void (*end)(void *state);
 
   // GIL re-acquired, so a code captured inside the loop can become an
-  // exception; NULL leaves the message to the caller
-  const char *(*describe)(void *state, int decompress);
+  // exception; `label` is the codec's name; NULL leaves message to the caller
+  const char *(*describe)(void *state, const char *label, int decompress);
 } CodecOps;
 
 // `ctx` is NULL-tolerant; returns 0, -1 with a Python exception set, or

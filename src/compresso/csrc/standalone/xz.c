@@ -8,14 +8,14 @@
 // integrity check, verified by the decoder
 static int xz_compress_file(const char *input_path, const char *output_path,
                             int level, CoreContext *ctx) {
-  CodecParams params = {.level = level};
+  CodecParams params = {.level = level, .label = "xz"};
   return codec_run_file(codec_lzma_ops(), &params, 0, input_path, output_path,
                         ctx, "xz compression failed");
 }
 
 static int xz_decompress_file(const char *input_path, const char *output_path,
                               CoreContext *ctx) {
-  CodecParams params = {0};
+  CodecParams params = {.label = "xz"};
   return codec_run_file(codec_lzma_ops(), &params, 1, input_path, output_path,
                         ctx, "xz decompression failed");
 }

@@ -1,12 +1,14 @@
 #define PY_SSIZE_T_CLEAN
 #include "codec.h"
 #include <bzlib.h>
+#include <stdio.h>
 
 typedef struct {
   bz_stream strm;
   int code;
   int started;
   int decompress;
+  char message[128];
 } BzipState;
 
 static int bzip2_block_size_from_level(int level) {
@@ -76,16 +78,18 @@ static void bzip2_end(void *state) {
   }
 }
 
-static const char *bzip2_describe(void *state, int decompress) {
+static const char *bzip2_describe(void *state, const char *label,
+                                  int decompress) {
   BzipState *s = (BzipState *)state;
 
-  if (!decompress) {
-    return "bzip2 compression failed";
-  }
+  const char *reason =
+      !decompress ? "compression failed"
+      : (s->code == BZ_DATA_ERROR || s->code == BZ_DATA_ERROR_MAGIC)
+          ? "data error: corrupted or invalid compressed data"
+          : "decompression failed";
 
-  return (s->code == BZ_DATA_ERROR || s->code == BZ_DATA_ERROR_MAGIC)
-             ? "bzip2 data error: corrupted or invalid compressed data"
-             : "bzip2 decompression failed";
+  snprintf(s->message, sizeof(s->message), "%s %s", label, reason);
+  return s->message;
 }
 
 static const CodecOps bzip2_ops = {

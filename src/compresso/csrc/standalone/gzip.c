@@ -52,7 +52,8 @@ static int gzip_check_header(const char *path) {
 
 static int gzip_compress_file(const char *input_path, const char *output_path,
                               int level, CoreContext *ctx) {
-  CodecParams params = {.level = level, .wrap = CODEC_WRAP_GZIP};
+  CodecParams params = {
+      .level = level, .wrap = CODEC_WRAP_GZIP, .label = "gzip"};
   return codec_run_file(codec_zlib_ops(), &params, 0, input_path, output_path,
                         ctx, "gzip compression failed");
 }
@@ -65,7 +66,7 @@ static int gzip_decompress_file(const char *input_path, const char *output_path,
 
   // zlib consumes the header's optional fields and checks the trailer's CRC32
   // and ISIZE itself
-  CodecParams params = {.wrap = CODEC_WRAP_GZIP};
+  CodecParams params = {.wrap = CODEC_WRAP_GZIP, .label = "gzip"};
   return codec_run_file(codec_zlib_ops(), &params, 1, input_path, output_path,
                         ctx, "gzip decompression failed");
 }

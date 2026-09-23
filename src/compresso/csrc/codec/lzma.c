@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include "codec.h"
 #include <lzma.h>
+#include <stdio.h>
 
 #define LZMA_DECOMPRESS_MEMLIMIT (512ULL * 1024 * 1024) // 512MB
 
@@ -8,6 +9,7 @@ typedef struct {
   lzma_stream strm;
   lzma_ret code;
   int started; // strm holds an encoder or decoder, so end() must release it
+  char message[128];
 } LzmaState;
 
 // Prefixed throughout: liblzma already exports lzma_end and lzma_code
@@ -74,24 +76,34 @@ static void codec_lzma_end(void *state) {
   }
 }
 
-static const char *codec_lzma_describe(void *state, int decompress) {
+static const char *codec_lzma_describe(void *state, const char *label,
+                                       int decompress) {
   LzmaState *s = (LzmaState *)state;
 
   if (!decompress) {
-    return "lzma compression failed";
+    snprintf(s->message, sizeof(s->message), "%s compression failed", label);
+    return s->message;
   }
 
+  const char *reason;
   switch (s->code) {
   case LZMA_MEMLIMIT_ERROR:
-    return "lzma decompression exceeded its 512 MB memory limit";
+    reason = "decompression exceeded its 512 MB memory limit";
+    break;
   case LZMA_FORMAT_ERROR:
-    return "lzma format error: invalid compressed data";
+    reason = "format error: invalid compressed data";
+    break;
   case LZMA_DATA_ERROR:
   case LZMA_BUF_ERROR:
-    return "lzma data error: corrupted or truncated compressed data";
+    reason = "data error: corrupted or truncated compressed data";
+    break;
   default:
-    return "lzma decompression failed";
+    reason = "decompression failed";
+    break;
   }
+
+  snprintf(s->message, sizeof(s->message), "%s %s", label, reason);
+  return s->message;
 }
 
 static const CodecOps lzma_ops = {

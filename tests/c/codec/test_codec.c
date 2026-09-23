@@ -33,6 +33,7 @@ typedef struct {
 // run is recorded here
 static int stub_end_calls;
 static int stub_last_finish;
+static const char *stub_last_label;
 
 static int stub_begin(void *state, const CodecParams *params, int decompress) {
   (void)decompress;
@@ -95,9 +96,11 @@ static void stub_end(void *state) {
   stub_end_calls++;
 }
 
-static const char *stub_describe(void *state, int decompress) {
+static const char *stub_describe(void *state, const char *label,
+                                 int decompress) {
   (void)state;
   (void)decompress;
+  stub_last_label = label;
   return "stub engine failed";
 }
 
@@ -149,6 +152,7 @@ void setUp(void) {
 
   stub_end_calls = 0;
   stub_last_finish = -1;
+  stub_last_label = NULL;
   cancel_flag = 0;
   memset(&progress_log, 0, sizeof(progress_log));
   memset(&ctx, 0, sizeof(ctx));
@@ -313,6 +317,20 @@ void test_driver_reports_a_process_failure(void) {
 void test_driver_unlinks_the_output_on_failure(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_stub(STUB_FAIL_PROCESS, TEST_INPUT));
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+void test_driver_names_the_codec_when_no_label_is_given(void) {
+  TEST_ASSERT_EQUAL_INT(-1, run_stub(STUB_FAIL_PROCESS, TEST_INPUT));
+  TEST_ASSERT_EQUAL_STRING("stub", stub_last_label);
+}
+
+void test_driver_prefers_the_label_over_the_codec_name(void) {
+  // What keeps .xz saying "xz" rather than "lzma", and .gz "gzip"
+  CodecParams params = {.level = STUB_FAIL_PROCESS, .label = "container"};
+
+  TEST_ASSERT_EQUAL_INT(-1, codec_run_file(&stub_ops, &params, 0, TEST_INPUT,
+                                           TMP_OUT, &ctx, "stub run failed"));
+  TEST_ASSERT_EQUAL_STRING("container", stub_last_label);
 }
 
 void test_driver_stops_on_a_stalled_engine(void) {

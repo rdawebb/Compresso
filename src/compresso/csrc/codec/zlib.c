@@ -100,15 +100,16 @@ static void zlib_end(void *state) {
   }
 }
 
-static const char *zlib_describe(void *state, int decompress) {
+static const char *zlib_describe(void *state, const char *label,
+                                 int decompress) {
   ZlibState *s = (ZlibState *)state;
   const char *op = decompress ? "decompression" : "compression";
 
   if (s->strm.msg) {
-    snprintf(s->message, sizeof(s->message), "zlib %s failed: %s", op,
+    snprintf(s->message, sizeof(s->message), "%s %s failed: %s", label, op,
              s->strm.msg);
   } else {
-    snprintf(s->message, sizeof(s->message), "zlib %s failed", op);
+    snprintf(s->message, sizeof(s->message), "%s %s failed", label, op);
   }
 
   return s->message;

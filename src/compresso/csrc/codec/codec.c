@@ -14,8 +14,12 @@ typedef enum {
   FAIL_TRUNCATED,
 } FailKind;
 
-static void set_failure(const CodecOps *ops, void *state, FailKind kind,
-                        int decompress) {
+static const char *codec_label(const CodecOps *ops, const CodecParams *params) {
+  return (params && params->label) ? params->label : ops->name;
+}
+
+static void set_failure(const CodecOps *ops, const CodecParams *params,
+                        void *state, FailKind kind, int decompress) {
   if (PyErr_Occurred()) {
     return; // An engine that raised its own is more specific
   }
@@ -29,10 +33,12 @@ static void set_failure(const CodecOps *ops, void *state, FailKind kind,
     return;
   case FAIL_TRUNCATED:
     PyErr_Format(comp_BackendError, "Truncated or incomplete %s stream",
-                 ops->name);
+                 codec_label(ops, params));
     return;
   case FAIL_CODEC: {
-    const char *message = ops->describe ? ops->describe(state, decompress) : NULL;
+    const char *message =
+        ops->describe ? ops->describe(state, codec_label(ops, params), decompress)
+                      : NULL;
     if (message) {
       PyErr_SetString(comp_BackendError, message);
     }
@@ -60,7 +66,7 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
   memset(state, 0, ops->state_size);
 
   if (ops->begin(state, params, decompress) != 0) {
-    set_failure(ops, state, FAIL_CODEC, decompress);
+    set_failure(ops, params, state, FAIL_CODEC, decompress);
     ops->end(state);
     free(state);
     free(in_buf);
@@ -147,7 +153,7 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
 
       // Before end(), which releases what describe() reads from
       if (err == -1) {
-    set_failure(ops, state, fail, decompress);
+    set_failure(ops, params, state, fail, decompress);
   }
 
   ops->end(state);
