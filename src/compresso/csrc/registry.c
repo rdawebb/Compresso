@@ -13,7 +13,7 @@ static void register_backend(const CBackend *b) {
   if (!b) {
     return;
   }
-  if (!b->is_available || !b->compress_buffer || !b->decompress_buffer) {
+  if (!b->is_available || !b->compress_stream || !b->decompress_stream) {
     return;
   }
   if (!b->is_available()) {
@@ -140,7 +140,7 @@ PyObject *get_capabilities(void) {
       continue;
     }
 
-    int has_buffer = (b->compress_buffer && b->decompress_buffer) ? 1 : 0;
+    int has_buffer = 0;
     int has_stream = (b->compress_stream && b->decompress_stream) ? 1 : 0;
 
     PyObject *dict = PyDict_New();

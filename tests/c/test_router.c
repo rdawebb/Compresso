@@ -117,17 +117,6 @@ void test_backend_availability(void) {
     }
 }
 
-void test_backend_max_compressed_size(void) {
-    const CBackend *backend = find_backend_by_name("zlib");
-    TEST_ASSERT_NOT_NULL(backend);
-
-    if (backend->max_compressed_size) {
-        size_t input_size = 1000;
-        size_t max_size = backend->max_compressed_size(input_size);
-        TEST_ASSERT_GREATER_THAN(input_size, max_size);
-    }
-}
-
 void test_strategy_from_string_balanced(void) {
     Strategy strat = strategy_from_string("balanced");
     TEST_ASSERT_EQUAL(STRAT_BALANCED, strat);

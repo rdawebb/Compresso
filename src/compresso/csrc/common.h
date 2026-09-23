@@ -140,15 +140,6 @@ typedef struct CBackend {
   uint8_t id;
 
   int (*is_available)(void);
-  size_t (*max_compressed_size)(size_t input_size);
-
-  int (*compress_buffer)(const unsigned char *input, size_t input_size,
-                         unsigned char *output, size_t *output_capacity,
-                         int level, size_t *output_size);
-
-  int (*decompress_buffer)(const unsigned char *input, size_t input_size,
-                           unsigned char *output, size_t *output_capacity,
-                           size_t *output_size);
 
   // `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation
   int (*compress_stream)(FILE *src, FILE *dst, int level, CoreContext *ctx);
@@ -177,10 +168,6 @@ const CBackend *get_lzma_backend(void);
 const CBackend *get_zstd_backend(void);
 const CBackend *get_lz4_backend(void);
 const CBackend *get_snappy_backend(void);
-
-// ---- Snappy Helper ----
-
-size_t snappy_decompressed_size(const unsigned char *input, size_t input_size);
 
 // ---- Exception Objects ----
 

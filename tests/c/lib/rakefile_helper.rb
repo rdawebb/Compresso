@@ -66,6 +66,7 @@ SRC_DIR = File.join(__dir__, '..', '..', '..', 'src', 'compresso', 'csrc')
 SOURCE_FILES = [
   'unity.c',
   File.join(__dir__, 'test_stubs.c'),
+  File.join(__dir__, 'backend_io.c'),
   File.join(SRC_DIR, 'common.c'),
   File.join(SRC_DIR, 'format.c'),
   File.join(SRC_DIR, 'fsutil.c'),
