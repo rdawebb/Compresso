@@ -201,7 +201,6 @@ PyObject *get_capabilities(void);
 
 #define MAX_FILE_SIZE (10ULL * 1024 * 1024 * 1024)         // 10 GB
 #define MAX_DECOMPRESSED_SIZE (10ULL * 1024 * 1024 * 1024) // 10 GB
-#define MAX_COMPRESSED_SIZE (12ULL * 1024 * 1024 * 1024)   // 12 GB
 
 int validate_size(uint64_t size, uint64_t max_size, const char *name);
 
