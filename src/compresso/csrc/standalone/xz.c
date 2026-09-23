@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "../codec/codec.h"
+#include "../magics.h"
 #include "../standalone.h"
 #include <string.h>
 
@@ -25,8 +26,7 @@ static char *xz_get_original_name(const char *compressed_path) {
 }
 
 static int xz_is_format(const unsigned char *magic, size_t size) {
-  static const unsigned char MAGIC_XZ[] = {0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00};
-  return (size >= 6 && memcmp(magic, MAGIC_XZ, 6) == 0);
+  return magic_is_xz(magic, size);
 }
 
 static const StandaloneFormat xz_format = {

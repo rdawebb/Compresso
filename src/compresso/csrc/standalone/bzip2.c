@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "../codec/codec.h"
+#include "../magics.h"
 #include "../standalone.h"
 
 // The .bz2 frame (BZh header + per-block CRC32s) is produced by libbz2, which
@@ -24,7 +25,7 @@ static char *bzip2_get_original_name(const char *compressed_path) {
 }
 
 static int bzip2_is_format(const unsigned char *magic, size_t size) {
-  return (size >= 2 && magic[0] == 'B' && magic[1] == 'Z');
+  return magic_is_bzip2(magic, size);
 }
 
 static const StandaloneFormat bzip2_format = {

@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "../codec/codec.h"
+#include "../magics.h"
 #include "../standalone.h"
 #include <string.h>
 
@@ -25,8 +26,7 @@ static char *lz4_get_original_name(const char *compressed_path) {
 }
 
 static int lz4_is_format(const unsigned char *magic, size_t size) {
-  static const unsigned char MAGIC_LZ4[] = {0x04, 0x22, 0x4D, 0x18};
-  return (size >= 4 && memcmp(magic, MAGIC_LZ4, 4) == 0);
+  return magic_is_lz4(magic, size);
 }
 
 static const StandaloneFormat lz4_format = {

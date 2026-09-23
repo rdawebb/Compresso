@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "../codec/codec.h"
+#include "../magics.h"
 #include "../common.h"
 #include "../fsutil.h"
 #include "../standalone.h"
@@ -115,7 +116,7 @@ static char *gzip_get_original_name(const char *compressed_path) {
 }
 
 static int gzip_is_format(const unsigned char *magic, size_t size) {
-  return (size >= 2 && magic[0] == 0x1f && magic[1] == 0x8b);
+  return magic_is_gzip(magic, size);
 }
 
 static const StandaloneFormat gzip_format = {

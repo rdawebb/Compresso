@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "../codec/codec.h"
+#include "../magics.h"
 #include "../standalone.h"
 #include <string.h>
 
@@ -25,8 +26,7 @@ static char *zstd_get_original_name(const char *compressed_path) {
 }
 
 static int zstd_is_format(const unsigned char *magic, size_t size) {
-  static const unsigned char MAGIC_ZSTD[] = {0x28, 0xB5, 0x2F, 0xFD};
-  return (size >= 4 && memcmp(magic, MAGIC_ZSTD, 4) == 0);
+  return magic_is_zstd(magic, size);
 }
 
 static const StandaloneFormat zstd_format = {

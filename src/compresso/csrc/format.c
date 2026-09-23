@@ -1,42 +1,12 @@
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
 #include "fsutil.h"
+#include "magics.h"
 #include "standalone.h"
 #include <Python.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
-
-// ---- Magic Byte Constants ----
-
-// Compression formats
-#define MAGIC_GZIP_1 0x1f
-#define MAGIC_GZIP_2 0x8b
-
-#define MAGIC_BZIP2_1 'B'
-#define MAGIC_BZIP2_2 'Z'
-
-static const unsigned char MAGIC_XZ[] = {0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00};
-static const unsigned char MAGIC_ZSTD[] = {0x28, 0xB5, 0x2F, 0xFD};
-static const unsigned char MAGIC_LZ4[] = {0x04, 0x22, 0x4D, 0x18};
-
-// Archive formats
-#define MAGIC_ZIP_1 'P'
-#define MAGIC_ZIP_2 'K'
-#define MAGIC_ZIP_3 0x03
-#define MAGIC_ZIP_4 0x04
-
-static const unsigned char MAGIC_7Z[] = {'7', 'z', 0xBC, 0xAF, 0x27, 0x1C};
-
-// Compresso format
-#define MAGIC_COMP_1 'C'
-#define MAGIC_COMP_2 'O'
-#define MAGIC_COMP_3 'M'
-#define MAGIC_COMP_4 'P'
-
-// TAR: 'ustar' at offset 257
-#define TAR_MAGIC_OFFSET 257
-static const char TAR_MAGIC[] = "ustar";
 
 // ---- Format Detection Functions ----
 
@@ -45,13 +15,12 @@ Format detect_format_from_magic_bytes(const unsigned char *magic, size_t size) {
     return FORMAT_UNKNOWN;
   }
 
-  // Gzip (only needs 2 bytes)
-  if (magic[0] == MAGIC_GZIP_1 && magic[1] == MAGIC_GZIP_2) {
+  // Gzip and bzip2 need only 2 bytes
+  if (magic_is_gzip(magic, size)) {
     return FORMAT_GZIP;
   }
 
-  // Bzip2 (only needs 2 bytes)
-  if (magic[0] == MAGIC_BZIP2_1 && magic[1] == MAGIC_BZIP2_2) {
+  if (magic_is_bzip2(magic, size)) {
     return FORMAT_BZIP2;
   }
 
@@ -59,35 +28,27 @@ Format detect_format_from_magic_bytes(const unsigned char *magic, size_t size) {
     return FORMAT_UNKNOWN;
   }
 
-  // Compresso
-  if (magic[0] == MAGIC_COMP_1 && magic[1] == MAGIC_COMP_2 &&
-      magic[2] == MAGIC_COMP_3 && magic[3] == MAGIC_COMP_4) {
+  if (magic_is_compresso(magic, size)) {
     return FORMAT_COMPRESSO;
   }
 
-  // XZ
-  if (size >= 6 && memcmp(magic, MAGIC_XZ, 6) == 0) {
+  if (magic_is_xz(magic, size)) {
     return FORMAT_XZ;
   }
 
-  // Zstd
-  if (size >= 4 && memcmp(magic, MAGIC_ZSTD, 4) == 0) {
+  if (magic_is_zstd(magic, size)) {
     return FORMAT_ZSTD;
   }
 
-  // LZ4
-  if (size >= 4 && memcmp(magic, MAGIC_LZ4, 4) == 0) {
+  if (magic_is_lz4(magic, size)) {
     return FORMAT_LZ4;
   }
 
-  // ZIP
-  if (magic[0] == MAGIC_ZIP_1 && magic[1] == MAGIC_ZIP_2 &&
-      magic[2] == MAGIC_ZIP_3 && magic[3] == MAGIC_ZIP_4) {
+  if (magic_is_zip(magic, size)) {
     return FORMAT_ZIP;
   }
 
-  // 7z
-  if (size >= 6 && memcmp(magic, MAGIC_7Z, 6) == 0) {
+  if (magic_is_7z(magic, size)) {
     return FORMAT_7Z;
   }
 
