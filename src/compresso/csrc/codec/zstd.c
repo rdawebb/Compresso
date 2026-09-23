@@ -20,7 +20,8 @@ static int zstd_begin(void *state, const CodecParams *params, int decompress) {
 
   if (decompress) {
     s->dctx = ZSTD_createDCtx();
-    return s->dctx && !ZSTD_isError(ZSTD_DCtx_reset(s->dctx, ZSTD_reset_session_and_parameters))
+    return s->dctx && !ZSTD_isError(ZSTD_DCtx_reset(
+                          s->dctx, ZSTD_reset_session_and_parameters))
                ? 0
                : -1;
   }
@@ -30,14 +31,14 @@ static int zstd_begin(void *state, const CodecParams *params, int decompress) {
     return -1;
   }
 
-  int zlevel =
-      (params->level >= 0) ? zstd_level_from_generic(params->level) : ZSTD_CLEVEL_DEFAULT;
-  if (ZSTD_isError(ZSTD_CCtx_setParameter(s->cctx, ZSTD_c_compressionLevel, zlevel))) {
+  int zlevel = (params->level >= 0) ? zstd_level_from_generic(params->level)
+                                    : ZSTD_CLEVEL_DEFAULT;
+  if (ZSTD_isError(
+          ZSTD_CCtx_setParameter(s->cctx, ZSTD_c_compressionLevel, zlevel))) {
     return -1;
   }
 
-  // The standalone containers embed an XXH64 content checksum, verified as the
-  // frame ends; `.comp` carries no such field
+  // The standalone containers embed an XXH64 content checksum
   if (params->checksum &&
       ZSTD_isError(ZSTD_CCtx_setParameter(s->cctx, ZSTD_c_checksumFlag, 1))) {
     return -1;

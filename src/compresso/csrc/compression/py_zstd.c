@@ -60,7 +60,6 @@ static int zstd_decompress_buffer(const unsigned char *input, size_t input_size,
 
 // ---- Stream Compression/Decompression ----
 
-// No checksum: the `.comp` header carries no field for one
 static int zstd_compress_stream(FILE *src, FILE *dst, int level,
                                 CoreContext *ctx) {
   CodecParams params = {.level = level};

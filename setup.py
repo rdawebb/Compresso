@@ -216,6 +216,7 @@ C_SOURCES = [
     # Shared codec core
     "src/compresso/csrc/codec/codec.c",
     "src/compresso/csrc/codec/zstd.c",
+    "src/compresso/csrc/codec/lz4.c",
     # Compression algorithms
     "src/compresso/csrc/compression/py_zlib.c",
     "src/compresso/csrc/compression/py_bzip2.c",
