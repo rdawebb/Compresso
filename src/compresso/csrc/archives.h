@@ -193,7 +193,4 @@ int extract_archive(const char *archive_path, const char *output_dir,
 
 PyObject *list_archive_contents(const char *archive_path);
 
-int convert_archive_format(const char *input_path, const char *output_path,
-                           Format new_format, int compression_level);
-
 #endif // ARCHIVE_H
