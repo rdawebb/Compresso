@@ -355,3 +355,36 @@ class TestListArchiveContentsArgs:
         """Test that a stray keyword raises rather than being silently dropped."""
         with pytest.raises(TypeError, match="keyword"):
             _core.list_archive_contents(str(temp_dir / "a.tar"), bogus=1)  # type: ignore[call-arg]  # ty:ignore[unknown-argument]
+
+
+class TestRecognisedButUnsupportedArchive:
+    """Test that a detected archive format without a backend names itself."""
+
+    @pytest.fixture
+    def fake_7z(self, temp_dir: Path) -> Path:
+        """A file that detects as 7z by its magic bytes alone."""
+        path = temp_dir / "fake.7z"
+        path.write_bytes(b"7z\xbc\xaf\x27\x1c" + bytes(32))
+        return path
+
+    def test_listing_names_the_format(self, fake_7z: Path) -> None:
+        """Test that listing reports 7z rather than a generic failure."""
+        with pytest.raises(BackendError, match="7z archives are recognised"):
+            _core.list_archive_contents(str(fake_7z))
+
+    def test_extracting_names_the_format(self, fake_7z: Path, temp_dir: Path) -> None:
+        """Test that extraction reports 7z and writes nothing."""
+        out = temp_dir / "out"
+        out.mkdir()
+        with pytest.raises(BackendError, match="7z archives are recognised"):
+            _core.extract_archive(str(fake_7z), str(out), [])
+        assert list(out.iterdir()) == []
+
+    def test_creating_names_the_format(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that creation reports 7z and leaves no output behind."""
+        dest = temp_dir / "new.7z"
+        with pytest.raises(BackendError, match="7z archives are recognised"):
+            _core.create_archive(str(dest), "7z", [str(sample_text_file)])
+        assert not dest.exists()

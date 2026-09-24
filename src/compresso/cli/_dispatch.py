@@ -77,7 +77,12 @@ def is_archive_format(fmt: str | None) -> bool:
     Returns:
         True if `fmt` names an archive format, False otherwise.
     """
-    return fmt is not None and fmt.lower() in ARCHIVE_FORMATS
+    if fmt is None:
+        return False
+
+    # The core also knows containers it detects but cannot write yet (e.g. 7z),
+    # so they reach the archive path and its "not supported yet" error
+    return fmt.lower() in ARCHIVE_FORMATS or format_is_archive(fmt.lower())
 
 
 def default_archive_output(first_input: Path, fmt: str) -> Path:

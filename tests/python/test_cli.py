@@ -684,6 +684,18 @@ class TestExitCodes:
         )
         assert result.exit_code == EXIT_USAGE
 
+    def test_recognised_but_unsupported_archive_names_itself(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that a detected-but-unwritable container reports its own name."""
+        dest = temp_dir / "o.7z"
+        result = runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(dest), "-f", "7z"]
+        )
+        assert result.exit_code == EXIT_FAILED
+        assert "7z archives are recognised but not supported yet" in result.output
+        assert not dest.exists()
+
     def test_failed_operation_is_one(self, source_tree: Path, temp_dir: Path) -> None:
         """Test that a job that starts and then fails exits 1, not 2."""
         archive = temp_dir / "out.tar"
