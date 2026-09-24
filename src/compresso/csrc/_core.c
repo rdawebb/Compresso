@@ -761,6 +761,49 @@ static PyObject *py_get_default_backend_for_strategy(PyObject *self UNUSED,
   return PyUnicode_FromString(name);
 }
 
+// The same level check compress_file, compress_standalone and create_archive
+// make, without doing any work, so a plan can refuse a level up front
+static PyObject *py_check_level(PyObject *self UNUSED, PyObject *args,
+                                PyObject *kwargs) {
+  static char *kwlist[] = {"level", "algo", "strategy", "format", NULL};
+
+  int level = -1;
+  const char *algo_name = "";
+  const char *strategy_name = "";
+  const char *format_name = "";
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "i|$sss", kwlist, &level,
+                                   &algo_name, &strategy_name, &format_name)) {
+    return NULL; // Error already set
+  }
+
+  if (format_name[0] != '\0') {
+    CompressionPipeline pipe = pipeline_from_name(format_name, level);
+    if (pipe.archive == ARCHIVE_NONE && pipe.codec == FORMAT_UNKNOWN) {
+      PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
+      return NULL;
+    }
+    if (validate_compression_request(ALGO_NONE, STRAT_BALANCED, level,
+                                     &pipe) != 0) {
+      return NULL;
+    }
+    Py_RETURN_NONE;
+  }
+
+  AlgoID algo = algo_from_string(algo_name);
+  if (algo_name[0] != '\0' && algo == ALGO_NONE) {
+    PyErr_Format(PyExc_ValueError, "Unknown compression algorithm: %s",
+                 algo_name);
+    return NULL;
+  }
+
+  if (validate_compression_request(algo, strategy_from_string(strategy_name),
+                                   level, NULL) != 0) {
+    return NULL;
+  }
+  Py_RETURN_NONE;
+}
+
 // ---- Module Definition ----
 
 static PyMethodDef CoreMethods[] = {
@@ -801,6 +844,10 @@ static PyMethodDef CoreMethods[] = {
      "Get the capabilities of available compression backends."},
     {"archive_capabilities", (PyCFunction)py_get_archive_capabilities,
      METH_NOARGS, "Get the capabilities of available archive backends."},
+    {"check_level", (PyCFunction)(void (*)(void))py_check_level,
+     METH_VARARGS | METH_KEYWORDS,
+     "Raise ValueError if a compression level is out of range for the given "
+     "algorithm, strategy or format."},
     {"get_default_backend_for_strategy",
      (PyCFunction)py_get_default_backend_for_strategy, METH_VARARGS,
      "Get the default backend for a given strategy, None if no backend is "

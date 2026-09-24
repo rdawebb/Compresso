@@ -9,6 +9,7 @@ from typing import Self
 from .._core import (
     Cancelled,
     CancelToken,
+    check_level,
     compress_file,
     compress_standalone,
     decompress_file,
@@ -71,7 +72,8 @@ class CompressionOptions:
     Attributes:
         algo: Compression algorithm name, or None for auto.
         strategy: Compression strategy - "fast", "balanced", or "max_ratio".
-        level: Compression level (0-9), or None for auto.
+        level: Compression level, or None for the backend's default; the
+            range depends on the backend (see `BackendCapabilities`).
         format: Single-file container to write, e.g. "gz". None writes the
             Compresso container, which is the only one that records the
             algorithm used; a standalone format is chosen by `algo` instead and
@@ -237,6 +239,26 @@ def plan_compression(
             can_compress=False,
             reason_if_unavailable="No suitable backend found for the selected strategy",
         )
+
+    if options.level is not None:
+        try:
+            # The core's own check, so each backend's range lives in one place
+            if standalone:
+                check_level(options.level, format=standalone)
+            else:
+                check_level(options.level, algo=backend_name)
+
+        except ValueError as e:
+            return CompressionPlan(
+                src=src_path,
+                dest=dest_path,
+                options=options,
+                input_size=input_size,
+                backend_name=backend_name,
+                estimated_seconds=None,
+                can_compress=False,
+                reason_if_unavailable=str(e),
+            )
 
     mb_s: int | float = get_estimated_speeds(algo=backend_name, operation="compress")
     estimated_seconds: int | float = (input_size / MB) / mb_s if input_size > 0 else 0.0

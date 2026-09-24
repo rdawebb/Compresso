@@ -11,6 +11,7 @@ from compresso.frontend.api import (
     CompressionPlan,
     DecompressionJob,
     DecompressionPlan,
+    plan_compression,
 )
 from compresso.frontend.archive_api import OverwriteMode
 
@@ -98,6 +99,44 @@ class TestCompressionPlan:
 
         assert plan.can_compress is False
         assert plan.reason_if_unavailable is not None
+
+
+class TestPlanCompressionLevels:
+    """Test that plan_compression refuses a level the backend would reject."""
+
+    @pytest.mark.parametrize(
+        "opts,match",
+        [
+            (CompressionOptions(algo="zlib", level=15), "zlib compression level 15"),
+            (CompressionOptions(algo="snappy", level=3), "snappy has no compression"),
+            # No algo: the backend the strategy picks is the one checked
+            (CompressionOptions(strategy="fast", level=13), "lz4 compression level"),
+            (CompressionOptions(format="gz", level=10), "gzip compression level 10"),
+        ],
+    )
+    def test_out_of_range_level_is_unrunnable(
+        self, sample_text_file: Path, opts: CompressionOptions, match: str
+    ) -> None:
+        """Test that the plan carries the core's own message."""
+        plan = plan_compression(sample_text_file, options=opts)
+
+        assert plan.can_compress is False
+        assert plan.reason_if_unavailable is not None
+        assert match in plan.reason_if_unavailable
+
+    @pytest.mark.parametrize(
+        "opts",
+        [
+            CompressionOptions(algo="zstd", level=19),
+            CompressionOptions(algo="snappy"),
+            CompressionOptions(format="zst", level=22),
+        ],
+    )
+    def test_in_range_level_is_runnable(
+        self, sample_text_file: Path, opts: CompressionOptions
+    ) -> None:
+        """Test that levels beyond the old 0-9 cap plan fine where they are valid."""
+        assert plan_compression(sample_text_file, options=opts).can_compress is True
 
 
 class TestDecompressionPlan:

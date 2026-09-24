@@ -1,6 +1,7 @@
 """Tests for the core compression/decompression functionality."""
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,24 @@ from compresso import (
     decompress_file,
 )
 from compresso._core import get_capabilities
+
+
+def _value_error(call: Callable[[], object]) -> str | None:
+    """Run `call`, returning its ValueError's message, or None if it succeeds.
+
+    Args:
+        call: The function to run.
+
+    Returns:
+        The ValueError's message, or None if the call succeeds.
+    """
+    try:
+        call()
+
+    except ValueError as e:
+        return str(e)
+
+    return None
 
 
 class TestCoreExceptions:
@@ -492,3 +511,42 @@ class TestLevelValidation:
         _core.create_archive(
             str(temp_dir / "out.tar.zst"), "tar.zst", [str(sample_text_file)], 19
         )
+
+    @pytest.mark.parametrize(
+        "algo,level",
+        [("zlib", 9), ("zlib", 10), ("bzip2", 0), ("zstd", 22), ("snappy", 1)],
+    )
+    def test_check_level_agrees_with_compress_file(
+        self, sample_text_file: Path, temp_dir: Path, algo: str, level: int
+    ) -> None:
+        """Test that the up-front check refuses exactly what compression refuses."""
+
+        checked = _value_error(lambda: _core.check_level(level, algo=algo))
+        compressed = _value_error(
+            lambda: compress_file(
+                str(sample_text_file), str(temp_dir / "o.comp"), algo, "", level
+            )
+        )
+        assert checked == compressed
+
+    @pytest.mark.parametrize(
+        "fmt,level", [("gz", 10), ("tar", 1), ("tar.zst", 23), ("zip", 9)]
+    )
+    def test_check_level_agrees_with_create_archive(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str, level: int
+    ) -> None:
+        """Test that the up-front check matches archive and standalone creation."""
+
+        checked = _value_error(lambda: _core.check_level(level, format=fmt))
+        dest = str(temp_dir / f"o.{fmt}")
+        if fmt == "gz":
+            created = _value_error(
+                lambda: _core.compress_standalone(
+                    str(sample_text_file), dest, fmt, level
+                )
+            )
+        else:
+            created = _value_error(
+                lambda: _core.create_archive(dest, fmt, [str(sample_text_file)], level)
+            )
+        assert checked == created

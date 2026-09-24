@@ -90,6 +90,19 @@ def archive_capabilities() -> list[_ArchiveCapabilityDict]:
     Only backends that are available are listed.
     """
 
+def check_level(
+    level: int,
+    *,
+    algo: str = ...,
+    strategy: str = ...,
+    format: str = ...,
+) -> None:
+    """Raise ValueError if `level` is out of range, doing no other work.
+
+    `format` (a standalone or archive format name) takes precedence; otherwise
+    the backend is `algo`, or the one `strategy` picks; -1 always passes.
+    """
+
 def get_default_backend_for_strategy(strategy: str) -> str:
     """Get the default backend for the given strategy."""
 

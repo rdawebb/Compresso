@@ -87,6 +87,32 @@ class TestPlanArchive:
         if plan.reason_if_unavailable is not None:
             assert "does not support archives" in plan.reason_if_unavailable
 
+    @pytest.mark.parametrize(
+        "fmt,level,match",
+        [
+            ("tar", 1, "tar has no compression levels"),
+            ("zip", 10, "zip compression level 10"),
+            ("tar.zst", 23, "zstd compression level 23"),
+        ],
+    )
+    def test_plan_archive_out_of_range_level(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str, level: int, match: str
+    ) -> None:
+        """Test that the stage that compresses decides which levels are valid."""
+        opts = ArchiveOptions(format=fmt, compression_level=level)
+        plan = plan_archive([sample_text_file], temp_dir / f"out.{fmt}", opts)
+
+        assert plan.can_run is False
+        assert plan.reason_if_unavailable is not None
+        assert match in plan.reason_if_unavailable
+
+    def test_plan_archive_codec_stage_level(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that tar.zst takes zstd's levels even though tar has none."""
+        opts = ArchiveOptions(format="tar.zst", compression_level=19)
+        assert plan_archive([sample_text_file], temp_dir / "o.tar.zst", opts).can_run
+
 
 class TestArchiveJob:
     """Test the ArchiveJob class."""

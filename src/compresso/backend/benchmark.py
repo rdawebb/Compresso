@@ -193,6 +193,8 @@ def benchmark_file(
                 compressed_size: int | None = None
 
                 for _ in range(repeats):
+                    # Close the handles before the core writes and unlinks;
+                    # Windows refuses to delete a file that is still open
                     with (
                         tempfile.NamedTemporaryFile(
                             suffix=".comp", dir=temp_base, delete=False
@@ -204,6 +206,7 @@ def benchmark_file(
                         comp_path = Path(comp_file.name)
                         decomp_path = Path(decomp_file.name)
 
+                    try:
                         # Compression
                         start_time: float = time.perf_counter()
                         compress(
@@ -243,6 +246,7 @@ def benchmark_file(
                                 f"Warning: Decompressed file size mismatch for {decomp_path}"
                             )
 
+                    finally:
                         _safe_unlink(path=comp_path)
                         _safe_unlink(path=decomp_path)
 

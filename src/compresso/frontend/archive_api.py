@@ -11,6 +11,7 @@ from typing import Self
 from .._core import (
     Cancelled,
     CancelToken,
+    check_level,
     create_archive,
     extract_archive,
     list_archive_contents,
@@ -252,6 +253,22 @@ def plan_archive(
             can_run=False,
             reason_if_unavailable=f"Format does not support archives: {options.format}",
         )
+
+    if options.compression_level is not None:
+        try:
+            # The level belongs to the codec stage, or to the container itself
+            check_level(options.compression_level, format=options.format)
+
+        except ValueError as e:
+            return ArchivePlan(
+                sources=source_paths,
+                output=output_path,
+                options=options,
+                total_input_size=0,
+                entry_count=len(source_paths),
+                can_run=False,
+                reason_if_unavailable=str(e),
+            )
 
     total_input_size: int = sum(
         f.stat().st_size for f in _iter_files(source_paths) if f.is_file()
