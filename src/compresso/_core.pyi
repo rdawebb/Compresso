@@ -69,8 +69,6 @@ def decompress_file(
 class _CapabilityDict(TypedDict):
     name: str
     id: int
-    has_buffer: bool
-    has_stream: bool
 
 def get_capabilities() -> list[_CapabilityDict | None]:
     """Get list of available compression backends.

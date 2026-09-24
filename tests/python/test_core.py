@@ -62,11 +62,9 @@ class TestCapabilities:
             # Unregistered backend slots are None; the rest match the stub
             if cap is None:
                 continue
-            assert set(cap) == {"name", "id", "has_buffer", "has_stream"}
+            assert set(cap) == {"name", "id"}
             assert isinstance(cap["name"], str)
             assert isinstance(cap["id"], int)
-            assert isinstance(cap["has_buffer"], bool)
-            assert isinstance(cap["has_stream"], bool)
 
     def test_capabilities_have_known_algos(self):
         """Test that common algorithms are present."""

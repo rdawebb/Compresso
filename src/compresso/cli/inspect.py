@@ -168,7 +168,6 @@ def inspect(
                 "flags": result.flags,
                 "orig_size": result.orig_size,
                 "backend_available": result.backend_available,
-                "has_streaming": result.has_streaming,
                 "can_decompress": result.can_decompress,
                 "estimated_decomp_s": result.estimated_decomp_s,
                 "reason": result.reason,
@@ -213,7 +212,6 @@ def inspect(
         lines += [
             "",
             f"Backend available:  {'Yes' if result.backend_available else 'No'}",
-            f"Streaming support:  {'Yes' if result.has_streaming else 'No'}",
             f"Can decompress:     {'Yes' if result.can_decompress else 'No'}",
         ]
 

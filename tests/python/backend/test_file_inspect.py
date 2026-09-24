@@ -30,7 +30,6 @@ class TestInspectResult:
             flags=0,
             orig_size=1000,
             backend_available=True,
-            has_streaming=True,
             can_decompress=True,
             estimated_decomp_s=0.5,
         )

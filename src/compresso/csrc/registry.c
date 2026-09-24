@@ -140,9 +140,6 @@ PyObject *get_capabilities(void) {
       continue;
     }
 
-    int has_buffer = 0;
-    int has_stream = (b->compress_stream && b->decompress_stream) ? 1 : 0;
-
     PyObject *dict = PyDict_New();
     if (!dict) {
       Py_DECREF(list);
@@ -151,8 +148,6 @@ PyObject *get_capabilities(void) {
 
     PyObject *name = PyUnicode_FromString(b->name ? b->name : "");
     PyObject *id = PyLong_FromLong((long)b->id);
-    PyObject *buffer = has_buffer ? Py_True : Py_False;
-    PyObject *stream = has_stream ? Py_True : Py_False;
 
     if (!name || !id) {
       Py_XDECREF(name);
@@ -162,17 +157,10 @@ PyObject *get_capabilities(void) {
       return NULL;
     }
 
-    Py_INCREF(buffer);
-    Py_INCREF(stream);
-
     if (PyDict_SetItemString(dict, "name", name) < 0 ||
-        PyDict_SetItemString(dict, "id", id) < 0 ||
-        PyDict_SetItemString(dict, "has_buffer", buffer) < 0 ||
-        PyDict_SetItemString(dict, "has_stream", stream) < 0) {
+        PyDict_SetItemString(dict, "id", id) < 0) {
       Py_DECREF(name);
       Py_DECREF(id);
-      Py_DECREF(buffer);
-      Py_DECREF(stream);
       Py_DECREF(dict);
       Py_DECREF(list);
       return NULL;
@@ -180,8 +168,6 @@ PyObject *get_capabilities(void) {
 
     Py_DECREF(name);
     Py_DECREF(id);
-    Py_DECREF(buffer);
-    Py_DECREF(stream);
 
     PyList_SetItem(list, (Py_ssize_t)i, dict);
   }

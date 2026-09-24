@@ -19,17 +19,7 @@ def list_algos() -> None:
 
         for cap in caps:
             app.echo(message=app.style(text=f"● {cap.name}", fg="green", bold=True))
-            app.echo(message=app.style(text=f"  ID:              {cap.id}"))
-            app.echo(
-                message=app.style(
-                    text=f"  Buffer mode:     {'Yes' if cap.has_buffer else 'No'}"
-                )
-            )
-            app.echo(
-                message=app.style(
-                    text=f"  Streaming mode:  {'Yes' if cap.has_stream else 'No'}\n"
-                )
-            )
+            app.echo(message=app.style(text=f"  ID:     {cap.id}\n"))
 
     except KeyboardInterrupt:
         cancelled("Listing")

@@ -14,14 +14,10 @@ class BackendCapabilities:
     Attributes:
         name: Name of the compression algorithm.
         id: Algorithm ID.
-        has_buffer: Whether the backend has a buffer.
-        has_stream: Whether the backend supports streaming compression/decompression.
     """
 
     name: str
     id: int
-    has_buffer: bool
-    has_stream: bool
 
     def is_available(self) -> bool:
         """Check if the backend is available for use
@@ -53,8 +49,6 @@ def _load_capabilities() -> None:
         cap = BackendCapabilities(
             name=item["name"],
             id=item["id"],
-            has_buffer=item["has_buffer"],
-            has_stream=item["has_stream"],
         )
 
         caps.append(cap)
