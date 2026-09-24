@@ -759,33 +759,33 @@ static PyObject *py_get_default_backend_for_strategy(PyObject *self UNUSED,
 
 // ---- Module Definition ----
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-function-type-mismatch"
-
 static PyMethodDef CoreMethods[] = {
-    {"compress_file", (PyCFunction)py_compress_file,
+    {"compress_file", (PyCFunction)(void (*)(void))py_compress_file,
      METH_VARARGS | METH_KEYWORDS,
      "Compress a file using the specified algorithm and strategy."},
-    {"decompress_file", (PyCFunction)py_decompress_file,
+    {"decompress_file", (PyCFunction)(void (*)(void))py_decompress_file,
      METH_VARARGS | METH_KEYWORDS,
      "Decompress a file using the specified algorithm."},
 
-    {"create_archive", (PyCFunction)py_create_archive,
+    {"create_archive", (PyCFunction)(void (*)(void))py_create_archive,
      METH_VARARGS | METH_KEYWORDS,
      "Create a new archive from a list of files."},
-    {"extract_archive", (PyCFunction)py_extract_archive,
+    {"extract_archive", (PyCFunction)(void (*)(void))py_extract_archive,
      METH_VARARGS | METH_KEYWORDS,
      "Extract an archive file to a specified directory, subject to the "
      "keyword-only extraction policy."},
     {"list_archive_contents", (PyCFunction)py_list_archive_contents,
-     METH_VARARGS | METH_KEYWORDS,
-     "List the (path, size, type, link_target) of each entry in an archive "
-     "file."},
+     METH_VARARGS,
+     "Describe each entry in an archive file as a dict (path, size, type, "
+     "mtime, mode, link_target, plus compressed_size, crc and method where "
+     "the container records them)."},
 
-    {"compress_standalone", (PyCFunction)py_compress_standalone,
+    {"compress_standalone",
+     (PyCFunction)(void (*)(void))py_compress_standalone,
      METH_VARARGS | METH_KEYWORDS,
      "Compress a file using a standalone compression format."},
-    {"decompress_standalone", (PyCFunction)py_decompress_standalone,
+    {"decompress_standalone",
+     (PyCFunction)(void (*)(void))py_decompress_standalone,
      METH_VARARGS | METH_KEYWORDS, "Decompress a standalone format file."},
 
     {"detect_format", (PyCFunction)py_detect_format, METH_VARARGS,
@@ -804,8 +804,6 @@ static PyMethodDef CoreMethods[] = {
 
     {NULL, NULL, 0, NULL} // Sentinel
 };
-
-#pragma GCC diagnostic pop
 
 static struct PyModuleDef coremodule = {
     PyModuleDef_HEAD_INIT,

@@ -346,3 +346,12 @@ class TestStandaloneFormatErrors:
             _core.compress_standalone(
                 str(sample_text_file), str(temp_dir / "out.bin"), fmt, 3
             )
+
+
+class TestListArchiveContentsArgs:
+    """Test the argument handling of list_archive_contents."""
+
+    def test_keyword_arguments_are_refused(self, temp_dir: Path) -> None:
+        """Test that a stray keyword raises rather than being silently dropped."""
+        with pytest.raises(TypeError, match="keyword"):
+            _core.list_archive_contents(str(temp_dir / "a.tar"), bogus=1)  # type: ignore[call-arg]  # ty:ignore[unknown-argument]
