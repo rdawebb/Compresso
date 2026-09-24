@@ -11,6 +11,7 @@ from pathlib import Path
 from tabulate import tabulate
 
 from .._core import compress_file, decompress_file
+from .capabilities import get_by_name
 from .speeds import update_from_benchmarks
 
 
@@ -150,6 +151,7 @@ def benchmark_file(
         algos: List of algorithms to benchmark. If None, all available algorithms are used.
         strategies: List of strategies to benchmark. If None, all available strategies are used.
         levels: List of compression levels to benchmark. If None, default levels are used.
+            A level outside an algorithm's range is skipped for that algorithm.
         repeats: Number of times to repeat each benchmark for averaging
         temp_dir: Directory to use for temporary files. If None, system temp directory is used.
 
@@ -178,8 +180,14 @@ def benchmark_file(
     results: list[BenchmarkResult] = []
 
     for algo in algos:
+        cap = get_by_name(algo)
         for strategy in strategies:
             for level in levels:
+                # The core rejects a level outside the backend's range, so a
+                # grid spanning several backends skips those combinations
+                if cap is not None and not cap.accepts_level(level):
+                    continue
+
                 comp_times: list[float] = []
                 decomp_times: list[float] = []
                 compressed_size: int | None = None

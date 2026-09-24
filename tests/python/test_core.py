@@ -404,3 +404,91 @@ class TestRecognisedButUnsupportedArchive:
         with pytest.raises(BackendError, match="7z archives are recognised"):
             _core.create_archive(str(dest), "7z", [str(sample_text_file)])
         assert not dest.exists()
+
+
+class TestLevelValidation:
+    """Test that each backend, format and container checks its own level range."""
+
+    @pytest.mark.parametrize(
+        "algo,strategy,level,match",
+        [
+            ("zlib", "", 10, r"zlib compression level 10 out of range \(0-9"),
+            ("bzip2", "", 0, r"bzip2 compression level 0 out of range \(1-9"),
+            ("zstd", "", 0, r"zstd compression level 0 out of range \(1-22"),
+            ("zstd", "", 23, r"zstd compression level 23 out of range"),
+            ("lz4", "", 13, r"lz4 compression level 13 out of range \(0-12"),
+            ("zlib", "", -2, r"zlib compression level -2 out of range"),
+            ("snappy", "", 1, "snappy has no compression levels"),
+            # No algo: the backend the strategy picks is the one checked
+            ("", "fast", 13, "lz4 compression level 13"),
+        ],
+    )
+    def test_compress_file_refuses_out_of_range(
+        self,
+        sample_text_file: Path,
+        temp_dir: Path,
+        algo: str,
+        strategy: str,
+        level: int,
+        match: str,
+    ) -> None:
+        """Test that an out-of-range level is refused before anything is written."""
+        dest = temp_dir / "out.comp"
+        with pytest.raises(ValueError, match=match):
+            compress_file(str(sample_text_file), str(dest), algo, strategy, level)
+        assert not dest.exists()
+
+    @pytest.mark.parametrize(
+        "algo,level",
+        [("zlib", 9), ("bzip2", 1), ("zstd", 22), ("lz4", 12), ("snappy", -1)],
+    )
+    def test_compress_file_accepts_range_ends(
+        self, sample_text_file: Path, temp_dir: Path, algo: str, level: int
+    ) -> None:
+        """Test that each end of a backend's range, and the default, still work."""
+        compress_file(
+            str(sample_text_file), str(temp_dir / "out.comp"), algo, "", level
+        )
+
+    @pytest.mark.parametrize(
+        "fmt,level,match",
+        [
+            ("gz", 10, r"gzip compression level 10 out of range \(0-9"),
+            ("zst", 23, r"zstd compression level 23 out of range \(1-22"),
+        ],
+    )
+    def test_compress_standalone_refuses_out_of_range(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str, level: int, match: str
+    ) -> None:
+        """Test that the standalone formats check the level too."""
+        with pytest.raises(ValueError, match=match):
+            _core.compress_standalone(
+                str(sample_text_file), str(temp_dir / f"out.{fmt}"), fmt, level
+            )
+
+    @pytest.mark.parametrize(
+        "fmt,level,match",
+        [
+            ("tar", 1, "tar has no compression levels"),
+            ("zip", 10, r"zip compression level 10 out of range \(0-9"),
+            # A codec stage's own range applies, not the container's
+            ("tar.zst", 23, r"zstd compression level 23 out of range \(1-22"),
+            ("tar.gz", 10, r"gzip compression level 10 out of range"),
+        ],
+    )
+    def test_create_archive_refuses_out_of_range(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str, level: int, match: str
+    ) -> None:
+        """Test that archives check the level of whichever stage compresses."""
+        dest = temp_dir / f"out.{fmt}"
+        with pytest.raises(ValueError, match=match):
+            _core.create_archive(str(dest), fmt, [str(sample_text_file)], level)
+        assert not dest.exists()
+
+    def test_create_archive_accepts_a_codec_stage_level(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that tar.zst takes zstd's levels even though tar has none."""
+        _core.create_archive(
+            str(temp_dir / "out.tar.zst"), "tar.zst", [str(sample_text_file)], 19
+        )

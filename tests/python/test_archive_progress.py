@@ -99,7 +99,6 @@ class TestArchiveCreationProgress:
             str(temp_dir / f"out{ext}"),
             fmt,
             [str(source_tree)],
-            3,
             progress=recorder,
         )
 
@@ -121,7 +120,6 @@ class TestArchiveCreationProgress:
             str(temp_dir / f"out{ext}"),
             fmt,
             [str(source_tree)],
-            3,
             progress=recorder,
         )
 
@@ -140,7 +138,6 @@ class TestArchiveCreationProgress:
             str(temp_dir / "out.tar.zst"),
             "tar.zst",
             [str(source_tree)],
-            3,
             progress=recorder,
         )
 
@@ -157,7 +154,6 @@ class TestArchiveCreationProgress:
             str(temp_dir / "out.tar"),
             "tar",
             [str(source_tree)],
-            3,
             progress=recorder,
         )
 
@@ -173,7 +169,7 @@ class TestArchiveExtractionProgress:
         """Test that every format reports rising byte counts ending at the total."""
         fmt, ext = archive_format
         archive = temp_dir / f"in{ext}"
-        create_archive(str(archive), fmt, [str(source_tree)], 3)
+        create_archive(str(archive), fmt, [str(source_tree)])
 
         recorder = Recorder()
         extract_archive(
@@ -192,7 +188,7 @@ class TestArchiveExtractionProgress:
         archive = temp_dir / f"in{ext}"
         dest = temp_dir / f"out{ext}"
 
-        create_archive(str(archive), fmt, [str(source_tree)], 3, progress=Recorder())
+        create_archive(str(archive), fmt, [str(source_tree)], progress=Recorder())
         extract_archive(str(archive), str(dest), [], progress=Recorder())
 
         for original in sorted(source_tree.iterdir()):
@@ -207,7 +203,7 @@ class TestArchiveExtractionProgress:
         Extraction walks the archive twice: once to validate, once to write
         """
         archive = temp_dir / "in.tar"
-        create_archive(str(archive), "tar", [str(source_tree)], 3)
+        create_archive(str(archive), "tar", [str(source_tree)])
 
         recorder = Recorder()
         extract_archive(str(archive), str(temp_dir / "out"), [], progress=recorder)
@@ -231,7 +227,6 @@ class TestArchiveCancellation:
                 str(output),
                 fmt,
                 [str(source_tree)],
-                3,
                 progress=lambda done, total: token.cancel(),
                 cancel=token,
             )
@@ -248,7 +243,7 @@ class TestArchiveCancellation:
         token.cancel()
 
         with pytest.raises(Cancelled):
-            create_archive(str(output), fmt, [str(source_tree)], 3, cancel=token)
+            create_archive(str(output), fmt, [str(source_tree)], cancel=token)
 
         assert not output.exists()
 
@@ -258,7 +253,7 @@ class TestArchiveCancellation:
         """Test that cancelling extraction aborts with Cancelled."""
         fmt, ext = archive_format
         archive = temp_dir / f"in{ext}"
-        create_archive(str(archive), fmt, [str(source_tree)], 3)
+        create_archive(str(archive), fmt, [str(source_tree)])
 
         token = CancelToken()
         with pytest.raises(Cancelled):
@@ -280,7 +275,7 @@ class TestArchiveCancellation:
         """
         archive = temp_dir / "in.tar"
         dest = temp_dir / "out"
-        create_archive(str(archive), "tar", [str(source_tree)], 3)
+        create_archive(str(archive), "tar", [str(source_tree)])
 
         # Stop midway through the second entry, so at least one has completed
         # and one is genuinely in flight
@@ -344,7 +339,7 @@ class TestArchiveCancellation:
         fmt, ext = archive_format
         output = temp_dir / f"fine{ext}"
 
-        create_archive(str(output), fmt, [str(source_tree)], 3, cancel=CancelToken())
+        create_archive(str(output), fmt, [str(source_tree)], cancel=CancelToken())
 
         assert output.stat().st_size > 0
 
@@ -370,7 +365,6 @@ class TestArchiveCallbackErrors:
                 str(temp_dir / f"boom{ext}"),
                 fmt,
                 [str(source_tree)],
-                3,
                 progress=explode,
             )
 

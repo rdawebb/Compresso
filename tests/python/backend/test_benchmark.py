@@ -12,7 +12,7 @@ from compresso.backend.benchmark import (
 class TestBenchmarkResult:
     """Test the BenchmarkResult dataclass."""
 
-    def test_benchmark_result_creation(self):
+    def test_benchmark_result_creation(self) -> None:
         """Test creating a BenchmarkResult instance."""
         result = BenchmarkResult(
             algo="zlib",
@@ -32,7 +32,7 @@ class TestBenchmarkResult:
         assert result.input_size == 1000000
         assert result.compressed_size == 500000
 
-    def test_ratio_property(self):
+    def test_ratio_property(self) -> None:
         """Test compression ratio calculation."""
         result = BenchmarkResult(
             algo="zlib",
@@ -46,7 +46,7 @@ class TestBenchmarkResult:
 
         assert result.ratio == 0.5
 
-    def test_ratio_property_zero_input(self):
+    def test_ratio_property_zero_input(self) -> None:
         """Test compression ratio with zero input size."""
         result = BenchmarkResult(
             algo="zlib",
@@ -60,7 +60,7 @@ class TestBenchmarkResult:
 
         assert result.ratio == 0.0
 
-    def test_comp_mb_s_property(self):
+    def test_comp_mb_s_property(self) -> None:
         """Test compression speed calculation."""
         result = BenchmarkResult(
             algo="zlib",
@@ -75,7 +75,7 @@ class TestBenchmarkResult:
         # 1 MB in 1 second = 1 MB/s
         assert result.comp_mb_s == pytest.approx(1.0, rel=0.01)
 
-    def test_comp_mb_s_property_zero_time(self):
+    def test_comp_mb_s_property_zero_time(self) -> None:
         """Test compression speed with zero time."""
         result = BenchmarkResult(
             algo="zlib",
@@ -89,7 +89,7 @@ class TestBenchmarkResult:
 
         assert result.comp_mb_s == 0.0
 
-    def test_decomp_mb_s_property(self):
+    def test_decomp_mb_s_property(self) -> None:
         """Test decompression speed calculation."""
         result = BenchmarkResult(
             algo="zlib",
@@ -115,7 +115,7 @@ class TestBenchmarkResult:
     )
     def test_benchmark_result_with_various_params(
         self, algo: str, strategy: str, level: int
-    ):
+    ) -> None:
         """Test BenchmarkResult with various parameter combinations."""
         result = BenchmarkResult(
             algo=algo,
@@ -135,11 +135,26 @@ class TestBenchmarkResult:
 class TestBenchmarkFile:
     """Test the benchmark_file function."""
 
-    def test_benchmark_file_exists(self):
+    def test_benchmark_file_exists(self) -> None:
         """Test that benchmark_file function exists."""
         assert callable(benchmark_file)
 
-    def test_benchmark_file_signature(self):
+    def test_levels_outside_a_backends_range_are_skipped(
+        self, sample_text_file
+    ) -> None:
+        """Test that a shared level grid skips what each backend rejects."""
+        results = benchmark_file(
+            sample_text_file,
+            algos=["zlib", "zstd", "snappy"],
+            strategies=["balanced"],
+            levels=[None, 15],
+            update_cache=False,
+        )
+
+        ran = {(r.algo, r.level) for r in results}
+        assert ran == {("zlib", None), ("zstd", None), ("zstd", 15), ("snappy", None)}
+
+    def test_benchmark_file_signature(self) -> None:
         """Test benchmark_file function signature."""
         import inspect
 
@@ -151,18 +166,18 @@ class TestBenchmarkFile:
 class TestPrintResults:
     """Test the print_results function."""
 
-    def test_print_results_exists(self):
+    def test_print_results_exists(self) -> None:
         """Test that print_results function exists."""
         assert callable(print_results)
 
-    def test_print_results_with_empty_list(self, capsys):
+    def test_print_results_with_empty_list(self, capsys) -> None:
         """Test printing results with empty list."""
         print_results([])
         captured = capsys.readouterr()
         # Should handle empty list gracefully
         assert captured.out is not None
 
-    def test_print_results_with_single_result(self, capsys):
+    def test_print_results_with_single_result(self, capsys) -> None:
         """Test printing results with a single result."""
         result = BenchmarkResult(
             algo="zlib",
@@ -180,7 +195,7 @@ class TestPrintResults:
         # Should contain algo name
         assert "zlib" in captured.out.lower()
 
-    def test_print_results_with_multiple_results(self, capsys):
+    def test_print_results_with_multiple_results(self, capsys) -> None:
         """Test printing results with multiple results."""
         results = [
             BenchmarkResult(

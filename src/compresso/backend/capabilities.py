@@ -32,6 +32,23 @@ class BackendCapabilities:
         """
         return True
 
+    def accepts_level(self, level: int | None) -> bool:
+        """Check whether the backend accepts a compression level
+
+        Args:
+            level: The level to check, or None for the backend's default.
+
+        Returns:
+            bool: True if the core would accept `level` for this backend.
+        """
+        if level is None:
+            return True
+
+        if self.min_level is None or self.max_level is None:
+            return False
+
+        return self.min_level <= level <= self.max_level
+
 
 ## Cached capabilities
 _cap_list: list[BackendCapabilities] | None = None

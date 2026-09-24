@@ -59,7 +59,7 @@ class TestStoredEntryNames:
         source.write_bytes(PAYLOAD)
         archive = temp_dir / f"out{ext}"
 
-        create_archive(str(archive), fmt, [str(source)], 3)
+        create_archive(str(archive), fmt, [str(source)])
 
         assert stored_names(archive) == {"payload.txt"}
 
@@ -78,7 +78,7 @@ class TestStoredEntryNames:
         (tree / "nested" / "payload.txt").write_bytes(PAYLOAD)
         archive = temp_dir / f"out{ext}"
 
-        create_archive(str(archive), fmt, [str(tree) + os.sep], 3)
+        create_archive(str(archive), fmt, [str(tree) + os.sep])
 
         assert stored_names(archive) == {
             "tree",
@@ -105,7 +105,7 @@ class TestStoredEntryNames:
         workdir.mkdir()
         monkeypatch.chdir(workdir)
 
-        create_archive(f"out{ext}", fmt, [os.path.join("..", "payload.txt")], 3)
+        create_archive(f"out{ext}", fmt, [os.path.join("..", "payload.txt")])
 
         archive = workdir / f"out{ext}"
         assert stored_names(archive) == {"payload.txt"}
@@ -127,9 +127,7 @@ class TestStoredEntryNames:
         (nested / "payload.txt").write_bytes(PAYLOAD)
         monkeypatch.chdir(temp_dir)
 
-        create_archive(
-            f"out{ext}", fmt, [os.path.join("sub", "deeper", "payload.txt")], 3
-        )
+        create_archive(f"out{ext}", fmt, [os.path.join("sub", "deeper", "payload.txt")])
 
         assert stored_names(temp_dir / f"out{ext}") == {"payload.txt"}
 
@@ -146,7 +144,7 @@ class TestStoredEntryNames:
         monkeypatch.chdir(workdir)
 
         with pytest.raises(ValueError, match="unsafe entry name"):
-            create_archive(str(temp_dir / f"out{ext}"), fmt, [".."], 3)
+            create_archive(str(temp_dir / f"out{ext}"), fmt, [".."])
 
     def test_sources_of_both_kinds_agree(
         self, temp_dir: Path, archive_format: tuple[str, str]
@@ -160,7 +158,7 @@ class TestStoredEntryNames:
         (tree / "inner.txt").write_bytes(PAYLOAD)
         archive = temp_dir / f"out{ext}"
 
-        create_archive(str(archive), fmt, [str(source), str(tree)], 3)
+        create_archive(str(archive), fmt, [str(source), str(tree)])
 
         assert stored_names(archive) == {"payload.txt", "tree", "tree/inner.txt"}
 

@@ -580,6 +580,10 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
+  if (validate_level(fmt->name, fmt->levels, compression_level) != 0) {
+    return NULL;
+  }
+
   const char *input_path = NULL;
   const char *output_path = NULL;
   PyObject *input_path_bytes = encode_fs_path(input_path_obj, &input_path);
