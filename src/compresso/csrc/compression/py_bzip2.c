@@ -26,6 +26,7 @@ static int bzip2_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
 static const CBackend bzip2_backend = {
     .name = "bzip2",
     .id = ALGO_BZIP2,
+    .levels = LEVELS_BZIP2,
     .is_available = bzip2_is_available,
     .compress_stream = bzip2_compress_stream,
     .decompress_stream = bzip2_decompress_stream,

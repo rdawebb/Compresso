@@ -14,10 +14,15 @@ class BackendCapabilities:
     Attributes:
         name: Name of the compression algorithm.
         id: Algorithm ID.
+        min_level: Lowest compression level accepted, or None if the
+            algorithm has no levels (only the default is accepted).
+        max_level: Highest compression level accepted, or None likewise.
     """
 
     name: str
     id: int
+    min_level: int | None
+    max_level: int | None
 
     def is_available(self) -> bool:
         """Check if the backend is available for use
@@ -49,6 +54,8 @@ def _load_capabilities() -> None:
         cap = BackendCapabilities(
             name=item["name"],
             id=item["id"],
+            min_level=item["min_level"],
+            max_level=item["max_level"],
         )
 
         caps.append(cap)

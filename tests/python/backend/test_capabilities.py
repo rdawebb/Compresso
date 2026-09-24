@@ -15,21 +15,22 @@ class TestBackendCapabilities:
 
     def test_capabilities_creation(self):
         """Test creating a BackendCapabilities instance."""
-        cap = BackendCapabilities(name="zlib", id=1)
+        cap = BackendCapabilities(name="zlib", id=1, min_level=0, max_level=9)
 
         assert cap.name == "zlib"
         assert cap.id == 1
+        assert (cap.min_level, cap.max_level) == (0, 9)
 
     def test_capabilities_is_available(self):
         """Test is_available method."""
-        cap = BackendCapabilities(name="test", id=99)
+        cap = BackendCapabilities(name="test", id=99, min_level=None, max_level=None)
 
         # Always returns True for compiled backends
         assert cap.is_available() is True
 
     def test_capabilities_frozen(self):
         """Test that BackendCapabilities is frozen (immutable)."""
-        cap = BackendCapabilities(name="zlib", id=1)
+        cap = BackendCapabilities(name="zlib", id=1, min_level=0, max_level=9)
 
         # Frozen dataclass should not allow assignment
         with pytest.raises((AttributeError, TypeError)):

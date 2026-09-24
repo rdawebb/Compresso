@@ -4,6 +4,7 @@
 
 #include "../unity.h"
 #include "../lib/backend_io.h"
+#include <lz4hc.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -41,6 +42,12 @@ void test_lz4_backend_has_correct_id(void) {
 void test_lz4_backend_has_correct_name(void) {
     const CBackend *backend = get_lz4_backend();
     TEST_ASSERT_EQUAL_STRING("lz4", backend->name);
+}
+
+void test_lz4_level_range_matches_the_library(void) {
+    const CBackend *backend = get_lz4_backend();
+    TEST_ASSERT_EQUAL_INT(0, backend->levels.min);
+    TEST_ASSERT_EQUAL_INT(LZ4HC_CLEVEL_MAX, backend->levels.max);
 }
 
 void test_lz4_compress_file_basic(void) {

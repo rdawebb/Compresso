@@ -187,6 +187,7 @@ static int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
 static const CBackend snappy_backend = {
     .name = "snappy",
     .id = ALGO_SNAPPY,
+    .levels = LEVELS_NONE,
     .is_available = snappy_is_available,
     .compress_stream = snappy_compress_stream,
     .decompress_stream = snappy_decompress_stream,

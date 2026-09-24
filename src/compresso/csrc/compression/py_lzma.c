@@ -26,6 +26,7 @@ static int lzma_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
 static const CBackend lzma_backend = {
     .name = "lzma",
     .id = ALGO_LZMA,
+    .levels = LEVELS_LZMA,
     .is_available = lzma_is_available,
     .compress_stream = lzma_compress_stream,
     .decompress_stream = lzma_decompress_stream,

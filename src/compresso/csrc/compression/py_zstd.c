@@ -26,6 +26,7 @@ static int zstd_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
 static const CBackend zstd_backend = {
     .name = "zstd",
     .id = ALGO_ZSTD,
+    .levels = LEVELS_ZSTD,
     .is_available = zstd_is_available,
     .compress_stream = zstd_compress_stream,
     .decompress_stream = zstd_decompress_stream,

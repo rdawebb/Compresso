@@ -3,6 +3,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include "context.h"
+#include "levels.h"
 #include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -42,6 +43,7 @@ typedef struct {
 typedef struct CArchive {
   const char *name;
   uint8_t id;
+  LevelRange levels; // Applies when no external codec stage is present
 
   // Capability checks
   int (*is_available)(void);

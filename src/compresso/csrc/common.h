@@ -4,6 +4,7 @@
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
 #include "context.h"
+#include "levels.h"
 #include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -138,6 +139,7 @@ typedef enum {
 typedef struct CBackend {
   const char *name;
   uint8_t id;
+  LevelRange levels;
 
   int (*is_available)(void);
 

@@ -26,6 +26,7 @@ static int lz4_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
 static const CBackend lz4_backend = {
     .name = "lz4",
     .id = ALGO_LZ4,
+    .levels = LEVELS_LZ4,
     .is_available = lz4_is_available,
     .compress_stream = lz4_compress_stream,
     .decompress_stream = lz4_decompress_stream,

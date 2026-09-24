@@ -26,6 +26,7 @@ static int zlib_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
 static const CBackend zlib_backend = {
     .name = "zlib",
     .id = ALGO_ZLIB,
+    .levels = LEVELS_ZLIB,
     .is_available = zlib_is_available,
     .compress_stream = zlib_compress_stream,
     .decompress_stream = zlib_decompress_stream,

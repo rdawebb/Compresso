@@ -4,6 +4,7 @@
 
 #include "../unity.h"
 #include "../lib/backend_io.h"
+#include <zstd.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -41,6 +42,12 @@ void test_zstd_backend_has_correct_id(void) {
 void test_zstd_backend_has_correct_name(void) {
     const CBackend *backend = get_zstd_backend();
     TEST_ASSERT_EQUAL_STRING("zstd", backend->name);
+}
+
+void test_zstd_level_range_matches_the_library(void) {
+    const CBackend *backend = get_zstd_backend();
+    TEST_ASSERT_EQUAL_INT(1, backend->levels.min);
+    TEST_ASSERT_EQUAL_INT(ZSTD_maxCLevel(), backend->levels.max);
 }
 
 void test_zstd_compress_file_basic(void) {

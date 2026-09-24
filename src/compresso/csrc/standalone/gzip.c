@@ -123,6 +123,7 @@ static int gzip_is_format(const unsigned char *magic, size_t size) {
 static const StandaloneFormat gzip_format = {
     .name = "gzip",
     .extension = ".gz",
+    .levels = LEVELS_ZLIB,
     .compress_file = gzip_compress_file,
     .decompress_file = gzip_decompress_file,
     .get_original_name = gzip_get_original_name,

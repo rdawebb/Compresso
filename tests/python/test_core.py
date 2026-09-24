@@ -63,9 +63,25 @@ class TestCapabilities:
             # Unregistered backend slots are None; the rest match the stub
             if cap is None:
                 continue
-            assert set(cap) == {"name", "id"}
+            assert set(cap) == {"name", "id", "min_level", "max_level"}
             assert isinstance(cap["name"], str)
             assert isinstance(cap["id"], int)
+
+    def test_capabilities_report_each_level_range(self):
+        """Test that each backend reports its own level range."""
+        ranges = {
+            cap["name"]: (cap["min_level"], cap["max_level"])
+            for cap in get_capabilities()
+            if cap is not None
+        }
+        assert ranges == {
+            "zlib": (0, 9),
+            "bzip2": (1, 9),
+            "lzma": (0, 9),
+            "zstd": (1, 22),
+            "lz4": (0, 12),
+            "snappy": (None, None),
+        }
 
     def test_capabilities_have_known_algos(self) -> None:
         """Test that common algorithms are present."""

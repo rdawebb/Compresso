@@ -69,6 +69,9 @@ def decompress_file(
 class _CapabilityDict(TypedDict):
     name: str
     id: int
+    # Both None for a backend without levels, which accepts only -1
+    min_level: int | None
+    max_level: int | None
 
 def get_capabilities() -> list[_CapabilityDict | None]:
     """Get list of available compression backends.
@@ -112,7 +115,7 @@ def create_archive(
 def extract_archive(
     archive_path: str,
     output_dir: str,
-    files: list[str] = ...,
+    files: list[str],
     *,
     overwrite: int = ...,
     max_total_size: int = ...,
@@ -123,7 +126,7 @@ def extract_archive(
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
 ) -> None:
-    """Extract an archive to output_dir, optionally selecting specific files.
+    """Extract an archive to output_dir; an empty `files` extracts every entry.
 
     The keyword-only arguments are the extraction policy; each defaults to the
     value in `extraction_policy_default()` in the C extension.

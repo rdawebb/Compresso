@@ -696,6 +696,16 @@ class TestExitCodes:
         assert "7z archives are recognised but not supported yet" in result.output
         assert not dest.exists()
 
+    def test_unsupported_archive_suffix_is_not_written_as_zip(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that `-o x.7z` alone names 7z rather than writing a zip there."""
+        dest = temp_dir / "o.7z"
+        result = runner.invoke(app, ["compress", str(source_tree), "-o", str(dest)])
+        assert result.exit_code == EXIT_FAILED
+        assert "7z archives are recognised but not supported yet" in result.output
+        assert not dest.exists()
+
     def test_failed_operation_is_one(self, source_tree: Path, temp_dir: Path) -> None:
         """Test that a job that starts and then fails exits 1, not 2."""
         archive = temp_dir / "out.tar"

@@ -365,6 +365,7 @@ static int tar_supports_streaming(void) {
 static const CArchive tar_archive = {
     .name = "tar",
     .id = ARCHIVE_TAR,
+    .levels = LEVELS_NONE,
     .is_available = tar_is_available,
     .supports_compression = tar_supports_compression,
     .requires_external_compression = tar_requires_external_compression,
