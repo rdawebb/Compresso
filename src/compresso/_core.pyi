@@ -76,6 +76,17 @@ def get_capabilities() -> list[_CapabilityDict | None]:
     A slot is None when its backend is not registered.
     """
 
+class _ArchiveCapabilityDict(TypedDict):
+    name: str
+    streaming: bool
+    compression: bool
+
+def archive_capabilities() -> list[_ArchiveCapabilityDict]:
+    """Get the capabilities of available archive backends.
+
+    Only backends that are available are listed.
+    """
+
 def get_default_backend_for_strategy(strategy: str) -> str:
     """Get the default backend for the given strategy."""
 

@@ -1326,8 +1326,6 @@ PyObject *get_archive_capabilities(void) {
       return NULL;
     }
     Py_DECREF(name);
-    Py_INCREF(streaming);
-    Py_INCREF(compression);
 
     if (PyList_Append(list, dict) < 0) {
       Py_DECREF(dict);

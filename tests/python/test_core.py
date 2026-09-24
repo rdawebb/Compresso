@@ -1,5 +1,6 @@
 """Tests for the core compression/decompression functionality."""
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,19 +19,19 @@ from compresso._core import get_capabilities
 class TestCoreExceptions:
     """Test custom exception classes."""
 
-    def test_error_inheritance(self):
+    def test_error_inheritance(self) -> None:
         """Test that Error is a subclass of Exception."""
         assert issubclass(Error, Exception)
 
-    def test_header_error_inheritance(self):
+    def test_header_error_inheritance(self) -> None:
         """Test that HeaderError is a subclass of Error."""
         assert issubclass(HeaderError, Error)
 
-    def test_backend_error_inheritance(self):
+    def test_backend_error_inheritance(self) -> None:
         """Test that BackendError is a subclass of Error."""
         assert issubclass(BackendError, Error)
 
-    def test_error_instantiation(self):
+    def test_error_instantiation(self) -> None:
         """Test that custom exceptions can be instantiated."""
         err = Error("test message")
         assert str(err) == "test message"
@@ -45,17 +46,17 @@ class TestCoreExceptions:
 class TestCapabilities:
     """Test the get_capabilities function."""
 
-    def test_get_capabilities_returns_list(self):
+    def test_get_capabilities_returns_list(self) -> None:
         """Test that get_capabilities returns a list."""
         caps = get_capabilities()
         assert isinstance(caps, list)
 
-    def test_get_capabilities_not_empty(self):
+    def test_get_capabilities_not_empty(self) -> None:
         """Test that capabilities list is not empty."""
         caps = get_capabilities()
         assert len(caps) > 0
 
-    def test_capabilities_structure(self):
+    def test_capabilities_structure(self) -> None:
         """Test that each capability has the expected structure."""
         caps = get_capabilities()
         for cap in caps:
@@ -66,7 +67,7 @@ class TestCapabilities:
             assert isinstance(cap["name"], str)
             assert isinstance(cap["id"], int)
 
-    def test_capabilities_have_known_algos(self):
+    def test_capabilities_have_known_algos(self) -> None:
         """Test that common algorithms are present."""
         caps = get_capabilities()
         # zlib should always be available
@@ -74,10 +75,34 @@ class TestCapabilities:
         assert "zlib" in caps_str
 
 
+class TestArchiveCapabilities:
+    """Test the archive_capabilities function."""
+
+    def test_archive_capabilities_structure(self) -> None:
+        """Test that each archive backend has the expected structure."""
+        caps = _core.archive_capabilities()
+        assert {cap["name"] for cap in caps} >= {"tar", "zip"}
+        for cap in caps:
+            assert set(cap) == {"name", "streaming", "compression"}
+            assert isinstance(cap["streaming"], bool)
+            assert isinstance(cap["compression"], bool)
+
+    @pytest.mark.skipif(
+        sys.version_info >= (3, 12), reason="True/False are immortal from 3.12"
+    )
+    def test_archive_capabilities_does_not_leak_bools(self) -> None:
+        """Test that repeated calls leave the refcounts of True/False unchanged."""
+        _core.archive_capabilities()
+        before = sys.getrefcount(True), sys.getrefcount(False)
+        for _ in range(100):
+            _core.archive_capabilities()
+        assert (sys.getrefcount(True), sys.getrefcount(False)) == before
+
+
 class TestCompressFile:
     """Test the compress_file function."""
 
-    def test_compress_file_basic(self, sample_text_file: Path, temp_dir: Path):
+    def test_compress_file_basic(self, sample_text_file: Path, temp_dir: Path) -> None:
         """Test basic file compression."""
         output_file = temp_dir / "compressed.comp"
 
@@ -92,7 +117,7 @@ class TestCompressFile:
     @pytest.mark.parametrize("algo", ["zlib", "zstd", "lz4"])
     def test_compress_with_different_algorithms(
         self, sample_text_file: Path, temp_dir: Path, algo: str
-    ):
+    ) -> None:
         """Test compression with different algorithms."""
         output_file = temp_dir / f"compressed_{algo}.comp"
 
@@ -106,7 +131,7 @@ class TestCompressFile:
     @pytest.mark.parametrize("strategy", ["fast", "balanced", "max_ratio"])
     def test_compress_with_different_strategies(
         self, sample_text_file: Path, temp_dir: Path, strategy: str
-    ):
+    ) -> None:
         """Test compression with different strategies."""
         output_file = temp_dir / f"compressed_{strategy}.comp"
 
@@ -120,7 +145,7 @@ class TestCompressFile:
     @pytest.mark.parametrize("level", [1, 3, 6, 9])
     def test_compress_with_different_levels(
         self, sample_text_file: Path, temp_dir: Path, level: int
-    ):
+    ) -> None:
         """Test compression with different levels."""
         output_file = temp_dir / f"compressed_level{level}.comp"
 
@@ -131,7 +156,7 @@ class TestCompressFile:
         assert result == str(output_file)
         assert output_file.exists()
 
-    def test_compress_nonexistent_file(self, temp_dir: Path):
+    def test_compress_nonexistent_file(self, temp_dir: Path) -> None:
         """Test compressing a file that doesn't exist."""
         input_file = temp_dir / "nonexistent.txt"
         output_file = temp_dir / "output.comp"
@@ -139,14 +164,16 @@ class TestCompressFile:
         with pytest.raises((Error, OSError, FileNotFoundError)):
             compress_file(str(input_file), str(output_file), "zlib", "balanced", 6)
 
-    def test_compress_empty_file(self, empty_file: Path, temp_dir: Path):
+    def test_compress_empty_file(self, empty_file: Path, temp_dir: Path) -> None:
         """Test compressing an empty file."""
         output_file = temp_dir / "compressed_empty.comp"
 
         with pytest.raises(ValueError):
             compress_file(str(empty_file), str(output_file), "zlib", "balanced", 6)
 
-    def test_compress_large_file(self, large_compressible_file: Path, temp_dir: Path):
+    def test_compress_large_file(
+        self, large_compressible_file: Path, temp_dir: Path
+    ) -> None:
         """Test compressing a large file."""
         output_file = temp_dir / "compressed_large.comp"
 
@@ -163,7 +190,9 @@ class TestCompressFile:
 class TestDecompressFile:
     """Test the decompress_file function."""
 
-    def test_decompress_file_basic(self, sample_text_file: Path, temp_dir: Path):
+    def test_decompress_file_basic(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
         """Test basic file decompression."""
         compressed_file = temp_dir / "compressed.comp"
         decompressed_file = temp_dir / "decompressed.txt"
@@ -183,7 +212,7 @@ class TestDecompressFile:
     @pytest.mark.parametrize("algo", ["zlib", "zstd", "lz4"])
     def test_round_trip_compression(
         self, sample_text_file: Path, temp_dir: Path, algo: str
-    ):
+    ) -> None:
         """Test compression and decompression round trip."""
         compressed_file = temp_dir / f"compressed_{algo}.comp"
         decompressed_file = temp_dir / f"decompressed_{algo}.txt"
@@ -199,7 +228,7 @@ class TestDecompressFile:
         # Verify content matches
         assert decompressed_file.read_text() == original_content
 
-    def test_decompress_nonexistent_file(self, temp_dir: Path):
+    def test_decompress_nonexistent_file(self, temp_dir: Path) -> None:
         """Test decompressing a file that doesn't exist."""
         input_file = temp_dir / "nonexistent.comp"
         output_file = temp_dir / "output.txt"
@@ -207,14 +236,18 @@ class TestDecompressFile:
         with pytest.raises((Error, OSError, FileNotFoundError)):
             decompress_file(str(input_file), str(output_file), "")
 
-    def test_decompress_invalid_file(self, sample_text_file: Path, temp_dir: Path):
+    def test_decompress_invalid_file(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
         """Test decompressing an invalid compressed file."""
         output_file = temp_dir / "output.txt"
 
         with pytest.raises((Error, HeaderError)):
             decompress_file(str(sample_text_file), str(output_file), "")
 
-    def test_round_trip_binary_file(self, sample_binary_file: Path, temp_dir: Path):
+    def test_round_trip_binary_file(
+        self, sample_binary_file: Path, temp_dir: Path
+    ) -> None:
         """Test compression and decompression of binary data."""
         compressed_file = temp_dir / "compressed.comp"
         decompressed_file = temp_dir / "decompressed.bin"
@@ -232,7 +265,7 @@ class TestDecompressFile:
         # Verify binary content matches exactly
         assert decompressed_file.read_bytes() == original_content
 
-    def test_round_trip_small_file(self, small_file: Path, temp_dir: Path):
+    def test_round_trip_small_file(self, small_file: Path, temp_dir: Path) -> None:
         """Test compression and decompression of very small files."""
         compressed_file = temp_dir / "compressed_small.comp"
         decompressed_file = temp_dir / "decompressed_small.txt"
@@ -255,7 +288,7 @@ class TestDecompressFile:
             "emoji-🗜️-file",  # Outside the BMP: a surrogate pair in UTF-16
         ],
     )
-    def test_round_trip_non_ascii_filename(self, temp_dir: Path, name: str):
+    def test_round_trip_non_ascii_filename(self, temp_dir: Path, name: str) -> None:
         """Test that paths outside ASCII survive a compress/decompress round trip.
 
         Paths reach the C layer as UTF-8: on Windows the narrow CRT would read
@@ -287,7 +320,7 @@ class TestStandaloneFormatErrors:
     @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_archive_format_is_refused_not_fatal(
         self, sample_text_file: Path, temp_dir: Path, fmt: str
-    ):
+    ) -> None:
         """Test that an archive format raises rather than reading a bad pointer."""
         with pytest.raises(ValueError, match="cannot compress a single file"):
             _core.compress_standalone(
@@ -297,7 +330,7 @@ class TestStandaloneFormatErrors:
     @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_archive_format_is_refused_when_decompressing(
         self, sample_text_file: Path, temp_dir: Path, fmt: str
-    ):
+    ) -> None:
         """Test that the decompression side has the same defect."""
         with pytest.raises(ValueError, match="cannot decompress a single file"):
             _core.decompress_standalone(
@@ -307,7 +340,7 @@ class TestStandaloneFormatErrors:
     @pytest.mark.parametrize("fmt", ["bogus", "comp", ""])
     def test_unknown_format_is_refused(
         self, sample_text_file: Path, temp_dir: Path, fmt: str
-    ):
+    ) -> None:
         """Test that a name that resolves to no format at all is refused earlier."""
         with pytest.raises(ValueError):
             _core.compress_standalone(
