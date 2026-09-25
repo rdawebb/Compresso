@@ -283,8 +283,9 @@ def plan_decompression(
 
     Args:
         src: Source file path.
-        dest: Destination file path. If None, removes
-            ".comp" suffix from source if present.
+        dest: Destination file path; if None, the source path with its last
+            suffix removed (`notes.txt.gz` becomes `notes.txt`), or with
+            `.out` appended when it has no suffix.
 
     Returns:
         DecompressionPlan: The resulting decompression plan.
@@ -495,7 +496,8 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
 
         Args:
             src: Source file path.
-            dest: Destination file path. If None, defaults to the source path.
+            dest: Destination file path; if None, derived from `src` as
+                `plan_decompression` does.
 
         Returns:
             DecompressionJob: The created decompression job.
