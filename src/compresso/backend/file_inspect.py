@@ -13,7 +13,9 @@ COMP_HEADER_STRUCT = struct.Struct(
     "<4sBBBBQ"
 )  # magic, version, algo, level, flags, original_size
 
-_LEVEL_AUTO = 255  # Special value indicating 'auto' or 'unspecified' level
+# The header's level byte when none was given; an on-disk value, unrelated
+# to the API's LEVEL_AUTO
+_HEADER_LEVEL_UNSET = 255
 
 
 @dataclass
@@ -161,7 +163,7 @@ def inspect(path: str | Path) -> InspectResult:
         version=version,
         algo_id=algo_id,
         algo_name=algo_name,
-        level=level if level != _LEVEL_AUTO else None,
+        level=level if level != _HEADER_LEVEL_UNSET else None,
         flags=flags,
         orig_size=orig_size,
         backend_available=backend_available,

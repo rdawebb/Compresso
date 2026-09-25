@@ -136,6 +136,20 @@ class TestArchiveJob:
         assert result.ok is False
         assert result.error is not None
 
+    def test_level_zero_is_not_the_default(self, temp_dir: Path) -> None:
+        """Test that level 0 reaches the codec rather than reading as "unset"."""
+        source = temp_dir / "text.txt"
+        source.write_text("a compressible line of text\n" * 4000)
+
+        def archive_size(level: int | None) -> int:
+            out = temp_dir / f"level_{level}.tar.gz"
+            opts = ArchiveOptions(format="tar.gz", compression_level=level)
+            assert ArchiveJob.from_paths([source], out, opts).run().ok
+            return out.stat().st_size
+
+        # gzip level 0 stores the data, so it is far larger than the default
+        assert archive_size(0) > archive_size(None) * 10
+
 
 class TestArchiveOverwrite:
     """Test the four `overwrite` modes against an existing destination archive."""

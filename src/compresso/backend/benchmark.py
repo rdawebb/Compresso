@@ -11,6 +11,7 @@ from pathlib import Path
 from tabulate import tabulate
 
 from .._core import compress_file, decompress_file
+from .._levels import to_core_level
 from .capabilities import get_by_name
 from .speeds import update_from_benchmarks
 
@@ -36,13 +37,12 @@ def compress(
     Returns:
         The path actually written to.
     """
-    lvl: int = -1 if level is None else int(level)
     return compress_file(
         src_path=src_path,
         dst_path=dest_path,
         algo=algo or "",
         strategy=strategy or "",
-        level=lvl,
+        level=to_core_level(level),
         # dest_path is a NamedTemporaryFile that already exists by design,
         # not a user-facing conflict
         overwrite=2,

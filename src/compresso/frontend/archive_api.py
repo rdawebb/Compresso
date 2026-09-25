@@ -16,6 +16,7 @@ from .._core import (
     extract_archive,
     list_archive_contents,
 )
+from .._levels import to_core_level
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 
 # Formats whose container cannot hold multiple entries
@@ -452,7 +453,7 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
                 str(self.plan.output),
                 self.plan.options.format,
                 [str(s) for s in self.plan.sources],
-                self.plan.options.compression_level or -1,
+                to_core_level(self.plan.options.compression_level),
                 overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
                 progress=to_core_progress(progress, total),
                 cancel=cancel,

@@ -18,6 +18,7 @@ from .._core import (
     format_is_archive,
 )
 from .._core import get_default_backend_for_strategy as default_backend
+from .._levels import to_core_level
 from ..backend.file_inspect import InspectResult
 from ..backend.file_inspect import inspect as inspect_file
 from ..backend.speeds import get_estimated_speeds
@@ -417,9 +418,7 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
 
         total: int = self.plan.input_size
         try:
-            lvl: int = (
-                -1 if self.plan.options.level is None else int(self.plan.options.level)
-            )
+            lvl: int = to_core_level(self.plan.options.level)
 
             standalone: str | None = canonical_standalone_format(
                 self.plan.options.format
