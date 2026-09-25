@@ -563,8 +563,8 @@ class TestInspectAndList:
         """Test that list shows each backend's levels, and none for snappy."""
         output = runner.invoke(app, ["list"]).output
 
-        zstd = output[output.index("● zstd") :].split("\n\n")[0]
-        snappy = output[output.index("● snappy") :].split("\n\n")[0]
+        zstd = output[output.index("- zstd") :].split("\n\n")[0]
+        snappy = output[output.index("- snappy") :].split("\n\n")[0]
         assert "Levels: 1-22" in zstd
         assert "Levels: none" in snappy
 

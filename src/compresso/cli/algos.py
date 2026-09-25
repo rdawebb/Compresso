@@ -18,7 +18,7 @@ def list_algos() -> None:
         print(f"Available compression algorithms: {len(caps)}\n")
 
         for cap in caps:
-            app.echo(message=app.style(text=f"● {cap.name}", fg="green", bold=True))
+            app.echo(message=app.style(text=f"- {cap.name}", fg="green", bold=True))
             levels: str = (
                 "none" if cap.min_level is None else f"{cap.min_level}-{cap.max_level}"
             )
