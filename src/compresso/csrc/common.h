@@ -4,6 +4,7 @@
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
 #include "context.h"
+#include "levels.h"
 #include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -138,17 +139,9 @@ typedef enum {
 typedef struct CBackend {
   const char *name;
   uint8_t id;
+  LevelRange levels;
 
   int (*is_available)(void);
-  size_t (*max_compressed_size)(size_t input_size);
-
-  int (*compress_buffer)(const unsigned char *input, size_t input_size,
-                         unsigned char *output, size_t *output_capacity,
-                         int level, size_t *output_size);
-
-  int (*decompress_buffer)(const unsigned char *input, size_t input_size,
-                           unsigned char *output, size_t *output_capacity,
-                           size_t *output_size);
 
   // `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation
   int (*compress_stream)(FILE *src, FILE *dst, int level, CoreContext *ctx);
@@ -178,10 +171,6 @@ const CBackend *get_zstd_backend(void);
 const CBackend *get_lz4_backend(void);
 const CBackend *get_snappy_backend(void);
 
-// ---- Snappy Helper ----
-
-size_t snappy_decompressed_size(const unsigned char *input, size_t input_size);
-
 // ---- Exception Objects ----
 
 extern PyObject *comp_Error;
@@ -201,7 +190,6 @@ PyObject *get_capabilities(void);
 
 #define MAX_FILE_SIZE (10ULL * 1024 * 1024 * 1024)         // 10 GB
 #define MAX_DECOMPRESSED_SIZE (10ULL * 1024 * 1024 * 1024) // 10 GB
-#define MAX_COMPRESSED_SIZE (12ULL * 1024 * 1024 * 1024)   // 12 GB
 
 int validate_size(uint64_t size, uint64_t max_size, const char *name);
 

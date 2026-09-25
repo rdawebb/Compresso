@@ -158,7 +158,7 @@ def mock_speeds_file(temp_dir: Path, monkeypatch) -> Path:
     config_dir.mkdir(exist_ok=True)
 
     # Patch the module-level variables
-    from compresso.backend import speeds
+    from compresso.introspect import speeds
 
     monkeypatch.setattr(speeds, "_CONFIG_DIR", config_dir)
     monkeypatch.setattr(speeds, "_SPEEDS_FILE", config_dir / "speeds.json")

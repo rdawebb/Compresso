@@ -3,6 +3,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include "context.h"
+#include "levels.h"
 #include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -42,6 +43,7 @@ typedef struct {
 typedef struct CArchive {
   const char *name;
   uint8_t id;
+  LevelRange levels; // Applies when no external codec stage is present
 
   // Capability checks
   int (*is_available)(void);
@@ -192,8 +194,5 @@ int extract_archive(const char *archive_path, const char *output_dir,
                     const ExtractionPolicy *policy, CoreContext *ctx);
 
 PyObject *list_archive_contents(const char *archive_path);
-
-int convert_archive_format(const char *input_path, const char *output_path,
-                           Format new_format, int compression_level);
 
 #endif // ARCHIVE_H

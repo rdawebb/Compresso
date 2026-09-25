@@ -580,6 +580,10 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
+  if (validate_level(fmt->name, fmt->levels, compression_level) != 0) {
+    return NULL;
+  }
+
   const char *input_path = NULL;
   const char *output_path = NULL;
   PyObject *input_path_bytes = encode_fs_path(input_path_obj, &input_path);
@@ -757,35 +761,78 @@ static PyObject *py_get_default_backend_for_strategy(PyObject *self UNUSED,
   return PyUnicode_FromString(name);
 }
 
+// The same level check compress_file, compress_standalone and create_archive
+// make, without doing any work, so a plan can refuse a level up front
+static PyObject *py_check_level(PyObject *self UNUSED, PyObject *args,
+                                PyObject *kwargs) {
+  static char *kwlist[] = {"level", "algo", "strategy", "format", NULL};
+
+  int level = -1;
+  const char *algo_name = "";
+  const char *strategy_name = "";
+  const char *format_name = "";
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "i|$sss", kwlist, &level,
+                                   &algo_name, &strategy_name, &format_name)) {
+    return NULL; // Error already set
+  }
+
+  if (format_name[0] != '\0') {
+    CompressionPipeline pipe = pipeline_from_name(format_name, level);
+    if (pipe.archive == ARCHIVE_NONE && pipe.codec == FORMAT_UNKNOWN) {
+      PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
+      return NULL;
+    }
+    if (validate_compression_request(ALGO_NONE, STRAT_BALANCED, level,
+                                     &pipe) != 0) {
+      return NULL;
+    }
+    Py_RETURN_NONE;
+  }
+
+  AlgoID algo = algo_from_string(algo_name);
+  if (algo_name[0] != '\0' && algo == ALGO_NONE) {
+    PyErr_Format(PyExc_ValueError, "Unknown compression algorithm: %s",
+                 algo_name);
+    return NULL;
+  }
+
+  if (validate_compression_request(algo, strategy_from_string(strategy_name),
+                                   level, NULL) != 0) {
+    return NULL;
+  }
+  Py_RETURN_NONE;
+}
+
 // ---- Module Definition ----
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-function-type-mismatch"
-
 static PyMethodDef CoreMethods[] = {
-    {"compress_file", (PyCFunction)py_compress_file,
+    {"compress_file", (PyCFunction)(void (*)(void))py_compress_file,
      METH_VARARGS | METH_KEYWORDS,
      "Compress a file using the specified algorithm and strategy."},
-    {"decompress_file", (PyCFunction)py_decompress_file,
+    {"decompress_file", (PyCFunction)(void (*)(void))py_decompress_file,
      METH_VARARGS | METH_KEYWORDS,
      "Decompress a file using the specified algorithm."},
 
-    {"create_archive", (PyCFunction)py_create_archive,
+    {"create_archive", (PyCFunction)(void (*)(void))py_create_archive,
      METH_VARARGS | METH_KEYWORDS,
      "Create a new archive from a list of files."},
-    {"extract_archive", (PyCFunction)py_extract_archive,
+    {"extract_archive", (PyCFunction)(void (*)(void))py_extract_archive,
      METH_VARARGS | METH_KEYWORDS,
      "Extract an archive file to a specified directory, subject to the "
      "keyword-only extraction policy."},
     {"list_archive_contents", (PyCFunction)py_list_archive_contents,
-     METH_VARARGS | METH_KEYWORDS,
-     "List the (path, size, type, link_target) of each entry in an archive "
-     "file."},
+     METH_VARARGS,
+     "Describe each entry in an archive file as a dict (path, size, type, "
+     "mtime, mode, link_target, plus compressed_size, crc and method where "
+     "the container records them)."},
 
-    {"compress_standalone", (PyCFunction)py_compress_standalone,
+    {"compress_standalone",
+     (PyCFunction)(void (*)(void))py_compress_standalone,
      METH_VARARGS | METH_KEYWORDS,
      "Compress a file using a standalone compression format."},
-    {"decompress_standalone", (PyCFunction)py_decompress_standalone,
+    {"decompress_standalone",
+     (PyCFunction)(void (*)(void))py_decompress_standalone,
      METH_VARARGS | METH_KEYWORDS, "Decompress a standalone format file."},
 
     {"detect_format", (PyCFunction)py_detect_format, METH_VARARGS,
@@ -797,6 +844,10 @@ static PyMethodDef CoreMethods[] = {
      "Get the capabilities of available compression backends."},
     {"archive_capabilities", (PyCFunction)py_get_archive_capabilities,
      METH_NOARGS, "Get the capabilities of available archive backends."},
+    {"check_level", (PyCFunction)(void (*)(void))py_check_level,
+     METH_VARARGS | METH_KEYWORDS,
+     "Raise ValueError if a compression level is out of range for the given "
+     "algorithm, strategy or format."},
     {"get_default_backend_for_strategy",
      (PyCFunction)py_get_default_backend_for_strategy, METH_VARARGS,
      "Get the default backend for a given strategy, None if no backend is "
@@ -804,8 +855,6 @@ static PyMethodDef CoreMethods[] = {
 
     {NULL, NULL, 0, NULL} // Sentinel
 };
-
-#pragma GCC diagnostic pop
 
 static struct PyModuleDef coremodule = {
     PyModuleDef_HEAD_INIT,

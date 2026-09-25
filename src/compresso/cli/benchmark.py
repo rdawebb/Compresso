@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from ..backend.benchmark import benchmark_file, print_results
+from ..introspect.benchmark import benchmark_file, print_results
 from ._app import app
 from ._render import EXIT_USAGE, cancelled, fail, succeed
 
@@ -20,7 +20,12 @@ def benchmark(
         app.Option("--strategies", help="Comma-separated list of strategies"),
     ] = "all",
     levels: Annotated[
-        str | None, app.Option("--levels", help="Comma-separated list of levels (0-9)")
+        str | None,
+        app.Option(
+            "--levels",
+            help="Comma-separated list of levels, or 'auto'; a level outside an "
+            "algorithm's range is skipped for that algorithm",
+        ),
     ] = "auto",
     repeats: Annotated[
         int, app.Option("--repeats", help="Number of times to repeat each benchmark")
@@ -74,7 +79,7 @@ def benchmark(
 
                     except ValueError:
                         fail(
-                            f"Invalid level: {level}. Use integers 0-9 or 'auto'",
+                            f"Invalid level: {level}. Use integers or 'auto'",
                             EXIT_USAGE,
                         )
 

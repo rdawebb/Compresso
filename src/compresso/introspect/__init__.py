@@ -1,4 +1,8 @@
-"""Compresso Backend API"""
+"""Advisory helpers about backends and files: capabilities, header inspection,
+speed estimates and benchmarks.
+
+The compression backends themselves are the C extension's, under csrc/.
+"""
 
 from .benchmark import benchmark_file, print_results
 from .capabilities import list_capabilities

@@ -11,6 +11,8 @@ from pathlib import Path
 from tabulate import tabulate
 
 from .._core import compress_file, decompress_file
+from .._levels import to_core_level
+from .capabilities import get_by_name
 from .speeds import update_from_benchmarks
 
 
@@ -35,13 +37,12 @@ def compress(
     Returns:
         The path actually written to.
     """
-    lvl: int = -1 if level is None else int(level)
     return compress_file(
         src_path=src_path,
         dst_path=dest_path,
         algo=algo or "",
         strategy=strategy or "",
-        level=lvl,
+        level=to_core_level(level),
         # dest_path is a NamedTemporaryFile that already exists by design,
         # not a user-facing conflict
         overwrite=2,
@@ -150,6 +151,7 @@ def benchmark_file(
         algos: List of algorithms to benchmark. If None, all available algorithms are used.
         strategies: List of strategies to benchmark. If None, all available strategies are used.
         levels: List of compression levels to benchmark. If None, default levels are used.
+            A level outside an algorithm's range is skipped for that algorithm.
         repeats: Number of times to repeat each benchmark for averaging
         temp_dir: Directory to use for temporary files. If None, system temp directory is used.
 
@@ -178,13 +180,21 @@ def benchmark_file(
     results: list[BenchmarkResult] = []
 
     for algo in algos:
+        cap = get_by_name(algo)
         for strategy in strategies:
             for level in levels:
+                # The core rejects a level outside the backend's range, so a
+                # grid spanning several backends skips those combinations
+                if cap is not None and not cap.accepts_level(level):
+                    continue
+
                 comp_times: list[float] = []
                 decomp_times: list[float] = []
                 compressed_size: int | None = None
 
                 for _ in range(repeats):
+                    # Close the handles before the core writes and unlinks;
+                    # Windows refuses to delete a file that is still open
                     with (
                         tempfile.NamedTemporaryFile(
                             suffix=".comp", dir=temp_base, delete=False
@@ -196,6 +206,7 @@ def benchmark_file(
                         comp_path = Path(comp_file.name)
                         decomp_path = Path(decomp_file.name)
 
+                    try:
                         # Compression
                         start_time: float = time.perf_counter()
                         compress(
@@ -235,6 +246,7 @@ def benchmark_file(
                                 f"Warning: Decompressed file size mismatch for {decomp_path}"
                             )
 
+                    finally:
                         _safe_unlink(path=comp_path)
                         _safe_unlink(path=decomp_path)
 

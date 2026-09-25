@@ -233,7 +233,11 @@ def compress(
     ] = "balanced",
     level: Annotated[
         int | None,
-        app.Option("--level", "-l", min=0, max=9, help="Compression level (0-9)"),
+        app.Option(
+            "--level",
+            "-l",
+            help="Compression level; each algorithm's range is shown by `list`",
+        ),
     ] = None,
     overwrite: Annotated[
         bool,

@@ -13,7 +13,9 @@ COMP_HEADER_STRUCT = struct.Struct(
     "<4sBBBBQ"
 )  # magic, version, algo, level, flags, original_size
 
-_LEVEL_AUTO = 255  # Special value indicating 'auto' or 'unspecified' level
+# The header's level byte when none was given; an on-disk value, unrelated
+# to the API's LEVEL_AUTO
+_HEADER_LEVEL_UNSET = 255
 
 
 @dataclass
@@ -32,7 +34,6 @@ class InspectResult:
         flags: Compression flags.
         orig_size: Original uncompressed size in bytes.
         backend_available: Whether the backend for the algorithm is available.
-        has_streaming: Whether the algorithm supports streaming.
         can_decompress: Whether the file can be decompressed with the available backends.
         estimated_decomp_s: Estimated decompression time in seconds.
     """
@@ -54,7 +55,6 @@ class InspectResult:
 
     # Backend info
     backend_available: bool
-    has_streaming: bool
 
     # UI helpers
     can_decompress: bool
@@ -86,7 +86,6 @@ def _failed_inspection(
         flags=None,
         orig_size=None,
         backend_available=False,
-        has_streaming=False,
         can_decompress=False,
         estimated_decomp_s=None,
     )
@@ -139,7 +138,6 @@ def inspect(path: str | Path) -> InspectResult:
     cap = get_by_id(cid=algo_id)
     backend_available: bool = cap is not None and cap.is_available()
     algo_name: str | None = cap.name if cap else None
-    has_streaming: bool = cap.has_stream if cap else False
 
     can_decompress: bool = backend_available
     reason: str | None = None
@@ -165,11 +163,10 @@ def inspect(path: str | Path) -> InspectResult:
         version=version,
         algo_id=algo_id,
         algo_name=algo_name,
-        level=level if level != _LEVEL_AUTO else None,
+        level=level if level != _HEADER_LEVEL_UNSET else None,
         flags=flags,
         orig_size=orig_size,
         backend_available=backend_available,
-        has_streaming=has_streaming,
         can_decompress=can_decompress,
         estimated_decomp_s=est_time,
     )

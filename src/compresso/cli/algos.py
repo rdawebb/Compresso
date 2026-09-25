@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..backend.capabilities import list_capabilities
+from ..introspect.capabilities import list_capabilities
 from ._app import app
 from ._render import cancelled, fail
 
@@ -18,18 +18,12 @@ def list_algos() -> None:
         print(f"Available compression algorithms: {len(caps)}\n")
 
         for cap in caps:
-            app.echo(message=app.style(text=f"● {cap.name}", fg="green", bold=True))
-            app.echo(message=app.style(text=f"  ID:              {cap.id}"))
-            app.echo(
-                message=app.style(
-                    text=f"  Buffer mode:     {'Yes' if cap.has_buffer else 'No'}"
-                )
+            app.echo(message=app.style(text=f"- {cap.name}", fg="green", bold=True))
+            levels: str = (
+                "none" if cap.min_level is None else f"{cap.min_level}-{cap.max_level}"
             )
-            app.echo(
-                message=app.style(
-                    text=f"  Streaming mode:  {'Yes' if cap.has_stream else 'No'}\n"
-                )
-            )
+            app.echo(message=app.style(text=f"  ID:     {cap.id}"))
+            app.echo(message=app.style(text=f"  Levels: {levels}\n"))
 
     except KeyboardInterrupt:
         cancelled("Listing")

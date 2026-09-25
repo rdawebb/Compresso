@@ -10,116 +10,6 @@
 static int decompress_compresso_file(const char *src_path, const char *dst_path,
                                      AlgoID algo, CoreContext *ctx);
 
-// ---- I/O Helpers ----
-
-static unsigned char *UNUSED read_file_to_memory(const char *path,
-                                                 size_t *out_size) {
-  FILE *f = fs_fopen(path, "rb");
-  if (!f) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    return NULL;
-  }
-
-#if defined(_WIN32) || defined(_WIN64)
-
-  if (_fseeki64(f, 0, SEEK_END) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    fclose(f);
-    return NULL;
-  }
-
-  __int64 len = _ftelli64(f);
-  if (len < 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    fclose(f);
-    return NULL;
-  }
-
-  if (len > (size_t)-1) {
-    PyErr_SetString(PyExc_MemoryError, "File is too large to fit in memory");
-    fclose(f);
-    return NULL;
-  }
-
-  if (_fseeki64(f, 0, SEEK_SET) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    fclose(f);
-    return NULL;
-  }
-
-#else
-
-  if (fseeko(f, 0, SEEK_END) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    fclose(f);
-    return NULL;
-  }
-
-  off_t len = ftello(f);
-  if (len < 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    fclose(f);
-    return NULL;
-  }
-
-  if ((uintmax_t)len > SIZE_MAX) {
-    PyErr_SetString(PyExc_MemoryError, "File is too large to fit in memory");
-    fclose(f);
-    return NULL;
-  }
-
-  if (fseeko(f, 0, SEEK_SET) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    fclose(f);
-    return NULL;
-  }
-
-#endif
-
-  if (validate_size((uint64_t)len, MAX_FILE_SIZE, "Input file size") != 0) {
-    fclose(f);
-    return NULL;
-  }
-
-  unsigned char *buffer = (unsigned char *)safe_malloc((size_t)len);
-  if (!buffer) {
-    fclose(f);
-    return NULL;
-  }
-
-  size_t read = fread(buffer, 1, (size_t)len, f);
-  fclose(f);
-
-  if (read != (size_t)len) {
-    free(buffer);
-    PyErr_SetString(PyExc_IOError, "Failed to read entire file");
-    return NULL;
-  }
-
-  *out_size = (size_t)len;
-  return buffer;
-}
-
-static int UNUSED write_memory_to_file(const char *path,
-                                       const unsigned char *data, size_t size) {
-  FILE *f = fs_fopen(path, "wb");
-  if (!f) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    return -1;
-  }
-
-  size_t written = fwrite(data, 1, size, f);
-  int err = ferror(f);
-  fclose(f);
-
-  if (err || written != size) {
-    PyErr_SetString(PyExc_IOError, "Failed to write entire file");
-    return -1;
-  }
-
-  return 0;
-}
-
 // ---- Public API ----
 
 int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
@@ -264,71 +154,14 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
     goto done;
   }
 
-  if (backend->compress_stream) {
-    // src is rewound to the start, so the stage covers the whole input
-    ctx_begin_stage_stream(ctx, src);
+  // src is rewound to the start, so the stage covers the whole input
+  ctx_begin_stage_stream(ctx, src);
 
-    return_code = backend->compress_stream(src, dst, level, ctx);
-    if (return_code != 0) {
-      if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
-        set_backend_error(backend, "compression", "streaming compression");
-      }
-      goto done;
+  return_code = backend->compress_stream(src, dst, level, ctx);
+  if (return_code != 0) {
+    if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
+      set_backend_error(backend, "compression", "streaming compression");
     }
-  } else {
-    size_t input_size = (size_t)len;
-    unsigned char *input_buffer = (unsigned char *)safe_malloc(input_size);
-    if (!input_buffer) {
-      return_code = -1;
-      goto done;
-    }
-
-    size_t read = fread(input_buffer, 1, input_size, src);
-    if (read != input_size || ferror(src)) {
-      free(input_buffer);
-      PyErr_SetString(PyExc_IOError, "Failed to read input file");
-      return_code = -1;
-      goto done;
-    }
-
-    size_t max_payload = backend->max_compressed_size(input_size);
-    if (max_payload == SIZE_MAX) {
-      free(input_buffer);
-      PyErr_SetString(PyExc_OverflowError,
-                      "Compressed size calculation overflow");
-      return_code = -1;
-      goto done;
-    }
-
-    unsigned char *output_buffer = (unsigned char *)safe_malloc(max_payload);
-    if (!output_buffer) {
-      free(input_buffer);
-      return_code = -1;
-      goto done;
-    }
-
-    size_t output_size = 0;
-    if (backend->compress_buffer(input_buffer, input_size, output_buffer,
-                                 &max_payload, level, &output_size) != 0) {
-      free(input_buffer);
-      free(output_buffer);
-      set_backend_error(backend, "compression", "buffer compression");
-      return_code = -1;
-      goto done;
-    }
-
-    free(input_buffer);
-
-    if (fwrite(output_buffer, 1, output_size, dst) != output_size ||
-        ferror(dst)) {
-      free(output_buffer);
-      PyErr_SetString(PyExc_IOError,
-                      "Failed to write compressed data to output file");
-      return_code = -1;
-      goto done;
-    }
-
-    free(output_buffer);
   }
 
 done:
@@ -444,162 +277,14 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
     goto done;
   }
 
-  if (backend->decompress_stream) {
-    // Progress counts input bytes consumed
-    ctx_begin_stage_stream(ctx, src);
+  // Progress counts input bytes consumed
+  ctx_begin_stage_stream(ctx, src);
 
-    return_code = backend->decompress_stream(src, dst, orig_size, ctx);
-    if (return_code != 0) {
-      if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
-        set_backend_error(backend, "decompression", "streaming decompression");
-      }
-      goto done;
+  return_code = backend->decompress_stream(src, dst, orig_size, ctx);
+  if (return_code != 0) {
+    if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
+      set_backend_error(backend, "decompression", "streaming decompression");
     }
-  } else {
-
-#if defined(_WIN32) || defined(_WIN64)
-
-    if (_fseeki64(src, 0, SEEK_END) != 0) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-      return_code = -1;
-      goto done;
-    }
-
-    __int64 end_pos = _ftelli64(src);
-    if (end_pos < 0) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-      return_code = -1;
-      goto done;
-    }
-
-    __int64 payload_start = (__int64)C_HEADER_SIZE;
-    __int64 payload_len = end_pos - payload_start;
-    if (payload_len <= 0) {
-      PyErr_SetString(PyExc_ValueError, "No compressed data found in file");
-      return_code = -1;
-      goto done;
-    }
-
-    if (validate_size(payload_len, MAX_COMPRESSED_SIZE,
-                      "Compressed data size") != 0) {
-      return_code = -1;
-      goto done;
-    }
-
-    if (_fseeki64(src, payload_start, SEEK_SET) != 0) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-      return_code = -1;
-      goto done;
-    }
-
-#else
-
-    if (fseeko(src, 0, SEEK_END) != 0) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-      return_code = -1;
-      goto done;
-    }
-
-    off_t end_pos = ftello(src);
-    if (end_pos < 0) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-      return_code = -1;
-      goto done;
-    }
-
-    off_t payload_start = (off_t)C_HEADER_SIZE;
-    off_t payload_len = end_pos - payload_start;
-    if (payload_len <= 0) {
-      PyErr_SetString(PyExc_ValueError, "No compressed data found in file");
-      return_code = -1;
-      goto done;
-    }
-
-    if (validate_size(payload_len, MAX_COMPRESSED_SIZE,
-                      "Compressed data size") != 0) {
-      return_code = -1;
-      goto done;
-    }
-
-    if (fseeko(src, payload_start, SEEK_SET) != 0) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-      return_code = -1;
-      goto done;
-    }
-
-#endif
-
-    if (payload_len > (long)SIZE_MAX) {
-      PyErr_SetString(PyExc_MemoryError,
-                      "Compressed data too large to fit in memory");
-      return_code = -1;
-      goto done;
-    }
-
-    size_t comp_size = (size_t)payload_len;
-    unsigned char *comp_buffer = (unsigned char *)safe_malloc(comp_size);
-    if (!comp_buffer) {
-      return_code = -1;
-      goto done;
-    }
-    size_t read = fread(comp_buffer, 1, comp_size, src);
-    if (read != comp_size || ferror(src)) {
-      free(comp_buffer);
-      PyErr_SetString(PyExc_IOError,
-                      "Failed to read compressed data from input file");
-      return_code = -1;
-      goto done;
-    }
-
-    size_t output_capacity;
-    if (backend->id == ALGO_SNAPPY) {
-      output_capacity = snappy_decompressed_size(comp_buffer, comp_size);
-      if (output_capacity == 0) {
-        free(comp_buffer);
-        PyErr_SetString(PyExc_RuntimeError,
-                        "Failed to determine decompressed size for Snappy");
-        return_code = -1;
-        goto done;
-      }
-    } else {
-      if (validate_size(orig_size, SIZE_MAX, "Original size") != 0) {
-        free(comp_buffer);
-        return_code = -1;
-        goto done;
-      }
-      output_capacity = (size_t)orig_size;
-    }
-    unsigned char *output_buffer =
-        (unsigned char *)safe_malloc(output_capacity);
-    if (!output_buffer) {
-      free(comp_buffer);
-      return_code = -1;
-      goto done;
-    }
-
-    size_t output_size = 0;
-    if (backend->decompress_buffer(comp_buffer, comp_size, output_buffer,
-                                   &output_capacity, &output_size) != 0 ||
-        output_size != (size_t)orig_size) {
-      free(comp_buffer);
-      free(output_buffer);
-      set_backend_error(backend, "decompression", "buffer decompression");
-      return_code = -1;
-      goto done;
-    }
-
-    free(comp_buffer);
-
-    if (fwrite(output_buffer, 1, output_size, dst) != output_size ||
-        ferror(dst)) {
-      free(output_buffer);
-      PyErr_SetString(PyExc_IOError,
-                      "Failed to write decompressed data to output file");
-      return_code = -1;
-      goto done;
-    }
-
-    free(output_buffer);
   }
 
 done:

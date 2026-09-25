@@ -32,6 +32,7 @@ static int zstd_is_format(const unsigned char *magic, size_t size) {
 static const StandaloneFormat zstd_format = {
     .name = "zstd",
     .extension = ".zst",
+    .levels = LEVELS_ZSTD,
     .compress_file = zstd_compress_file,
     .decompress_file = zstd_decompress_file,
     .get_original_name = zstd_get_original_name,

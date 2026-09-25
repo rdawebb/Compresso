@@ -31,6 +31,7 @@ static int bzip2_is_format(const unsigned char *magic, size_t size) {
 static const StandaloneFormat bzip2_format = {
     .name = "bzip2",
     .extension = ".bz2",
+    .levels = LEVELS_BZIP2,
     .compress_file = bzip2_compress_file,
     .decompress_file = bzip2_decompress_file,
     .get_original_name = bzip2_get_original_name,

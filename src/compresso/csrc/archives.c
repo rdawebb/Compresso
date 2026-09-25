@@ -449,6 +449,26 @@ const CArchive *find_archive_by_id(uint8_t id) {
   }
 }
 
+// The backend for a pipeline's container, so a recognised format without a
+// backend (e.g. 7z) is identified
+static const CArchive *archive_for_pipeline(const CompressionPipeline *p) {
+  const CArchive *archive = find_archive_by_id(p->archive);
+  if (archive && archive->is_available())
+    return archive;
+
+  CompressionPipeline container = {.archive = p->archive,
+                                   .codec = FORMAT_UNKNOWN};
+  char name[32];
+  pipeline_display_name(&container, name, sizeof(name));
+
+  if (!archive)
+    PyErr_Format(comp_BackendError,
+                 "%s archives are recognised but not supported yet", name);
+  else
+    PyErr_Format(comp_BackendError, "%s archive backend not available", name);
+  return NULL;
+}
+
 // ---- Pipeline Helpers ----
 
 // Create a temp file in final_path's directory, which is known writable
@@ -585,11 +605,9 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
 
   int level = pipeline->compression_level;
 
-  const CArchive *archive = find_archive_by_id(pipeline->archive);
-  if (!archive || !archive->is_available()) {
-    PyErr_SetString(comp_Error, "Archive backend not available");
+  const CArchive *archive = archive_for_pipeline(pipeline);
+  if (!archive)
     return -1;
-  }
 
   char resolved_path[FS_PATH_MAX];
   int resolve_ret = fs_resolve_conflict(output_path, overwrite_existing,
@@ -1083,11 +1101,9 @@ int extract_archive(const char *archive_path, const char *output_dir,
     return -1;
   }
 
-  const CArchive *archive = find_archive_by_id(pipe.archive);
-  if (!archive || !archive->is_available()) {
-    PyErr_SetString(comp_Error, "Archive backend not available");
+  const CArchive *archive = archive_for_pipeline(&pipe);
+  if (!archive)
     return -1;
-  }
 
   // Decode the codec stage to a temporary archive first, if present
   char *tmp_path = NULL;
@@ -1251,11 +1267,9 @@ PyObject *list_archive_contents(const char *archive_path) {
     return NULL;
   }
 
-  const CArchive *archive = find_archive_by_id(pipe.archive);
-  if (!archive || !archive->is_available()) {
-    PyErr_SetString(comp_Error, "Archive backend not available");
+  const CArchive *archive = archive_for_pipeline(&pipe);
+  if (!archive)
     return NULL;
-  }
 
   // Decode the codec stage to a temporary archive first, if present
   char *tmp_path = NULL;
@@ -1326,8 +1340,6 @@ PyObject *get_archive_capabilities(void) {
       return NULL;
     }
     Py_DECREF(name);
-    Py_INCREF(streaming);
-    Py_INCREF(compression);
 
     if (PyList_Append(list, dict) < 0) {
       Py_DECREF(dict);

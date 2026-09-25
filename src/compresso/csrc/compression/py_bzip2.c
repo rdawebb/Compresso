@@ -2,72 +2,9 @@
 #include "../codec/codec.h"
 #include "../common.h"
 #include <Python.h>
-#include <bzlib.h>
 
 static int bzip2_is_available(void) {
   return 1; // bzip2 is always available if this code is compiled
-}
-
-static size_t bzip2_max_compressed_size(size_t input_size) {
-  size_t tmp, result;
-  tmp = input_size / 100;
-
-  if (add_overflow_size(input_size, tmp, &result) ||
-      add_overflow_size(result, 600, &result)) {
-    return SIZE_MAX;
-  }
-  return result;
-}
-
-// ---- Buffer Compression/Decompression ----
-
-static int bzip2_compress_buffer(const unsigned char *input, size_t input_size,
-                                 unsigned char *output, size_t *output_capacity,
-                                 int level, size_t *output_size) {
-  int blockSize100k;
-  if (level <= 0)
-    blockSize100k = 9; // default: max compression
-  else if (level > 9)
-    blockSize100k = 9;
-  else
-    blockSize100k = level;
-
-  unsigned int dest_len = (unsigned int)(*output_capacity);
-  int ret;
-
-  Py_BEGIN_ALLOW_THREADS ret = BZ2_bzBuffToBuffCompress(
-      (char *)output, &dest_len, (char *)input, (unsigned int)input_size,
-      blockSize100k, 0, 30 // verbosity and workFactor (recommended default)
-  );
-  Py_END_ALLOW_THREADS
-
-      if (ret != BZ_OK) {
-    return -1; // compression failed
-  }
-
-  *output_size = (size_t)dest_len;
-  return 0; // success
-}
-
-static int bzip2_decompress_buffer(const unsigned char *input,
-                                   size_t input_size, unsigned char *output,
-                                   size_t *output_capacity,
-                                   size_t *output_size) {
-  unsigned int dest_len = (unsigned int)(*output_capacity);
-  int ret;
-
-  Py_BEGIN_ALLOW_THREADS ret = BZ2_bzBuffToBuffDecompress(
-      (char *)output, &dest_len, (char *)input, (unsigned int)input_size, 0,
-      0 // small and verbosity flags
-  );
-  Py_END_ALLOW_THREADS
-
-      if (ret != BZ_OK) {
-    return -1; // decompression failed
-  }
-
-  *output_size = (size_t)dest_len;
-  return 0; // success
 }
 
 // ---- Stream Compression/Decompression ----
@@ -89,10 +26,8 @@ static int bzip2_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
 static const CBackend bzip2_backend = {
     .name = "bzip2",
     .id = ALGO_BZIP2,
+    .levels = LEVELS_BZIP2,
     .is_available = bzip2_is_available,
-    .max_compressed_size = bzip2_max_compressed_size,
-    .compress_buffer = bzip2_compress_buffer,
-    .decompress_buffer = bzip2_decompress_buffer,
     .compress_stream = bzip2_compress_stream,
     .decompress_stream = bzip2_decompress_stream,
 };

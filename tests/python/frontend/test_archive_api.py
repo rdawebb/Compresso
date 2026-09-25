@@ -36,7 +36,6 @@ class TestArchiveOptions:
 
         assert opts.format == "tar.zst"
         assert opts.compression_level is None
-        assert opts.preserve_permissions is True
         assert opts.overwrite is OverwriteMode.RENAME
 
     def test_archive_options_with_format(self) -> None:
@@ -87,6 +86,32 @@ class TestPlanArchive:
         if plan.reason_if_unavailable is not None:
             assert "does not support archives" in plan.reason_if_unavailable
 
+    @pytest.mark.parametrize(
+        "fmt,level,match",
+        [
+            ("tar", 1, "tar has no compression levels"),
+            ("zip", 10, "zip compression level 10"),
+            ("tar.zst", 23, "zstd compression level 23"),
+        ],
+    )
+    def test_plan_archive_out_of_range_level(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str, level: int, match: str
+    ) -> None:
+        """Test that the stage that compresses decides which levels are valid."""
+        opts = ArchiveOptions(format=fmt, compression_level=level)
+        plan = plan_archive([sample_text_file], temp_dir / f"out.{fmt}", opts)
+
+        assert plan.can_run is False
+        assert plan.reason_if_unavailable is not None
+        assert match in plan.reason_if_unavailable
+
+    def test_plan_archive_codec_stage_level(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that tar.zst takes zstd's levels even though tar has none."""
+        opts = ArchiveOptions(format="tar.zst", compression_level=19)
+        assert plan_archive([sample_text_file], temp_dir / "o.tar.zst", opts).can_run
+
 
 class TestArchiveJob:
     """Test the ArchiveJob class."""
@@ -110,6 +135,20 @@ class TestArchiveJob:
         assert isinstance(result, JobResult)
         assert result.ok is False
         assert result.error is not None
+
+    def test_level_zero_is_not_the_default(self, temp_dir: Path) -> None:
+        """Test that level 0 reaches the codec rather than reading as "unset"."""
+        source = temp_dir / "text.txt"
+        source.write_text("a compressible line of text\n" * 4000)
+
+        def archive_size(level: int | None) -> int:
+            out = temp_dir / f"level_{level}.tar.gz"
+            opts = ArchiveOptions(format="tar.gz", compression_level=level)
+            assert ArchiveJob.from_paths([source], out, opts).run().ok
+            return out.stat().st_size
+
+        # gzip level 0 stores the data, so it is far larger than the default
+        assert archive_size(0) > archive_size(None) * 10
 
 
 class TestArchiveOverwrite:

@@ -11,10 +11,12 @@ from typing import Self
 from .._core import (
     Cancelled,
     CancelToken,
+    check_level,
     create_archive,
     extract_archive,
     list_archive_contents,
 )
+from .._levels import to_core_level
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 
 # Formats whose container cannot hold multiple entries
@@ -87,17 +89,11 @@ class ArchiveOptions:
         format: The archive/compression format to write.
         compression_level: The compression level to use, or None for the
             format's default.
-        preserve_permissions: Whether to store each entry's mode bits.
-        preserve_timestamps: Whether to store each entry's modification time.
-        exclude_patterns: Glob patterns for paths to leave out of the archive.
         overwrite: What to do when the destination archive already exists.
     """
 
     format: str = "tar.zst"  # Default to tar with zstd
     compression_level: int | None = None
-    preserve_permissions: bool = True
-    preserve_timestamps: bool = True
-    exclude_patterns: list[str] | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
 
 
@@ -252,6 +248,22 @@ def plan_archive(
             can_run=False,
             reason_if_unavailable=f"Format does not support archives: {options.format}",
         )
+
+    if options.compression_level is not None:
+        try:
+            # The level belongs to the codec stage, or to the container itself
+            check_level(options.compression_level, format=options.format)
+
+        except ValueError as e:
+            return ArchivePlan(
+                sources=source_paths,
+                output=output_path,
+                options=options,
+                total_input_size=0,
+                entry_count=len(source_paths),
+                can_run=False,
+                reason_if_unavailable=str(e),
+            )
 
     total_input_size: int = sum(
         f.stat().st_size for f in _iter_files(source_paths) if f.is_file()
@@ -441,7 +453,7 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
                 str(self.plan.output),
                 self.plan.options.format,
                 [str(s) for s in self.plan.sources],
-                self.plan.options.compression_level or -1,
+                to_core_level(self.plan.options.compression_level),
                 overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
                 progress=to_core_progress(progress, total),
                 cancel=cancel,

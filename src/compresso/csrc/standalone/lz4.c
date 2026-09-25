@@ -32,6 +32,7 @@ static int lz4_is_format(const unsigned char *magic, size_t size) {
 static const StandaloneFormat lz4_format = {
     .name = "lz4",
     .extension = ".lz4",
+    .levels = LEVELS_LZ4,
     .compress_file = lz4_compress_file,
     .decompress_file = lz4_decompress_file,
     .get_original_name = lz4_get_original_name,

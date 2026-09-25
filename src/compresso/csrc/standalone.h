@@ -3,6 +3,7 @@
 
 #include "archives.h" // Format
 #include "context.h"  // CoreContext
+#include "levels.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -10,6 +11,7 @@ typedef struct {
   Format format;
   const char *name;
   const char *extension; // Primary extension
+  LevelRange levels;
 
   // Compress a file to standalone format; `ctx` is NULL-tolerant
   int (*compress_file)(const char *input_path, const char *output_path,

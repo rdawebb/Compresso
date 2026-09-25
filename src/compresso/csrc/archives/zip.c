@@ -449,6 +449,7 @@ static int zip_supports_streaming(void) {
 static const CArchive zip_archive = {
     .name = "zip",
     .id = ARCHIVE_ZIP,
+    .levels = LEVELS_ZLIB,
     .is_available = zip_is_available,
     .supports_compression = zip_supports_compression,
     .requires_external_compression = zip_requires_external_compression,

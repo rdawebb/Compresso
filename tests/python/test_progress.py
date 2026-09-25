@@ -114,7 +114,7 @@ class TestCompressionProgress:
             str(temp_dir / f"{compression_algo}.comp"),
             compression_algo,
             "balanced",
-            3,
+            -1,
             progress=recorder,
         )
 
@@ -162,7 +162,7 @@ class TestDecompressionProgress:
             str(compressed),
             compression_algo,
             "balanced",
-            3,
+            -1,
         )
 
         recorder = Recorder()

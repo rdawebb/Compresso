@@ -32,6 +32,7 @@ static int xz_is_format(const unsigned char *magic, size_t size) {
 static const StandaloneFormat xz_format = {
     .name = "xz",
     .extension = ".xz",
+    .levels = LEVELS_LZMA,
     .compress_file = xz_compress_file,
     .decompress_file = xz_decompress_file,
     .get_original_name = xz_get_original_name,

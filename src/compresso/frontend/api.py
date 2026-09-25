@@ -9,6 +9,7 @@ from typing import Self
 from .._core import (
     Cancelled,
     CancelToken,
+    check_level,
     compress_file,
     compress_standalone,
     decompress_file,
@@ -17,9 +18,10 @@ from .._core import (
     format_is_archive,
 )
 from .._core import get_default_backend_for_strategy as default_backend
-from ..backend.file_inspect import InspectResult
-from ..backend.file_inspect import inspect as inspect_file
-from ..backend.speeds import get_estimated_speeds
+from .._levels import to_core_level
+from ..introspect.file_inspect import InspectResult
+from ..introspect.file_inspect import inspect as inspect_file
+from ..introspect.speeds import get_estimated_speeds
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 from .archive_api import _OVERWRITE_CODES, OverwriteMode
 
@@ -71,7 +73,8 @@ class CompressionOptions:
     Attributes:
         algo: Compression algorithm name, or None for auto.
         strategy: Compression strategy - "fast", "balanced", or "max_ratio".
-        level: Compression level (0-9), or None for auto.
+        level: Compression level, or None for the backend's default; the
+            range depends on the backend (see `BackendCapabilities`).
         format: Single-file container to write, e.g. "gz". None writes the
             Compresso container, which is the only one that records the
             algorithm used; a standalone format is chosen by `algo` instead and
@@ -238,6 +241,26 @@ def plan_compression(
             reason_if_unavailable="No suitable backend found for the selected strategy",
         )
 
+    if options.level is not None:
+        try:
+            # The core's own check, so each backend's range lives in one place
+            if standalone:
+                check_level(options.level, format=standalone)
+            else:
+                check_level(options.level, algo=backend_name)
+
+        except ValueError as e:
+            return CompressionPlan(
+                src=src_path,
+                dest=dest_path,
+                options=options,
+                input_size=input_size,
+                backend_name=backend_name,
+                estimated_seconds=None,
+                can_compress=False,
+                reason_if_unavailable=str(e),
+            )
+
     mb_s: int | float = get_estimated_speeds(algo=backend_name, operation="compress")
     estimated_seconds: int | float = (input_size / MB) / mb_s if input_size > 0 else 0.0
 
@@ -260,8 +283,9 @@ def plan_decompression(
 
     Args:
         src: Source file path.
-        dest: Destination file path. If None, removes
-            ".comp" suffix from source if present.
+        dest: Destination file path; if None, the source path with its last
+            suffix removed (`notes.txt.gz` becomes `notes.txt`), or with
+            `.out` appended when it has no suffix.
 
     Returns:
         DecompressionPlan: The resulting decompression plan.
@@ -395,9 +419,7 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
 
         total: int = self.plan.input_size
         try:
-            lvl: int = (
-                -1 if self.plan.options.level is None else int(self.plan.options.level)
-            )
+            lvl: int = to_core_level(self.plan.options.level)
 
             standalone: str | None = canonical_standalone_format(
                 self.plan.options.format
@@ -474,7 +496,8 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
 
         Args:
             src: Source file path.
-            dest: Destination file path. If None, defaults to the source path.
+            dest: Destination file path; if None, derived from `src` as
+                `plan_decompression` does.
 
         Returns:
             DecompressionJob: The created decompression job.

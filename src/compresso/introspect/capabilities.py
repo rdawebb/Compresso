@@ -14,14 +14,15 @@ class BackendCapabilities:
     Attributes:
         name: Name of the compression algorithm.
         id: Algorithm ID.
-        has_buffer: Whether the backend has a buffer.
-        has_stream: Whether the backend supports streaming compression/decompression.
+        min_level: Lowest compression level accepted, or None if the
+            algorithm has no levels (only the default is accepted).
+        max_level: Highest compression level accepted, or None likewise.
     """
 
     name: str
     id: int
-    has_buffer: bool
-    has_stream: bool
+    min_level: int | None
+    max_level: int | None
 
     def is_available(self) -> bool:
         """Check if the backend is available for use
@@ -30,6 +31,23 @@ class BackendCapabilities:
             bool: Always True if the backend is compiled and listed.
         """
         return True
+
+    def accepts_level(self, level: int | None) -> bool:
+        """Check whether the backend accepts a compression level
+
+        Args:
+            level: The level to check, or None for the backend's default.
+
+        Returns:
+            bool: True if the core would accept `level` for this backend.
+        """
+        if level is None:
+            return True
+
+        if self.min_level is None or self.max_level is None:
+            return False
+
+        return self.min_level <= level <= self.max_level
 
 
 ## Cached capabilities
@@ -53,8 +71,8 @@ def _load_capabilities() -> None:
         cap = BackendCapabilities(
             name=item["name"],
             id=item["id"],
-            has_buffer=item["has_buffer"],
-            has_stream=item["has_stream"],
+            min_level=item["min_level"],
+            max_level=item["max_level"],
         )
 
         caps.append(cap)

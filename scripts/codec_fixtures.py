@@ -31,9 +31,10 @@ from compresso import _core
 MANIFEST_PATH = REPO_ROOT / "tests" / "fixtures" / "codec_manifest.json"
 WORK_DIR = REPO_ROOT / "build" / "codec-fixtures"
 
-# Levels span the ends of every backend's range plus the default, since some
-# libraries derive header bytes from the level
-LEVELS = (1, 6, 9)
+# The default plus levels inside every ranged backend, since some libraries
+# derive header bytes from the level; snappy has no levels, so it refuses all
+# but -1 (refusals are recorded)
+LEVELS = (-1, 1, 6, 9)
 
 # `.comp` framing, via the CBackend stream ops
 COMP_ALGOS = ("zlib", "bzip2", "lzma", "zstd", "lz4", "snappy")

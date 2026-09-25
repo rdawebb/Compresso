@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -201,6 +202,34 @@ class TestCompressRoundTrip:
             ).exit_code
             == EXIT_OK
         )
+        assert (
+            runner.invoke(
+                app, ["decompress", str(archive), "-o", str(restored), "-q"]
+            ).exit_code
+            == EXIT_OK
+        )
+        assert restored.read_bytes() == payload.read_bytes()
+
+    def test_level_above_nine_round_trips(self, payload: Path, temp_dir: Path) -> None:
+        """Test that a level above the old 0-9 cap reaches a backend that takes it."""
+        archive = temp_dir / "zstd19.comp"
+        restored = temp_dir / "zstd19.out"
+
+        result = runner.invoke(
+            app,
+            [
+                "compress",
+                str(payload),
+                "-o",
+                str(archive),
+                "-a",
+                "zstd",
+                "-l",
+                "19",
+                "-q",
+            ],
+        )
+        assert result.exit_code == EXIT_OK
         assert (
             runner.invoke(
                 app, ["decompress", str(archive), "-o", str(restored), "-q"]
@@ -511,12 +540,33 @@ class TestInspectAndList:
         assert result.exit_code == EXIT_OK
         assert json.loads(result.output)["is_compresso"] is True
 
+    def test_runs_as_a_module(self) -> None:
+        """Test that `python -m compresso.cli` works, which a package needs __main__ for."""
+        result = subprocess.run(
+            [sys.executable, "-m", "compresso.cli", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == EXIT_OK
+        assert "zstd" in result.stdout
+
     def test_list_shows_backends(self) -> None:
         """Test that list names the compiled-in algorithms."""
         result = runner.invoke(app, ["list"])
 
         assert result.exit_code == EXIT_OK
         assert "zstd" in result.output
+
+    def test_list_shows_level_ranges(self) -> None:
+        """Test that list shows each backend's levels, and none for snappy."""
+        output = runner.invoke(app, ["list"]).output
+
+        zstd = output[output.index("- zstd") :].split("\n\n")[0]
+        snappy = output[output.index("- snappy") :].split("\n\n")[0]
+        assert "Levels: 1-22" in zstd
+        assert "Levels: none" in snappy
 
     def test_inspect_archive_summary_omits_entries(
         self, source_tree: Path, temp_dir: Path
@@ -669,6 +719,36 @@ class TestExitCodes:
         assert result.exit_code == EXIT_USAGE
         assert "mutually exclusive" in result.output
 
+    @pytest.mark.parametrize(
+        "args,message",
+        [
+            (["-a", "zlib", "-l", "15"], "zlib compression level 15 out of range (0-9"),
+            (["-a", "snappy", "-l", "3"], "snappy has no compression levels"),
+            (["-f", "gz", "-l", "10"], "gzip compression level 10 out of range"),
+        ],
+    )
+    def test_out_of_range_level_is_usage(
+        self, payload: Path, temp_dir: Path, args: list[str], message: str
+    ) -> None:
+        """Test that a level the backend rejects is refused up front, naming the range."""
+        dest = temp_dir / "out.bin"
+        result = runner.invoke(app, ["compress", str(payload), "-o", str(dest), *args])
+        assert result.exit_code == EXIT_USAGE
+        assert message in result.output
+        assert not dest.exists()
+
+    def test_out_of_range_archive_level_is_usage(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that an archive's level is checked against the stage that compresses."""
+        dest = temp_dir / "out.tar"
+        result = runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(dest), "-f", "tar", "-l", "5"]
+        )
+        assert result.exit_code == EXIT_USAGE
+        assert "tar has no compression levels" in result.output
+        assert not dest.exists()
+
     def test_bad_benchmark_level_is_usage(self, payload: Path) -> None:
         """Test that a level that is not a number is a usage error."""
         result = runner.invoke(app, ["benchmark", str(payload), "--levels", "nope"])
@@ -683,6 +763,28 @@ class TestExitCodes:
             ["compress", str(source_tree), "-o", str(temp_dir / "o.gz"), "-f", "gz"],
         )
         assert result.exit_code == EXIT_USAGE
+
+    def test_recognised_but_unsupported_archive_names_itself(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that a detected-but-unwritable container reports its own name."""
+        dest = temp_dir / "o.7z"
+        result = runner.invoke(
+            app, ["compress", str(source_tree), "-o", str(dest), "-f", "7z"]
+        )
+        assert result.exit_code == EXIT_FAILED
+        assert "7z archives are recognised but not supported yet" in result.output
+        assert not dest.exists()
+
+    def test_unsupported_archive_suffix_is_not_written_as_zip(
+        self, source_tree: Path, temp_dir: Path
+    ) -> None:
+        """Test that `-o x.7z` alone names 7z rather than writing a zip there."""
+        dest = temp_dir / "o.7z"
+        result = runner.invoke(app, ["compress", str(source_tree), "-o", str(dest)])
+        assert result.exit_code == EXIT_FAILED
+        assert "7z archives are recognised but not supported yet" in result.output
+        assert not dest.exists()
 
     def test_failed_operation_is_one(self, source_tree: Path, temp_dir: Path) -> None:
         """Test that a job that starts and then fails exits 1, not 2."""

@@ -6,7 +6,7 @@ import pytest
 
 from compresso import compress_file
 from compresso._core import Error
-from compresso.backend.file_inspect import (
+from compresso.introspect.file_inspect import (
     COMP_HEADER_STRUCT,
     InspectResult,
     inspect,
@@ -30,7 +30,6 @@ class TestInspectResult:
             flags=0,
             orig_size=1000,
             backend_available=True,
-            has_streaming=True,
             can_decompress=True,
             estimated_decomp_s=0.5,
         )
