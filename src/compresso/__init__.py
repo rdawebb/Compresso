@@ -13,13 +13,15 @@ from .backend.benchmark import benchmark_file, print_results
 from .backend.capabilities import list_capabilities
 from .backend.file_inspect import InspectResult, inspect
 from .backend.speeds import get_estimated_speeds
-from .frontend._job import JobHandle
+from .frontend._job import JobHandle, JobResult, ProgressCallback
 from .frontend.api import (
     CompressionJob,
     CompressionOptions,
     CompressionPlan,
     DecompressionJob,
     DecompressionPlan,
+    plan_compression,
+    plan_decompression,
 )
 from .frontend.archive_api import (
     ArchiveEntry,
@@ -30,6 +32,8 @@ from .frontend.archive_api import (
     ExtractOptions,
     ExtractPlan,
     OverwriteMode,
+    plan_archive,
+    plan_extraction,
 )
 
 __all__: list[str] = [
@@ -52,12 +56,18 @@ __all__: list[str] = [
     "HeaderError",
     "InspectResult",
     "JobHandle",
+    "JobResult",
     "OverwriteMode",
+    "ProgressCallback",
     "benchmark_file",
     "compress_file",
     "decompress_file",
     "get_estimated_speeds",
     "inspect",
     "list_capabilities",
+    "plan_archive",
+    "plan_compression",
+    "plan_decompression",
+    "plan_extraction",
     "print_results",
 ]
