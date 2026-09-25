@@ -36,7 +36,6 @@ class TestArchiveOptions:
 
         assert opts.format == "tar.zst"
         assert opts.compression_level is None
-        assert opts.preserve_permissions is True
         assert opts.overwrite is OverwriteMode.RENAME
 
     def test_archive_options_with_format(self) -> None:

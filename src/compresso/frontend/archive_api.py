@@ -88,17 +88,11 @@ class ArchiveOptions:
         format: The archive/compression format to write.
         compression_level: The compression level to use, or None for the
             format's default.
-        preserve_permissions: Whether to store each entry's mode bits.
-        preserve_timestamps: Whether to store each entry's modification time.
-        exclude_patterns: Glob patterns for paths to leave out of the archive.
         overwrite: What to do when the destination archive already exists.
     """
 
     format: str = "tar.zst"  # Default to tar with zstd
     compression_level: int | None = None
-    preserve_permissions: bool = True
-    preserve_timestamps: bool = True
-    exclude_patterns: list[str] | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
 
 
