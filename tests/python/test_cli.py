@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -538,6 +539,18 @@ class TestInspectAndList:
 
         assert result.exit_code == EXIT_OK
         assert json.loads(result.output)["is_compresso"] is True
+
+    def test_runs_as_a_module(self) -> None:
+        """Test that `python -m compresso.cli` works, which a package needs __main__ for."""
+        result = subprocess.run(
+            [sys.executable, "-m", "compresso.cli", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == EXIT_OK
+        assert "zstd" in result.stdout
 
     def test_list_shows_backends(self) -> None:
         """Test that list names the compiled-in algorithms."""
