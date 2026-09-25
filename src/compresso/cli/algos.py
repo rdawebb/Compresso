@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..backend.capabilities import list_capabilities
+from ..introspect.capabilities import list_capabilities
 from ._app import app
 from ._render import cancelled, fail
 

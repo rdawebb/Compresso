@@ -9,10 +9,6 @@ from ._core import (
     compress_file,
     decompress_file,
 )
-from .backend.benchmark import benchmark_file, print_results
-from .backend.capabilities import list_capabilities
-from .backend.file_inspect import InspectResult, inspect
-from .backend.speeds import get_estimated_speeds
 from .frontend._job import JobHandle, JobResult, ProgressCallback
 from .frontend.api import (
     CompressionJob,
@@ -35,6 +31,10 @@ from .frontend.archive_api import (
     plan_archive,
     plan_extraction,
 )
+from .introspect.benchmark import benchmark_file, print_results
+from .introspect.capabilities import list_capabilities
+from .introspect.file_inspect import InspectResult, inspect
+from .introspect.speeds import get_estimated_speeds
 
 __all__: list[str] = [
     "ArchiveEntry",

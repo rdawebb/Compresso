@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from ..backend.benchmark import benchmark_file, print_results
+from ..introspect.benchmark import benchmark_file, print_results
 from ._app import app
 from ._render import EXIT_USAGE, cancelled, fail, succeed
 

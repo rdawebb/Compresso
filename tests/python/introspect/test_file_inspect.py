@@ -6,7 +6,7 @@ import pytest
 
 from compresso import compress_file
 from compresso._core import Error
-from compresso.backend.file_inspect import (
+from compresso.introspect.file_inspect import (
     COMP_HEADER_STRUCT,
     InspectResult,
     inspect,

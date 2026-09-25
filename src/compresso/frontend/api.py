@@ -19,9 +19,9 @@ from .._core import (
 )
 from .._core import get_default_backend_for_strategy as default_backend
 from .._levels import to_core_level
-from ..backend.file_inspect import InspectResult
-from ..backend.file_inspect import inspect as inspect_file
-from ..backend.speeds import get_estimated_speeds
+from ..introspect.file_inspect import InspectResult
+from ..introspect.file_inspect import inspect as inspect_file
+from ..introspect.speeds import get_estimated_speeds
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 from .archive_api import _OVERWRITE_CODES, OverwriteMode
 

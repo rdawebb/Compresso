@@ -2,7 +2,7 @@
 
 import pytest
 
-from compresso.backend.capabilities import (
+from compresso.introspect.capabilities import (
     BackendCapabilities,
     get_by_id,
     get_by_name,

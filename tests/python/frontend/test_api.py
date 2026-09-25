@@ -144,7 +144,7 @@ class TestDecompressionPlan:
 
     def test_decompression_plan_creation(self, sample_text_file: Path, temp_dir: Path):
         """Test creating a DecompressionPlan."""
-        from compresso.backend.file_inspect import InspectResult
+        from compresso.introspect.file_inspect import InspectResult
 
         inspection = InspectResult(
             path=sample_text_file,

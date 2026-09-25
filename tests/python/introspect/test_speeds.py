@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from compresso.backend.speeds import (
+from compresso.introspect.speeds import (
     AlgoSpeeds,
     update_from_benchmarks,
 )
@@ -50,7 +50,7 @@ class TestGetEstimatedSpeeds:
 
     def test_get_estimated_speeds_decompress(self):
         """Test getting estimated decompression speed."""
-        from compresso.backend.speeds import get_estimated_speeds
+        from compresso.introspect.speeds import get_estimated_speeds
 
         speed = get_estimated_speeds("zlib", operation="decompress")
         assert speed > 0
@@ -58,7 +58,7 @@ class TestGetEstimatedSpeeds:
 
     def test_get_estimated_speeds_compress(self):
         """Test getting estimated compression speed."""
-        from compresso.backend.speeds import get_estimated_speeds
+        from compresso.introspect.speeds import get_estimated_speeds
 
         speed = get_estimated_speeds("zlib", operation="compress")
         assert speed > 0
@@ -67,7 +67,7 @@ class TestGetEstimatedSpeeds:
     @pytest.mark.parametrize("algo", ["zlib", "bzip2", "lzma", "zstd", "lz4", "snappy"])
     def test_get_estimated_speeds_common_algos(self, algo: str):
         """Test that common algorithms have speed estimates."""
-        from compresso.backend.speeds import get_estimated_speeds
+        from compresso.introspect.speeds import get_estimated_speeds
 
         decomp_speed = get_estimated_speeds(algo, operation="decompress")
         comp_speed = get_estimated_speeds(algo, operation="compress")
@@ -78,7 +78,7 @@ class TestGetEstimatedSpeeds:
 
     def test_get_estimated_speeds_consistency(self):
         """Test that speeds are consistent across calls."""
-        from compresso.backend.speeds import get_estimated_speeds
+        from compresso.introspect.speeds import get_estimated_speeds
 
         speed1 = get_estimated_speeds("zlib")
         speed2 = get_estimated_speeds("zlib")
@@ -88,7 +88,7 @@ class TestGetEstimatedSpeeds:
 
     def test_get_estimated_speeds_default_operation(self):
         """Test that default operation is decompress."""
-        from compresso.backend.speeds import get_estimated_speeds
+        from compresso.introspect.speeds import get_estimated_speeds
 
         default_speed = get_estimated_speeds("zlib")
         decomp_speed = get_estimated_speeds("zlib", operation="decompress")
@@ -113,7 +113,7 @@ class TestUpdateFromBenchmarks:
         self, mock_speeds_file: Path, temp_dir: Path
     ):
         """Test that update_from_benchmarks creates config file."""
-        from compresso.backend.benchmark import BenchmarkResult
+        from compresso.introspect.benchmark import BenchmarkResult
 
         results = [
             BenchmarkResult(

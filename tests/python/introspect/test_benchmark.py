@@ -2,7 +2,7 @@
 
 import pytest
 
-from compresso.backend.benchmark import (
+from compresso.introspect.benchmark import (
     BenchmarkResult,
     benchmark_file,
     print_results,
