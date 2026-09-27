@@ -16,11 +16,11 @@ from compresso._core import (
 )
 from compresso.frontend.archive_api import ArchiveJob, ArchiveOptions, ExtractJob
 
+from .helpers import Recorder
+
 # Incompressible, so the compressed archive stays above the 1 MiB report floor
 ENTRY_COUNT = 8
 ENTRY_SIZE = 3 * 1024 * 1024
-
-ARCHIVE_FORMATS = [("tar", ".tar"), ("tar.zst", ".tar.zst"), ("zip", ".zip")]
 
 
 @pytest.fixture
@@ -38,51 +38,6 @@ def source_tree(temp_dir: Path) -> Path:
     for i in range(ENTRY_COUNT):
         (root / f"f{i}.bin").write_bytes(os.urandom(ENTRY_SIZE))
     return root
-
-
-class Recorder:
-    """Collects progress callbacks for assertions."""
-
-    def __init__(self) -> None:
-        """Initialises the recorder with an empty list of calls."""
-        self.calls: list[tuple[int, int]] = []
-
-    def __call__(self, done: int, total: int) -> None:
-        """Appends the current progress to the list of calls.
-
-        Args:
-            done: The number of bytes processed so far.
-            total: The total number of bytes to process.
-        """
-        self.calls.append((done, total))
-
-    @property
-    def dones(self) -> list[int]:
-        """Returns the list of done counts from the calls."""
-        return [done for done, _ in self.calls]
-
-    def assert_monotonic(self) -> None:
-        """Asserts that the progress is monotonic (non-decreasing)."""
-        assert self.dones == sorted(self.dones), "progress went backwards"
-
-    def assert_finished(self) -> None:
-        """Asserts that the progress is finished (done == total)."""
-        assert self.calls, "no progress was reported"
-        done, total = self.calls[-1]
-        assert done == total, f"final report was {done}/{total}, not 100%"
-
-
-@pytest.fixture(params=ARCHIVE_FORMATS, ids=[f for f, _ in ARCHIVE_FORMATS])
-def archive_format(request: pytest.FixtureRequest) -> tuple[str, str]:
-    """Each archive format paired with its extension.
-
-    Args:
-        request: The pytest request object.
-
-    Returns:
-        The archive format and extension as a tuple.
-    """
-    return request.param
 
 
 class TestArchiveCreationProgress:

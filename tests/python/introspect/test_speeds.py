@@ -14,7 +14,7 @@ from compresso.introspect.speeds import (
 class TestAlgoSpeeds:
     """Test the AlgoSpeeds dataclass."""
 
-    def test_algo_speeds_creation(self):
+    def test_algo_speeds_creation(self) -> None:
         """Test creating an AlgoSpeeds instance."""
         speeds = AlgoSpeeds(algo="zlib", comp_mb_s=200.0, decomp_mb_s=250.0, samples=5)
 
@@ -34,7 +34,7 @@ class TestAlgoSpeeds:
     )
     def test_algo_speeds_various_algorithms(
         self, algo: str, comp_speed: float, decomp_speed: float
-    ):
+    ) -> None:
         """Test AlgoSpeeds with various algorithms."""
         speeds = AlgoSpeeds(
             algo=algo, comp_mb_s=comp_speed, decomp_mb_s=decomp_speed, samples=1
@@ -48,7 +48,7 @@ class TestAlgoSpeeds:
 class TestGetEstimatedSpeeds:
     """Test the get_estimated_speeds function."""
 
-    def test_get_estimated_speeds_decompress(self):
+    def test_get_estimated_speeds_decompress(self) -> None:
         """Test getting estimated decompression speed."""
         from compresso.introspect.speeds import get_estimated_speeds
 
@@ -56,7 +56,7 @@ class TestGetEstimatedSpeeds:
         assert speed > 0
         assert isinstance(speed, float)
 
-    def test_get_estimated_speeds_compress(self):
+    def test_get_estimated_speeds_compress(self) -> None:
         """Test getting estimated compression speed."""
         from compresso.introspect.speeds import get_estimated_speeds
 
@@ -65,7 +65,7 @@ class TestGetEstimatedSpeeds:
         assert isinstance(speed, float)
 
     @pytest.mark.parametrize("algo", ["zlib", "bzip2", "lzma", "zstd", "lz4", "snappy"])
-    def test_get_estimated_speeds_common_algos(self, algo: str):
+    def test_get_estimated_speeds_common_algos(self, algo: str) -> None:
         """Test that common algorithms have speed estimates."""
         from compresso.introspect.speeds import get_estimated_speeds
 
@@ -76,7 +76,7 @@ class TestGetEstimatedSpeeds:
         assert decomp_speed > 0
         assert comp_speed > 0
 
-    def test_get_estimated_speeds_consistency(self):
+    def test_get_estimated_speeds_consistency(self) -> None:
         """Test that speeds are consistent across calls."""
         from compresso.introspect.speeds import get_estimated_speeds
 
@@ -86,7 +86,7 @@ class TestGetEstimatedSpeeds:
         # Should return the same values
         assert speed1 == speed2
 
-    def test_get_estimated_speeds_default_operation(self):
+    def test_get_estimated_speeds_default_operation(self) -> None:
         """Test that default operation is decompress."""
         from compresso.introspect.speeds import get_estimated_speeds
 
@@ -100,18 +100,16 @@ class TestGetEstimatedSpeeds:
 class TestUpdateFromBenchmarks:
     """Test the update_from_benchmarks function."""
 
-    def test_update_from_benchmarks_exists(self):
+    def test_update_from_benchmarks_exists(self) -> None:
         """Test that update_from_benchmarks function exists."""
         assert callable(update_from_benchmarks)
 
-    def test_update_from_benchmarks_with_empty_list(self, mock_speeds_file: Path):
+    def test_update_from_benchmarks_with_empty_list(self) -> None:
         """Test updating from empty benchmark list."""
         # Should handle empty list without error
         update_from_benchmarks([])
 
-    def test_update_from_benchmarks_creates_file(
-        self, mock_speeds_file: Path, temp_dir: Path
-    ):
+    def test_update_from_benchmarks_creates_file(self, speeds_file: Path) -> None:
         """Test that update_from_benchmarks creates config file."""
         from compresso.introspect.benchmark import BenchmarkResult
 
@@ -130,14 +128,13 @@ class TestUpdateFromBenchmarks:
         update_from_benchmarks(results)
 
         # Check if config directory was created
-        config_dir = temp_dir / ".compresso"
-        assert config_dir.exists()
+        assert speeds_file.parent.exists()
 
 
 class TestSpeedsFilePersistence:
     """Test speeds file reading and writing."""
 
-    def test_speeds_file_format(self, temp_dir: Path):
+    def test_speeds_file_format(self, temp_dir: Path) -> None:
         """Test that speeds file uses JSON format."""
         speeds_file = temp_dir / "speeds.json"
 
@@ -150,7 +147,7 @@ class TestSpeedsFilePersistence:
         assert "zlib" in loaded
         assert loaded["zlib"]["comp_mb_s"] == 200.0
 
-    def test_speeds_file_structure(self, temp_dir: Path):
+    def test_speeds_file_structure(self, temp_dir: Path) -> None:
         """Test expected structure of speeds file."""
         speeds_file = temp_dir / "speeds.json"
 

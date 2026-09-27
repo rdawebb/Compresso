@@ -22,6 +22,8 @@ from compresso.cli._render import (
 from compresso.cli.extract import list_entries
 from compresso.frontend.archive_api import ArchiveEntry
 
+from .helpers import renamed
+
 runner = CliRunner()
 
 # Above the 1 MiB bar threshold, and incompressible so the archive stays large
@@ -252,11 +254,8 @@ class TestCompressRoundTrip:
         second = runner.invoke(app, ["compress", str(payload), "-o", str(dest), "-q"])
         assert second.exit_code == EXIT_OK
 
-        suffix = " 2" if sys.platform == "darwin" else " (2)"
-        renamed = temp_dir / f"out{suffix}.comp"
-
         assert dest.read_bytes() == original_bytes
-        assert renamed.is_file()
+        assert (temp_dir / renamed("out.comp")).is_file()
 
     def test_compress_error_on_conflict_refuses_existing_output(
         self, payload: Path, temp_dir: Path
@@ -382,11 +381,10 @@ class TestArchiveRoundTrip:
         # No individual file was renamed; the set of file names is unchanged
         assert after == sorted(before + before)
 
-        suffix = " 2" if sys.platform == "darwin" else " (2)"
         top_level = sorted(p.name for p in dest.iterdir())
-        assert top_level == sorted([source_tree.name, source_tree.name + suffix])
+        assert top_level == sorted([source_tree.name, renamed(source_tree.name)])
 
-        renamed_dir = dest / (source_tree.name + suffix)
+        renamed_dir = dest / renamed(source_tree.name)
         assert sorted(p.name for p in renamed_dir.iterdir()) == sorted(
             p.name for p in (dest / source_tree.name).iterdir()
         )
@@ -440,11 +438,8 @@ class TestArchiveRoundTrip:
         )
         assert second.exit_code == EXIT_OK
 
-        suffix = " 2" if sys.platform == "darwin" else " (2)"
-        renamed = temp_dir / f"out{suffix}.tar"
-
         assert archive.read_bytes() == original_bytes
-        assert renamed.is_file()
+        assert (temp_dir / renamed("out.tar")).is_file()
 
     def test_compress_error_on_conflict_still_refuses(
         self, source_tree: Path, temp_dir: Path

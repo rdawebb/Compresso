@@ -1,6 +1,5 @@
 """Tests for the frontend API module."""
 
-import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +13,8 @@ from compresso.frontend.api import (
     plan_compression,
 )
 from compresso.frontend.archive_api import OverwriteMode
+
+from ..helpers import renamed
 
 
 class TestCompressionOptions:
@@ -196,10 +197,6 @@ class TestCompressionOverwrite:
     Compresso container and a standalone format.
     """
 
-    #: The numbered-sibling suffix `RENAME` inserts before the extension:
-    #: "name 2.ext" on macOS, "name (2).ext" elsewhere.
-    CONFLICT_SUFFIX = " {}" if sys.platform == "darwin" else " ({})"
-
     @staticmethod
     def _source_and_stale_output(
         temp_dir: Path, suffix: str = ".comp"
@@ -242,10 +239,10 @@ class TestCompressionOverwrite:
 
         assert result.ok, result.error
         assert dest.read_bytes() == b"stale"
-        renamed = temp_dir / f"out{self.CONFLICT_SUFFIX.format(2)}{suffix}"
-        assert job.plan.dest == renamed
-        assert renamed.is_file()
-        assert renamed.read_bytes() != b"stale"
+        sibling = temp_dir / renamed(f"out{suffix}")
+        assert job.plan.dest == sibling
+        assert sibling.is_file()
+        assert sibling.read_bytes() != b"stale"
 
     def test_error_mode_refuses_existing_output(self, temp_dir: Path) -> None:
         """Test that explicit `error` refuses to touch an existing output."""

@@ -13,6 +13,8 @@ from compresso import _core
 from compresso._core import Cancelled, CancelToken, compress_file, decompress_file
 from compresso.frontend.api import CompressionJob, DecompressionJob
 
+from .helpers import Recorder
+
 # Large enough to cross the 1 MiB report interval many times over
 PROGRESS_FILE_SIZE = 24 * 1024 * 1024
 
@@ -51,38 +53,6 @@ def big_incompressible_file(temp_dir: Path) -> Path:
     file_path = temp_dir / "big_incompressible.bin"
     file_path.write_bytes(os.urandom(PROGRESS_FILE_SIZE))
     return file_path
-
-
-class Recorder:
-    """Collects progress callbacks for assertions."""
-
-    def __init__(self) -> None:
-        """Initialise an empty list to store progress calls."""
-        self.calls: list[tuple[int, int]] = []
-
-    def __call__(self, done: int, total: int) -> None:
-        """Store the progress call in the list.
-
-        Args:
-            done: The number of bytes processed.
-            total: The total number of bytes to process.
-        """
-        self.calls.append((done, total))
-
-    @property
-    def dones(self) -> list[int]:
-        """Return the list of done counts from the progress calls."""
-        return [done for done, _ in self.calls]
-
-    def assert_monotonic(self) -> None:
-        """Assert that the progress is monotonic (non-decreasing)."""
-        assert self.dones == sorted(self.dones), "progress went backwards"
-
-    def assert_finished(self) -> None:
-        """Assert that the progress is finished (done == total)."""
-        assert self.calls, "no progress was reported"
-        done, total = self.calls[-1]
-        assert done == total, f"final report was {done}/{total}, not 100%"
 
 
 class TestCompressionProgress:

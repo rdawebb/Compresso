@@ -1,28 +1,48 @@
 """Pytest configuration and shared fixtures for Compresso tests."""
 
-import sys
-import tempfile
-from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 
-# Ensure the src directory is in the path for imports
-# This helps when the package isn't installed in development mode
-src_path = Path(__file__).parent.parent / "src"
-if str(src_path) not in sys.path:
-    sys.path.insert(0, str(src_path))
+from compresso.introspect import speeds
+
+from .helpers import ARCHIVE_FORMATS
+
+
+@pytest.fixture(autouse=True)
+def speeds_file(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Point the speed estimates cache away from the user's home directory.
+
+    Without this, anything that plans a job reads the real
+    `~/.compresso/speeds.json`, so results would depend on the machine.
+
+    Args:
+        tmp_path_factory: Pytest temporary path factory fixture.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        Path to the (not yet created) speeds file.
+    """
+    config_dir = tmp_path_factory.mktemp("config") / ".compresso"
+    monkeypatch.setattr(speeds, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(speeds, "_SPEEDS_FILE", config_dir / "speeds.json")
+
+    return config_dir / "speeds.json"
 
 
 @pytest.fixture
-def temp_dir() -> Generator[Path, None, None]:
-    """Create a temporary directory for test files.
+def temp_dir(tmp_path: Path) -> Path:
+    """A temporary directory for test files.
 
-    Yields:
+    Args:
+        tmp_path: Pytest temporary path fixture.
+
+    Returns:
         Path to the temporary directory.
     """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
+    return tmp_path
 
 
 @pytest.fixture
@@ -104,7 +124,7 @@ def small_file(temp_dir: Path) -> Path:
 
 
 @pytest.fixture(params=["zlib", "bzip2", "lzma", "zstd", "lz4", "snappy"])
-def compression_algo(request) -> str:
+def compression_algo(request: pytest.FixtureRequest) -> str:
     """Parameterized fixture for all compression algorithms.
 
     Args:
@@ -116,51 +136,14 @@ def compression_algo(request) -> str:
     return request.param
 
 
-@pytest.fixture(params=["fast", "balanced", "max_ratio"])
-def compression_strategy(request) -> str:
-    """Parameterized fixture for all compression strategies.
+@pytest.fixture(params=ARCHIVE_FORMATS, ids=[f for f, _ in ARCHIVE_FORMATS])
+def archive_format(request: pytest.FixtureRequest) -> tuple[str, str]:
+    """Each archive format paired with its extension.
 
     Args:
         request: Pytest request object.
 
     Returns:
-        Name of the compression strategy.
+        The archive format and extension as a tuple.
     """
     return request.param
-
-
-@pytest.fixture(params=[1, 3, 6, 9])
-def compression_level(request) -> int:
-    """Parameterized fixture for various compression levels.
-
-    Args:
-        request: Pytest request object.
-
-    Returns:
-        Compression level (1-9).
-    """
-    return request.param
-
-
-@pytest.fixture
-def mock_speeds_file(temp_dir: Path, monkeypatch) -> Path:
-    """Mock the speeds file location for testing.
-
-    Args:
-        temp_dir: Temporary directory fixture.
-        monkeypatch: Pytest monkeypatch fixture.
-
-    Returns:
-        Path to the mock speeds file.
-    """
-    speeds_file = temp_dir / "speeds.json"
-    config_dir = temp_dir / ".compresso"
-    config_dir.mkdir(exist_ok=True)
-
-    # Patch the module-level variables
-    from compresso.introspect import speeds
-
-    monkeypatch.setattr(speeds, "_CONFIG_DIR", config_dir)
-    monkeypatch.setattr(speeds, "_SPEEDS_FILE", config_dir / "speeds.json")
-
-    return speeds_file

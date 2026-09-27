@@ -26,6 +26,8 @@ from compresso.frontend.archive_api import (
     plan_extraction,
 )
 
+from ..helpers import renamed
+
 
 class TestArchiveOptions:
     """Test the ArchiveOptions dataclass."""
@@ -154,10 +156,6 @@ class TestArchiveJob:
 class TestArchiveOverwrite:
     """Test the four `overwrite` modes against an existing destination archive."""
 
-    #: The numbered-sibling suffix `RENAME` inserts before the extension:
-    #: "name 2.ext" on macOS, "name (2).ext" elsewhere.
-    CONFLICT_SUFFIX = " {}" if sys.platform == "darwin" else " ({})"
-
     @staticmethod
     def _source_and_stale_output(temp_dir: Path) -> tuple[Path, Path]:
         """Build a source file and a stale file already at the archive's path.
@@ -186,10 +184,10 @@ class TestArchiveOverwrite:
 
         assert result.ok, result.error
         assert archive_path.read_bytes() == b"stale"
-        renamed = temp_dir / f"out{self.CONFLICT_SUFFIX.format(2)}.tar"
-        assert job.plan.output == renamed
-        assert renamed.is_file()
-        assert renamed.read_bytes() != b"stale"
+        sibling = temp_dir / renamed("out.tar")
+        assert job.plan.output == sibling
+        assert sibling.is_file()
+        assert sibling.read_bytes() != b"stale"
 
     def test_rename_keeps_a_compound_extension_intact(self, temp_dir: Path) -> None:
         """Test that "out.tar.zst" renames to "out 2.tar.zst", not "out.tar 2.zst".
@@ -210,9 +208,9 @@ class TestArchiveOverwrite:
         result = job.run()
 
         assert result.ok, result.error
-        renamed = temp_dir / f"out{self.CONFLICT_SUFFIX.format(2)}.tar.zst"
-        assert job.plan.output == renamed
-        assert renamed.is_file()
+        sibling = temp_dir / renamed("out.tar.zst")
+        assert job.plan.output == sibling
+        assert sibling.is_file()
 
     def test_rename_increments_through_repeated_conflicts(self, temp_dir: Path) -> None:
         """Test that a third clash gets " 3", not another " 2"."""
@@ -223,8 +221,8 @@ class TestArchiveOverwrite:
         result = ArchiveJob.from_paths([source], archive_path, options).run()
 
         assert result.ok, result.error
-        assert (temp_dir / f"out{self.CONFLICT_SUFFIX.format(2)}.tar").exists()
-        assert (temp_dir / f"out{self.CONFLICT_SUFFIX.format(3)}.tar").exists()
+        assert (temp_dir / renamed("out.tar")).exists()
+        assert (temp_dir / renamed("out.tar", 3)).exists()
 
     def test_error_mode_refuses_existing_archive(self, temp_dir: Path) -> None:
         """Test that explicit `error` refuses to touch an existing archive."""
@@ -889,10 +887,6 @@ class TestExtractionDepthLimit:
 class TestExtractionOverwrite:
     """Test the four `overwrite` modes against an existing destination."""
 
-    #: The numbered-sibling suffix `RENAME` inserts before the extension:
-    #: "name 2.ext" on macOS, "name (2).ext" elsewhere.
-    CONFLICT_SUFFIX = " {}" if sys.platform == "darwin" else " ({})"
-
     @staticmethod
     def _archive_and_stale_output(temp_dir: Path) -> tuple[Path, Path]:
         """Build a one-entry archive and an output dir already holding that name.
@@ -920,8 +914,8 @@ class TestExtractionOverwrite:
 
         assert result.ok, result.error
         assert (out_dir / "a.txt").read_bytes() == b"original"
-        renamed = out_dir / f"a{self.CONFLICT_SUFFIX.format(2)}.txt"
-        assert renamed.read_bytes() == b"xxxxx"
+        sibling = out_dir / renamed("a.txt")
+        assert sibling.read_bytes() == b"xxxxx"
 
     def test_rename_increments_through_repeated_conflicts(self, temp_dir: Path) -> None:
         """Test that a third clash gets " 3", not another " 2"."""
@@ -932,8 +926,8 @@ class TestExtractionOverwrite:
         result = ExtractJob.from_archive(archive_path, out_dir, options=options).run()
 
         assert result.ok, result.error
-        assert (out_dir / f"a{self.CONFLICT_SUFFIX.format(2)}.txt").exists()
-        assert (out_dir / f"a{self.CONFLICT_SUFFIX.format(3)}.txt").exists()
+        assert (out_dir / renamed("a.txt")).exists()
+        assert (out_dir / renamed("a.txt", 3)).exists()
 
     def test_error_mode_still_refuses_on_request(self, temp_dir: Path) -> None:
         """Test that explicit `error` reproduces the old refuse-by-default behavior."""
@@ -998,8 +992,8 @@ class TestExtractionOverwrite:
 
         assert result.ok, result.error
         assert (out_dir / "d").read_bytes() == b"blocking file"
-        renamed = out_dir / f"d{self.CONFLICT_SUFFIX.format(2)}"
-        assert renamed.is_dir()
+        sibling = out_dir / renamed("d")
+        assert sibling.is_dir()
 
     def test_dir_clash_with_a_file_renames_nested_entries_too(
         self, temp_dir: Path
@@ -1019,9 +1013,9 @@ class TestExtractionOverwrite:
         ).run()
 
         assert result.ok, result.error
-        renamed = out_dir / f"d{self.CONFLICT_SUFFIX.format(2)}"
-        assert renamed.is_dir()
-        assert (renamed / "inside.txt").read_bytes() == b"xxxxx"
+        sibling = out_dir / renamed("d")
+        assert sibling.is_dir()
+        assert (sibling / "inside.txt").read_bytes() == b"xxxxx"
         # The original "d" is untouched, and nothing was created back under it
         assert (out_dir / "d").read_bytes() == b"blocking file"
 
@@ -1030,12 +1024,11 @@ class TestExtractionOverwrite:
     ) -> None:
         """Test that a second clash below an already-renamed ancestor composes."""
         archive_path = temp_dir / "dir.tar"
-        suffix2 = self.CONFLICT_SUFFIX.format(2)
         _tar_with_entries(
             archive_path,
             [
                 _dir_entry("a"),
-                _file_entry(f"a{suffix2}/b"),
+                _file_entry(f"{renamed('a')}/b"),
                 _dir_entry("a/b"),
                 _file_entry("a/b/inside.txt"),
             ],
@@ -1052,9 +1045,9 @@ class TestExtractionOverwrite:
         ).run()
 
         assert result.ok, result.error
-        renamed_a = out_dir / f"a{suffix2}"
+        renamed_a = out_dir / renamed("a")
         assert (renamed_a / "b").read_bytes() == b"xxxxx"  # the unrelated entry
-        renamed_b = renamed_a / f"b{suffix2}"
+        renamed_b = renamed_a / renamed("b")
         assert renamed_b.is_dir()
         assert (renamed_b / "inside.txt").read_bytes() == b"xxxxx"
         # Nothing was planted back under the archive's own, un-renamed "a/b"
@@ -1079,11 +1072,11 @@ class TestExtractionOverwrite:
         # The original directory and its contents are untouched
         assert (out_dir / "d" / "inside.txt").read_bytes() == b"original"
 
-        renamed = out_dir / f"d{self.CONFLICT_SUFFIX.format(2)}"
-        assert renamed.is_dir()
+        sibling = out_dir / renamed("d")
+        assert sibling.is_dir()
         # The nested file lands under the renamed directory with its own
         # name unchanged - not doubled up or given its own " 2" suffix
-        assert (renamed / "inside.txt").read_bytes() == b"xxxxx"
+        assert (sibling / "inside.txt").read_bytes() == b"xxxxx"
 
     def test_dir_clash_with_an_existing_dir_renames_subdirs_too(
         self, temp_dir: Path
@@ -1116,10 +1109,10 @@ class TestExtractionOverwrite:
         ]
         assert (out_dir / "d" / "sub" / "inside.txt").read_bytes() == b"original"
 
-        renamed = out_dir / f"d{self.CONFLICT_SUFFIX.format(2)}"
-        assert renamed.is_dir()
-        assert sorted(p.name for p in renamed.iterdir()) == ["sub"]
-        assert (renamed / "sub" / "inside.txt").read_bytes() == b"xxxxx"
+        sibling = out_dir / renamed("d")
+        assert sibling.is_dir()
+        assert sorted(p.name for p in sibling.iterdir()) == ["sub"]
+        assert (sibling / "sub" / "inside.txt").read_bytes() == b"xxxxx"
 
     def test_dir_clash_with_a_file_errors_in_error_mode(self, temp_dir: Path) -> None:
         """Test that explicit `error` also refuses, not the old silent no-op."""
