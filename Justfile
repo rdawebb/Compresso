@@ -26,11 +26,11 @@ check: lint format type
 
 # Run all Python tests
 test:
-    uv run pytest tests/ -v
+    uv run pytest -v
 
 # Run Python tests with coverage
 test-cov:
-    uv run pytest tests/ --cov=src --cov-report=html --cov-report=term
+    uv run pytest --cov --cov-report=html --cov-report=term
 
 # Run all C tests
 test-c:

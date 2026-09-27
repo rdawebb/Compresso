@@ -49,3 +49,24 @@ no-build-isolation-package = ["compresso"]
 # Every command deliberately ends in a last-resort `except Exception`, so the
 # blind-except rule is turned off across the CLI rather than annotated on each
 "src/compresso/cli/*.py" = ["BLE001"]
+
+[tool.pytest]
+minversion = "9.0"
+strict = true
+testpaths = ["tests/python"]
+python_files = ["test_*.py"]
+addopts = ["-ra", "--showlocals"]
+filterwarnings = [
+    "error",
+    # Raised by coverage itself when its compiled tracer is missing; falls
+    # back to the Python tracer
+    "ignore:Couldn't import C tracer",
+]
+markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
+
+[tool.coverage.run]
+source = ["compresso"]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
