@@ -7,6 +7,7 @@ name = "compresso"
 version = "0.1.0"
 description = "A fast C-based Python compression tool supporting multiple algorithms"
 authors = [{ name = "Rob Webb" }]
+license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
