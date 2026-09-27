@@ -15,53 +15,71 @@ from compresso.frontend.api import CompressionJob, DecompressionJob
 
 from .helpers import Recorder
 
-# Large enough to cross the 1 MiB report interval many times over
-PROGRESS_FILE_SIZE = 24 * 1024 * 1024
+# Crosses the 1 MiB report floor (`CTX_MIN_INTERVAL`) several times over
+PROGRESS_FILE_SIZE = 4 * 1024 * 1024
 
 
-@pytest.fixture
-def big_compressible_file(temp_dir: Path) -> Path:
-    """A file large enough to produce many progress reports when compressed.
+def fast_level(algo: str) -> int:
+    """The quickest level a backend accepts, for tests where the level is moot.
 
     Args:
-        temp_dir: The temporary directory fixture.
+        algo: The backend's name.
+
+    Returns:
+        Level 1, or the default for snappy, which has no levels.
+    """
+    return -1 if algo == "snappy" else 1
+
+
+@pytest.fixture(scope="module")
+def big_compressible_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A file large enough to produce several progress reports when compressed.
+
+    Shared by the whole module, so tests must only read it.
+
+    Args:
+        tmp_path_factory: Pytest temporary path factory fixture.
 
     Returns:
         Path: The path to the big compressible file.
     """
-    file_path = temp_dir / "big_compressible.bin"
+    file_path = tmp_path_factory.mktemp("progress") / "big_compressible.bin"
     chunk = b"compresso progress test payload " * 1024  # 32 KB
-    with file_path.open("wb") as f:
-        for _ in range(PROGRESS_FILE_SIZE // len(chunk)):
-            f.write(chunk)
+    file_path.write_bytes(chunk * (PROGRESS_FILE_SIZE // len(chunk)))
+
     return file_path
 
 
-@pytest.fixture
-def big_incompressible_file(temp_dir: Path) -> Path:
+@pytest.fixture(scope="module")
+def big_incompressible_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A file that stays large once compressed.
 
     Progress counts input bytes, so decompression's total is the compressed
-    size; random data keeps that above the report-interval floor.
+    size; random data keeps that above the report-interval floor; shared by
+    the whole module, so tests must only read it.
 
     Args:
-        temp_dir: The temporary directory fixture.
+        tmp_path_factory: Pytest temporary path factory fixture.
 
     Returns:
         Path: The path to the big incompressible file.
     """
-    file_path = temp_dir / "big_incompressible.bin"
+    file_path = tmp_path_factory.mktemp("progress") / "big_incompressible.bin"
     file_path.write_bytes(os.urandom(PROGRESS_FILE_SIZE))
+
     return file_path
 
 
 class TestCompressionProgress:
     """Test progress reporting from _core.compress_file."""
 
-    def test_reports_are_incremental(
+    def test_reports_are_incremental_over_the_input_size(
         self, big_compressible_file: Path, temp_dir: Path
     ) -> None:
-        """Test that progress arrives during the job, not only at the end."""
+        """Test that progress arrives during the job, out of the source file's size.
+
+        The denominator is known up front rather than guessed.
+        """
         recorder = Recorder()
         compress_file(
             str(big_compressible_file),
@@ -73,6 +91,8 @@ class TestCompressionProgress:
         )
 
         assert len(recorder.calls) > 1
+        expected = big_compressible_file.stat().st_size
+        assert all(total == expected for _, total in recorder.calls)
 
     def test_progress_is_monotonic_and_completes(
         self, big_compressible_file: Path, temp_dir: Path, compression_algo: str
@@ -84,29 +104,12 @@ class TestCompressionProgress:
             str(temp_dir / f"{compression_algo}.comp"),
             compression_algo,
             "balanced",
-            -1,
+            fast_level(compression_algo),
             progress=recorder,
         )
 
         recorder.assert_monotonic()
         recorder.assert_finished()
-
-    def test_total_is_the_input_size(
-        self, big_compressible_file: Path, temp_dir: Path
-    ) -> None:
-        """Test that the denominator is the source file, known up front rather than guessed."""
-        recorder = Recorder()
-        compress_file(
-            str(big_compressible_file),
-            str(temp_dir / "out.comp"),
-            "zstd",
-            "balanced",
-            3,
-            progress=recorder,
-        )
-
-        expected = big_compressible_file.stat().st_size
-        assert all(total == expected for _, total in recorder.calls)
 
     def test_runs_without_a_callback(
         self, big_compressible_file: Path, temp_dir: Path
@@ -132,7 +135,7 @@ class TestDecompressionProgress:
             str(compressed),
             compression_algo,
             "balanced",
-            -1,
+            fast_level(compression_algo),
         )
 
         recorder = Recorder()
@@ -171,7 +174,7 @@ class TestStandaloneProgress:
             str(big_incompressible_file),
             str(compressed),
             fmt,
-            3,
+            1,
             progress=compressing,
         )
 
@@ -211,28 +214,6 @@ class TestCancelToken:
 class TestCancellation:
     """Test stopping a running job through a CancelToken."""
 
-    def test_cancel_mid_job_raises(
-        self, big_compressible_file: Path, temp_dir: Path
-    ) -> None:
-        """Test that cancelling partway through aborts with Cancelled."""
-        output = temp_dir / "cancelled.comp"
-        token = CancelToken()
-
-        def cancel_once_started(done: int, total: int) -> None:
-            """Cancel the token once the job has started."""
-            token.cancel()
-
-        with pytest.raises(Cancelled):
-            compress_file(
-                str(big_compressible_file),
-                str(output),
-                "zstd",
-                "balanced",
-                3,
-                progress=cancel_once_started,
-                cancel=token,
-            )
-
     def test_cancel_leaves_no_partial_file(
         self, big_compressible_file: Path, temp_dir: Path
     ) -> None:
@@ -256,7 +237,11 @@ class TestCancellation:
     def test_token_cancelled_before_the_call(
         self, big_compressible_file: Path, temp_dir: Path
     ) -> None:
-        """Test that a token cancelled up front stops the job immediately."""
+        """Test that a token cancelled up front stops the job immediately.
+
+        No progress callback is passed, so this also shows cancellation does
+        not depend on progress being requested.
+        """
         output = temp_dir / "never.comp"
         token = CancelToken()
         token.cancel()
@@ -272,24 +257,6 @@ class TestCancellation:
             )
 
         assert not output.exists()
-
-    def test_cancel_works_without_a_progress_callback(
-        self, big_compressible_file: Path, temp_dir: Path
-    ) -> None:
-        """Test that cancellation does not depend on progress being requested."""
-        output = temp_dir / "no_progress.comp"
-        token = CancelToken()
-        token.cancel()
-
-        with pytest.raises(Cancelled):
-            compress_file(
-                str(big_compressible_file),
-                str(output),
-                "zstd",
-                "balanced",
-                3,
-                cancel=token,
-            )
 
     def test_uncancelled_token_does_not_interfere(
         self, big_compressible_file: Path, temp_dir: Path
