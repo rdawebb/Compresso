@@ -18,6 +18,16 @@ from .helpers import Recorder
 # Crosses the 1 MiB report floor (`CTX_MIN_INTERVAL`) several times over
 PROGRESS_FILE_SIZE = 4 * 1024 * 1024
 
+# bzip2 and lzma take ~1s each on this payload
+BACKENDS = [
+    "zlib",
+    pytest.param("bzip2", marks=pytest.mark.slow),
+    pytest.param("lzma", marks=pytest.mark.slow),
+    "zstd",
+    "lz4",
+    "snappy",
+]
+
 
 def fast_level(algo: str) -> int:
     """The quickest level a backend accepts, for tests where the level is moot.
@@ -94,17 +104,18 @@ class TestCompressionProgress:
         expected = big_compressible_file.stat().st_size
         assert all(total == expected for _, total in recorder.calls)
 
+    @pytest.mark.parametrize("algo", BACKENDS)
     def test_progress_is_monotonic_and_completes(
-        self, big_compressible_file: Path, temp_dir: Path, compression_algo: str
+        self, big_compressible_file: Path, temp_dir: Path, algo: str
     ) -> None:
         """Test that every backend reports rising byte counts ending exactly at the total."""
         recorder = Recorder()
         compress_file(
             str(big_compressible_file),
-            str(temp_dir / f"{compression_algo}.comp"),
-            compression_algo,
+            str(temp_dir / f"{algo}.comp"),
+            algo,
             "balanced",
-            fast_level(compression_algo),
+            fast_level(algo),
             progress=recorder,
         )
 
@@ -124,24 +135,23 @@ class TestCompressionProgress:
 class TestDecompressionProgress:
     """Test progress reporting from _core.decompress_file."""
 
+    @pytest.mark.parametrize("algo", BACKENDS)
     def test_progress_is_monotonic_and_completes(
-        self, big_incompressible_file: Path, temp_dir: Path, compression_algo: str
+        self, big_incompressible_file: Path, temp_dir: Path, algo: str
     ) -> None:
         """Test that decompression reports too, counting compressed bytes consumed."""
-        compressed = temp_dir / f"{compression_algo}.comp"
-        restored = temp_dir / f"{compression_algo}.out"
+        compressed = temp_dir / f"{algo}.comp"
+        restored = temp_dir / f"{algo}.out"
         compress_file(
             str(big_incompressible_file),
             str(compressed),
-            compression_algo,
+            algo,
             "balanced",
-            fast_level(compression_algo),
+            fast_level(algo),
         )
 
         recorder = Recorder()
-        decompress_file(
-            str(compressed), str(restored), compression_algo, progress=recorder
-        )
+        decompress_file(str(compressed), str(restored), algo, progress=recorder)
 
         recorder.assert_monotonic()
         recorder.assert_finished()
@@ -156,8 +166,8 @@ class TestStandaloneProgress:
         ("fmt", "ext"),
         [
             ("gzip", ".gz"),
-            ("bzip2", ".bz2"),
-            ("xz", ".xz"),
+            pytest.param("bzip2", ".bz2", marks=pytest.mark.slow),
+            pytest.param("xz", ".xz", marks=pytest.mark.slow),
             ("zstd", ".zst"),
             ("lz4", ".lz4"),
         ],

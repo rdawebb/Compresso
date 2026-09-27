@@ -1,5 +1,6 @@
 """Pytest configuration and shared fixtures for Compresso tests."""
 
+import importlib
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,16 @@ import pytest
 from compresso.introspect import speeds
 
 from .helpers import ARCHIVE_FORMATS
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Build the editable extension once, before any xdist worker starts.
+
+    Args:
+        config: The pytest config object.
+    """
+    if not hasattr(config, "workerinput"):
+        importlib.import_module("compresso")
 
 
 @pytest.fixture(autouse=True)

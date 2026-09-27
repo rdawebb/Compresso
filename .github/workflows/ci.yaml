@@ -124,7 +124,7 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run Python tests
-        run: uv run pytest
+        run: uv run pytest -n auto
 
   test-python-windows:
     name: Python tests (windows-latest, py${{ matrix.python }})
@@ -173,7 +173,7 @@ jobs:
           Copy-Item "$env:COMPRESSO_VCPKG_BIN_DIR\*.dll" $pyd.DirectoryName -Force
 
       - name: Run Python tests
-        run: uv run pytest
+        run: uv run pytest -n auto
 
   # Windows is intentionally absent; the sources under test are portable and
   # are exercised on Windows through the extension by test-python-windows
