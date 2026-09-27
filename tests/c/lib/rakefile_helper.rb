@@ -9,7 +9,7 @@ CC = ENV.fetch('CC', 'cc')
 CFLAGS = [
   '-Wall',
   '-Wextra',
-  # gnu11 matches setup.py; strict ISO defines __STRICT_ANSI__, under which
+  # gnu11 matches meson.build; strict ISO defines __STRICT_ANSI__, under which
   # glibc withholds POSIX declarations these sources expect (e.g. strdup)
   '-std=gnu11',
   '-g',

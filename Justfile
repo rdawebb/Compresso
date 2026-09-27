@@ -1,6 +1,9 @@
-# Install in editable mode
+# libarchive is keg-only on Homebrew, so pkg-config cannot find it unaided
+export PKG_CONFIG_PATH := `brew --prefix libarchive 2>/dev/null | sed 's|$|/lib/pkgconfig|'` + ":" + env("PKG_CONFIG_PATH", "")
+
+# Install in editable mode, rebuilding the extension from scratch
 install:
-    uv pip install -e .
+    uv sync --all-extras --reinstall-package compresso
 
 # Install development dependencies
 install-dev:
@@ -37,9 +40,9 @@ test-c:
 pre:
     uv run prek run --all-files
 
-# Regenerate compile_commands.json
+# Link the editable build's compile_commands.json to the root, where clangd looks
 compdb:
-    bear -- uv run python setup.py build_ext --inplace --force
+    ln -sf "$(ls -td build/cp*/ | head -1)compile_commands.json" compile_commands.json
 
 # Clean up temporary files
 clean:
