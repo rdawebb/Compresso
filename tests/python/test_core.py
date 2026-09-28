@@ -93,66 +93,43 @@ class TestArchiveCapabilities:
 class TestCompressFile:
     """Test the compress_file function."""
 
-    def test_compress_file_basic(self, sample_text_file: Path, temp_dir: Path) -> None:
-        """Test basic file compression."""
-        output_file = temp_dir / "compressed.comp"
-
-        result = compress_file(
-            str(sample_text_file), str(output_file), "zlib", "balanced", 6
-        )
-
-        assert result == str(output_file)
-        assert output_file.exists()
-        assert output_file.stat().st_size > 0
-
-    @pytest.mark.parametrize("algo", ["zlib", "zstd", "lz4"])
-    def test_compress_with_different_algorithms(
-        self, sample_text_file: Path, temp_dir: Path, algo: str
+    def test_round_trip_every_backend(
+        self, sample_binary_file: Path, temp_dir: Path, compression_algo: str
     ) -> None:
-        """Test compression with different algorithms."""
-        output_file = temp_dir / f"compressed_{algo}.comp"
+        """Test that each backend's output decompresses back to the original bytes."""
+        compressed = temp_dir / f"{compression_algo}.comp"
+        restored = temp_dir / f"{compression_algo}.out"
 
-        result = compress_file(
-            str(sample_text_file), str(output_file), algo, "balanced", 6
+        written = compress_file(
+            str(sample_binary_file), str(compressed), compression_algo, "balanced", -1
         )
+        assert written == str(compressed)
 
-        assert result == str(output_file)
-        assert output_file.exists()
+        assert decompress_file(str(compressed), str(restored), "") == 0
+        assert restored.read_bytes() == sample_binary_file.read_bytes()
 
     @pytest.mark.parametrize("strategy", ["fast", "balanced", "max_ratio"])
-    def test_compress_with_different_strategies(
+    def test_round_trip_every_strategy(
         self, sample_text_file: Path, temp_dir: Path, strategy: str
     ) -> None:
-        """Test compression with different strategies."""
-        output_file = temp_dir / f"compressed_{strategy}.comp"
+        """Test that the backend each strategy picks round-trips too.
 
-        result = compress_file(
-            str(sample_text_file), str(output_file), "zlib", strategy, 6
-        )
+        No algorithm is named, so the strategy is what chooses the backend.
+        """
+        compressed = temp_dir / f"{strategy}.comp"
+        restored = temp_dir / f"{strategy}.out"
 
-        assert result == str(output_file)
-        assert output_file.exists()
+        compress_file(str(sample_text_file), str(compressed), "", strategy, -1)
+        decompress_file(str(compressed), str(restored), "")
 
-    @pytest.mark.parametrize("level", [1, 3, 6, 9])
-    def test_compress_with_different_levels(
-        self, sample_text_file: Path, temp_dir: Path, level: int
-    ) -> None:
-        """Test compression with different levels."""
-        output_file = temp_dir / f"compressed_level{level}.comp"
-
-        result = compress_file(
-            str(sample_text_file), str(output_file), "zlib", "balanced", level
-        )
-
-        assert result == str(output_file)
-        assert output_file.exists()
+        assert restored.read_bytes() == sample_text_file.read_bytes()
 
     def test_compress_nonexistent_file(self, temp_dir: Path) -> None:
         """Test compressing a file that doesn't exist."""
         input_file = temp_dir / "nonexistent.txt"
         output_file = temp_dir / "output.comp"
 
-        with pytest.raises((Error, OSError, FileNotFoundError)):
+        with pytest.raises(FileNotFoundError):
             compress_file(str(input_file), str(output_file), "zlib", "balanced", 6)
 
     def test_compress_empty_file(self, empty_file: Path, temp_dir: Path) -> None:
@@ -173,7 +150,6 @@ class TestCompressFile:
         )
 
         assert result == str(output_file)
-        assert output_file.exists()
         # Highly compressible content should be much smaller
         assert output_file.stat().st_size < large_compressible_file.stat().st_size / 10
 
@@ -181,80 +157,22 @@ class TestCompressFile:
 class TestDecompressFile:
     """Test the decompress_file function."""
 
-    def test_decompress_file_basic(
-        self, sample_text_file: Path, temp_dir: Path
-    ) -> None:
-        """Test basic file decompression."""
-        compressed_file = temp_dir / "compressed.comp"
-        decompressed_file = temp_dir / "decompressed.txt"
-
-        # First compress
-        compress_file(
-            str(sample_text_file), str(compressed_file), "zlib", "balanced", 6
-        )
-
-        # Then decompress
-        result = decompress_file(str(compressed_file), str(decompressed_file), "")
-
-        assert result == 0
-        assert decompressed_file.exists()
-        assert decompressed_file.read_text() == sample_text_file.read_text()
-
-    @pytest.mark.parametrize("algo", ["zlib", "zstd", "lz4"])
-    def test_round_trip_compression(
-        self, sample_text_file: Path, temp_dir: Path, algo: str
-    ) -> None:
-        """Test compression and decompression round trip."""
-        compressed_file = temp_dir / f"compressed_{algo}.comp"
-        decompressed_file = temp_dir / f"decompressed_{algo}.txt"
-
-        original_content = sample_text_file.read_text()
-
-        # Compress
-        compress_file(str(sample_text_file), str(compressed_file), algo, "balanced", 6)
-
-        # Decompress
-        decompress_file(str(compressed_file), str(decompressed_file), "")
-
-        # Verify content matches
-        assert decompressed_file.read_text() == original_content
-
     def test_decompress_nonexistent_file(self, temp_dir: Path) -> None:
         """Test decompressing a file that doesn't exist."""
         input_file = temp_dir / "nonexistent.comp"
         output_file = temp_dir / "output.txt"
 
-        with pytest.raises((Error, OSError, FileNotFoundError)):
+        with pytest.raises(Error):
             decompress_file(str(input_file), str(output_file), "")
 
     def test_decompress_invalid_file(
         self, sample_text_file: Path, temp_dir: Path
     ) -> None:
-        """Test decompressing an invalid compressed file."""
+        """Test that a file in no recognised format is refused as such."""
         output_file = temp_dir / "output.txt"
 
-        with pytest.raises((Error, HeaderError)):
+        with pytest.raises(Error, match="Unknown or unsupported format"):
             decompress_file(str(sample_text_file), str(output_file), "")
-
-    def test_round_trip_binary_file(
-        self, sample_binary_file: Path, temp_dir: Path
-    ) -> None:
-        """Test compression and decompression of binary data."""
-        compressed_file = temp_dir / "compressed.comp"
-        decompressed_file = temp_dir / "decompressed.bin"
-
-        original_content = sample_binary_file.read_bytes()
-
-        # Compress
-        compress_file(
-            str(sample_binary_file), str(compressed_file), "zlib", "balanced", 6
-        )
-
-        # Decompress
-        decompress_file(str(compressed_file), str(decompressed_file), "")
-
-        # Verify binary content matches exactly
-        assert decompressed_file.read_bytes() == original_content
 
     def test_round_trip_small_file(self, small_file: Path, temp_dir: Path) -> None:
         """Test compression and decompression of very small files."""

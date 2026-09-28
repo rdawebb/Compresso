@@ -565,7 +565,7 @@ class TestJobIntegration:
     def test_job_result_defaults_to_not_cancelled(
         self, sample_text_file: Path, temp_dir: Path
     ) -> None:
-        """Test that the new field defaults off, so existing construction is unaffected."""
+        """Test that a job that ran to completion is not reported as cancelled."""
         job = CompressionJob.from_file(
             src=sample_text_file, dest=temp_dir / "plain.comp"
         )

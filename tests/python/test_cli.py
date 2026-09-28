@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import gzip
+import json
 import os
 import subprocess
 import sys
+import tarfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,8 +16,10 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, Result
 
+import compresso.cli.algos as algos_cmd
 import compresso.cli.compress as compress_cmd
 import compresso.cli.extract as extract_cmd
+import compresso.cli.inspect as inspect_cmd
 from compresso.cli import app
 from compresso.cli._render import (
     BAR_THRESHOLD,
@@ -28,6 +33,7 @@ from compresso.cli._render import (
 )
 from compresso.cli.extract import list_entries
 from compresso.frontend._job import ProgressCallback
+from compresso.frontend.api import CompressionJob
 from compresso.frontend.archive_api import ArchiveEntry, ArchiveJob, ArchiveOptions
 
 from .helpers import renamed
@@ -185,22 +191,21 @@ class TestFormatters:
         assert result == expected
 
     @pytest.mark.parametrize(
-        "seconds,expected_pattern",
+        "seconds,expected",
         [
-            (0.0005, "ms"),  # Less than 1ms
-            (0.5, "ms"),  # 500ms
+            (0.0005, "0ms"),
+            (0.5, "500ms"),
             (1.0, "1.00s"),
             (5.5, "5.50s"),
             (59.9, "59.90s"),
-            (60.0, "1m"),  # 1 minute
-            (90.5, "1m 30"),  # 1m 30s
-            (125.0, "2m"),  # 2m 5s
+            (60.0, "1m 0.0s"),
+            (90.5, "1m 30.5s"),
+            (125.0, "2m 5.0s"),
         ],
     )
-    def test_format_time(self, seconds: float, expected_pattern: str):
+    def test_format_time(self, seconds: float, expected: str):
         """Test time formatting with various values."""
-        result = format_time(seconds)
-        assert expected_pattern in result
+        assert format_time(seconds) == expected
 
 
 class TestAppStructure:
@@ -257,8 +262,16 @@ class TestAppStructure:
         ],
     )
     def test_aliases_still_resolve(self, alias: str, command: str) -> None:
-        """Test that the short names keep working after the package split."""
-        invoke(alias, "--help")
+        """Test that each short name reaches the command it stands for.
+
+        Help is compared without its usage line, which echoes the name typed.
+        """
+
+        def help_body(name: str) -> list[str]:
+            lines = invoke(name, "--help").output.splitlines()
+            return [line for line in lines if "Usage:" not in line]
+
+        assert help_body(alias) == help_body(command)
 
 
 class TestProgressBar:
@@ -606,8 +619,6 @@ class TestInspectAndList:
 
     def test_inspect_json(self, payload: Path, temp_dir: Path) -> None:
         """Test that --json emits parseable output."""
-        import json
-
         archive = temp_dir / "out.comp"
         invoke("compress", payload, "-o", archive, "-q")
 
@@ -654,8 +665,6 @@ class TestInspectAndList:
         self, make_archive: Callable[[str], Path]
     ) -> None:
         """Test that --json without --entries has no entries key."""
-        import json
-
         result = invoke("inspect", make_archive("zip"), "--json")
 
         data = json.loads(result.output)
@@ -675,8 +684,6 @@ class TestInspectAndList:
         self, make_archive: Callable[[str], Path]
     ) -> None:
         """Test that --entries --json includes a populated entries list."""
-        import json
-
         result = invoke("inspect", make_archive("zip"), "--entries", "--json")
 
         data = json.loads(result.output)
@@ -870,17 +877,14 @@ class TestInterruption:
         expected: str,
     ) -> None:
         """Test that each command names itself rather than dying silently."""
-        # Interrupt the first real call each command makes
-        import compresso.cli.algos as algos_mod
-        import compresso.cli.inspect as inspect_mod
-        from compresso.frontend import api
 
+        # Interrupt the first real call each command makes
         def interrupt(*args: object, **kwargs: object) -> None:
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(api.CompressionJob, "from_file", interrupt, raising=False)
-        monkeypatch.setattr(inspect_mod, "inspect_file", interrupt)
-        monkeypatch.setattr(algos_mod, "list_capabilities", interrupt)
+        monkeypatch.setattr(CompressionJob, "from_file", interrupt)
+        monkeypatch.setattr(inspect_cmd, "inspect_file", interrupt)
+        monkeypatch.setattr(algos_cmd, "list_capabilities", interrupt)
 
         args: list[str | Path] = [*command]
         if command[0] != "list":
@@ -922,8 +926,6 @@ class TestSmartCompress:
         self, payload: Path, temp_dir: Path
     ) -> None:
         """Test that the .gz written is the format, not merely the name."""
-        import gzip
-
         output = temp_dir / "out.gz"
         invoke("compress", payload, "-o", output, "-q")
 
@@ -946,7 +948,8 @@ class TestSmartCompress:
 
         invoke("compress", payload, second, "-o", output, "-q")
 
-        assert output.exists()
+        with tarfile.open(output) as tar:
+            assert sorted(tar.getnames()) == [payload.name, second.name]
 
     @pytest.mark.parametrize(
         "name,expected_magic",
@@ -1141,7 +1144,16 @@ class TestMergedVerbCompatibility:
         assert restored.read_bytes() == payload.read_bytes()
 
     def test_decompress_now_handles_archives_too(
-        self, temp_dir: Path, make_archive: Callable[[str], Path]
+        self,
+        source_tree: Path,
+        temp_dir: Path,
+        make_archive: Callable[[str], Path],
     ) -> None:
         """Test that the merged verb does not care which name was typed."""
-        invoke("decompress", make_archive("tar"), "-o", temp_dir / "out", "-q")
+        dest = temp_dir / "out"
+
+        invoke("decompress", make_archive("tar"), "-o", dest, "-q")
+
+        for original in source_tree.iterdir():
+            restored = dest / source_tree.name / original.name
+            assert restored.read_bytes() == original.read_bytes()

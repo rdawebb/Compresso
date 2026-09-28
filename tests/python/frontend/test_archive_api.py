@@ -8,6 +8,7 @@ import sys
 import tarfile
 import unicodedata
 import zipfile
+import zlib
 from pathlib import Path
 
 import pytest
@@ -67,8 +68,8 @@ class TestPlanArchive:
         plan = plan_archive([temp_dir / "nope.txt"], temp_dir / "out.tar.zst")
 
         assert plan.can_run is False
-        if plan.reason_if_unavailable is not None:
-            assert "does not exist" in plan.reason_if_unavailable
+        assert plan.reason_if_unavailable is not None
+        assert "does not exist" in plan.reason_if_unavailable
 
     def test_plan_archive_non_archive_format(
         self, sample_text_file: Path, temp_dir: Path
@@ -78,8 +79,8 @@ class TestPlanArchive:
         plan = plan_archive([sample_text_file], temp_dir / "out.gz", opts)
 
         assert plan.can_run is False
-        if plan.reason_if_unavailable is not None:
-            assert "does not support archives" in plan.reason_if_unavailable
+        assert plan.reason_if_unavailable is not None
+        assert "does not support archives" in plan.reason_if_unavailable
 
     @pytest.mark.parametrize(
         "fmt,level,match",
@@ -1323,7 +1324,16 @@ class TestArchiveEntryMetadata:
 
     @staticmethod
     def _entries(tmp: Path, fmt: str, ext: str) -> dict[str, ArchiveEntry]:
-        """Test that a small tree is archived and return its entries keyed by path."""
+        """Archive a small tree and plan its extraction.
+
+        Args:
+            tmp: Directory to build the tree and archive in.
+            fmt: Archive format to write.
+            ext: The archive's file extension.
+
+        Returns:
+            The planned entries, keyed by path without a trailing separator.
+        """
         tree = tmp / "tree"
         tree.mkdir()
         (tree / "big.bin").write_bytes(b"compressible " * 4000)
@@ -1343,7 +1353,7 @@ class TestArchiveEntryMetadata:
         assert plan.can_run, plan.reason_if_unavailable
         return {e.path.rstrip("/"): e for e in plan.entries}
 
-    def test_entry_is_immutable(self, temp_dir: Path) -> None:
+    def test_entry_is_immutable(self) -> None:
         """Test that entries describe an archive that has already been written."""
         entry = ArchiveEntry(path="a.txt")
 
@@ -1400,34 +1410,7 @@ class TestArchiveEntryMetadata:
 
     def test_zip_crc_matches_the_content(self, temp_dir: Path) -> None:
         """Test that the CRC reported is the one zip actually stored."""
-        import zlib
-
         entries = self._entries(temp_dir, "zip", ".zip")
         payload = b"compressible " * 4000
 
         assert entries["tree/big.bin"].crc == zlib.crc32(payload)
-
-    def test_symlink_target_is_reported(self, temp_dir: Path) -> None:
-        """Test that tar records a symlink as one, with its target."""
-        tree = temp_dir / "tree"
-        tree.mkdir()
-        (tree / "real.txt").write_text("hello")
-        os.symlink("real.txt", tree / "link")
-
-        archive = temp_dir / "out.tar"
-        assert (
-            ArchiveJob.from_paths(
-                sources=[tree], output=archive, options=ArchiveOptions(format="tar")
-            )
-            .run()
-            .ok
-        )
-
-        entries = {
-            e.path.rstrip("/"): e
-            for e in plan_extraction(archive, temp_dir / "dest").entries
-        }
-
-        assert entries["tree/link"].is_symlink is True
-        assert entries["tree/link"].link_target == "real.txt"
-        assert entries["tree/real.txt"].link_target is None

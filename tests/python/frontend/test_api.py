@@ -7,6 +7,7 @@ import pytest
 from compresso.frontend.api import (
     CompressionJob,
     CompressionOptions,
+    DecompressionJob,
     plan_compression,
 )
 from compresso.frontend.archive_api import OverwriteMode
@@ -32,6 +33,44 @@ class TestCompressionOptions:
 
         with pytest.raises((AttributeError, TypeError)):
             opts.algo = "zstd"  # type: ignore
+
+
+class TestPlanCompression:
+    """Test what plan_compression works out before anything is written."""
+
+    def test_defaults_plan_a_runnable_job(self, sample_text_file: Path) -> None:
+        """Test that default options resolve a backend, destination and size."""
+        plan = plan_compression(sample_text_file)
+
+        assert plan.can_compress is True
+        assert plan.reason_if_unavailable is None
+
+        # The backend the default "balanced" strategy picks
+        assert plan.backend_name == "zstd"
+        assert plan.dest == sample_text_file.with_name(f"{sample_text_file.name}.comp")
+        assert plan.input_size == sample_text_file.stat().st_size
+        assert plan.estimated_seconds is not None
+        assert plan.estimated_seconds > 0
+
+
+class TestDecompressionJob:
+    """Test the DecompressionJob class."""
+
+    def test_from_file_restores_the_original_name(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that with no destination, the .comp suffix is dropped."""
+        out_dir = temp_dir / "out"
+        out_dir.mkdir()
+        compressed = out_dir / f"{sample_text_file.name}.comp"
+        assert CompressionJob.from_file(sample_text_file, compressed).run().ok
+
+        job = DecompressionJob.from_file(compressed)
+
+        assert job.plan.can_run is True
+        assert job.plan.dest == out_dir / sample_text_file.name
+        assert job.run().ok
+        assert job.plan.dest.read_bytes() == sample_text_file.read_bytes()
 
 
 class TestPlanCompressionLevels:

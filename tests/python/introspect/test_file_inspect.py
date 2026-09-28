@@ -2,10 +2,7 @@
 
 from pathlib import Path
 
-import pytest
-
 from compresso import compress_file
-from compresso._core import Error
 from compresso.introspect.file_inspect import (
     COMP_HEADER_STRUCT,
     inspect,
@@ -57,13 +54,9 @@ class TestInspect:
         compressed_file = temp_dir / "compressed.comp"
 
         # First compress a file
-        try:
-            compress_file(
-                str(sample_text_file), str(compressed_file), "zlib", "balanced", 6
-            )
-        except Error:
-            # If compression fails, skip test
-            pytest.skip("Compression not available")
+        compress_file(
+            str(sample_text_file), str(compressed_file), "zlib", "balanced", 6
+        )
 
         # Then inspect it
         result = inspect(compressed_file)
@@ -80,12 +73,9 @@ class TestInspect:
         """Test inspect with path as string."""
         compressed_file = temp_dir / "compressed.comp"
 
-        try:
-            compress_file(
-                str(sample_text_file), str(compressed_file), "zlib", "balanced", 6
-            )
-        except Error:
-            pytest.skip("Compression not available")
+        compress_file(
+            str(sample_text_file), str(compressed_file), "zlib", "balanced", 6
+        )
 
         # Inspect using string path
         result = inspect(str(compressed_file))
