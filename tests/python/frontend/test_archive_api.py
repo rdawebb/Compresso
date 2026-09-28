@@ -9,6 +9,8 @@ import tarfile
 import unicodedata
 import zipfile
 import zlib
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -261,34 +263,6 @@ class TestArchiveOverwrite:
         assert result.ok, result.error
         assert archive_path.read_bytes() != b"stale"
         assert job.plan.output == archive_path
-
-    def test_plain_string_mode_is_normalised(self, temp_dir: Path) -> None:
-        """Test that a mode given as a plain string still plans as the enum."""
-        source = temp_dir / "a.txt"
-        source.write_bytes(b"hello compresso")
-
-        plan = ArchiveJob.from_paths(
-            [source],
-            temp_dir / "out.tar",
-            options=ArchiveOptions(format="tar", overwrite="skip"),  # ty: ignore
-        ).plan
-
-        assert plan.can_run is True
-        assert plan.options.overwrite is OverwriteMode.SKIP
-
-    def test_unknown_mode_is_an_unavailable_plan(self, temp_dir: Path) -> None:
-        """Test that a mode outside the four names never reaches the C layer."""
-        source = temp_dir / "a.txt"
-        source.write_bytes(b"hello compresso")
-
-        plan = ArchiveJob.from_paths(
-            [source],
-            temp_dir / "out.tar",
-            options=ArchiveOptions(format="tar", overwrite="clobber"),  # ty: ignore
-        ).plan
-
-        assert plan.can_run is False
-        assert "Unknown overwrite mode" in str(plan.reason_if_unavailable)
 
 
 class TestExtractJob:
@@ -1150,30 +1124,69 @@ class TestExtractionOverwrite:
         assert result.ok, result.error
         assert (out_dir / "d").is_dir()
 
-    def test_plain_string_mode_is_normalised(self, temp_dir: Path) -> None:
-        """Test that a mode given as a plain string still plans as the enum."""
-        archive_path = temp_dir / "one.tar"
-        _tar_with_entries(archive_path, [_file_entry("a.txt")])
 
-        plan = ExtractJob.from_archive(
-            archive_path,
-            temp_dir / "out",
-            options=ExtractOptions(overwrite="skip"),  # ty: ignore
-        ).plan
+def _archive_plan(temp_dir: Path, overwrite: str) -> ArchivePlan:
+    """Plan archiving one file with `overwrite` given as a plain string.
+
+    Args:
+        temp_dir: Directory to build the source in.
+        overwrite: The overwrite mode, deliberately not an OverwriteMode.
+
+    Returns:
+        The archive plan.
+    """
+    source = temp_dir / "a.txt"
+    source.write_bytes(b"hello compresso")
+    options = ArchiveOptions(format="tar", overwrite=overwrite)  # ty: ignore
+
+    return ArchiveJob.from_paths([source], temp_dir / "out.tar", options).plan
+
+
+def _extract_plan(temp_dir: Path, overwrite: str) -> ExtractPlan:
+    """Plan extracting a one-entry tar with `overwrite` given as a plain string.
+
+    Args:
+        temp_dir: Directory to build the archive in.
+        overwrite: The overwrite mode, deliberately not an OverwriteMode.
+
+    Returns:
+        The extraction plan.
+    """
+    archive_path = temp_dir / "one.tar"
+    _tar_with_entries(archive_path, [_file_entry("a.txt")])
+    options = ExtractOptions(overwrite=overwrite)  # ty: ignore
+
+    return ExtractJob.from_archive(archive_path, temp_dir / "out", options=options).plan
+
+
+PLANNERS = pytest.mark.parametrize(
+    "plan_with", [_archive_plan, _extract_plan], ids=["archive", "extract"]
+)
+
+
+class TestOverwriteModeNames:
+    """Test how both archive jobs take an overwrite mode given by name."""
+
+    @PLANNERS
+    def test_plain_string_mode_is_normalised(
+        self,
+        temp_dir: Path,
+        plan_with: Callable[[Path, str], ArchivePlan | ExtractPlan],
+    ) -> None:
+        """Test that a mode given as a plain string still plans as the enum."""
+        plan = plan_with(temp_dir, "skip")
 
         assert plan.can_run is True
         assert plan.options.overwrite is OverwriteMode.SKIP
 
-    def test_unknown_mode_is_an_unavailable_plan(self, temp_dir: Path) -> None:
+    @PLANNERS
+    def test_unknown_mode_is_an_unavailable_plan(
+        self,
+        temp_dir: Path,
+        plan_with: Callable[[Path, str], ArchivePlan | ExtractPlan],
+    ) -> None:
         """Test that a mode outside the four names never reaches the C layer."""
-        archive_path = temp_dir / "one.tar"
-        _tar_with_entries(archive_path, [_file_entry("a.txt")])
-
-        plan = ExtractJob.from_archive(
-            archive_path,
-            temp_dir / "out",
-            options=ExtractOptions(overwrite="clobber"),  # ty: ignore
-        ).plan
+        plan = plan_with(temp_dir, "clobber")
 
         assert plan.can_run is False
         assert "Unknown overwrite mode" in str(plan.reason_if_unavailable)
@@ -1319,39 +1332,52 @@ class TestExtractionIsAllOrNothing:
         assert (out_dir / "..data").read_bytes() == b"xxxxx"
 
 
+BIG_PAYLOAD = b"compressible " * 4000
+
+
+@dataclass
+class ArchivedTree:
+    """A small tree, and the entries planned for it in each archive format."""
+
+    tree: Path
+    entries: dict[str, dict[str, ArchiveEntry]]
+
+
 class TestArchiveEntryMetadata:
     """Test what `plan_extraction` reports about each entry."""
 
-    @staticmethod
-    def _entries(tmp: Path, fmt: str, ext: str) -> dict[str, ArchiveEntry]:
-        """Archive a small tree and plan its extraction.
+    @pytest.fixture(scope="class")
+    def archived(self, tmp_path_factory: pytest.TempPathFactory) -> ArchivedTree:
+        """Archive a small tree once per format, and plan each extraction.
+
+        Shared by the whole class, so tests must only read it.
 
         Args:
-            tmp: Directory to build the tree and archive in.
-            fmt: Archive format to write.
-            ext: The archive's file extension.
+            tmp_path_factory: Pytest temporary path factory fixture.
 
         Returns:
-            The planned entries, keyed by path without a trailing separator.
+            The tree, and each format's entries keyed by path without a
+            trailing separator.
         """
+        tmp = tmp_path_factory.mktemp("entry_metadata")
         tree = tmp / "tree"
         tree.mkdir()
-        (tree / "big.bin").write_bytes(b"compressible " * 4000)
+        (tree / "big.bin").write_bytes(BIG_PAYLOAD)
         (tree / "small.txt").write_text("hello")
         (tree / "nested").mkdir()
 
-        archive = tmp / f"out{ext}"
-        assert (
-            ArchiveJob.from_paths(
-                sources=[tree], output=archive, options=ArchiveOptions(format=fmt)
-            )
-            .run()
-            .ok
-        )
+        entries = {}
+        for fmt in ("tar", "zip"):
+            archive = tmp / f"out.{fmt}"
+            options = ArchiveOptions(format=fmt)
+            result = ArchiveJob.from_paths([tree], archive, options).run()
+            assert result.ok, result.error
 
-        plan = plan_extraction(archive, tmp / "dest")
-        assert plan.can_run, plan.reason_if_unavailable
-        return {e.path.rstrip("/"): e for e in plan.entries}
+            plan = plan_extraction(archive, tmp / f"dest_{fmt}")
+            assert plan.can_run, plan.reason_if_unavailable
+            entries[fmt] = {e.path.rstrip("/"): e for e in plan.entries}
+
+        return ArchivedTree(tree, entries)
 
     def test_entry_is_immutable(self) -> None:
         """Test that entries describe an archive that has already been written."""
@@ -1360,57 +1386,51 @@ class TestArchiveEntryMetadata:
         with pytest.raises((AttributeError, TypeError)):
             entry.path = "b.txt"  # ty: ignore[invalid-assignment] - intended
 
-    @pytest.mark.parametrize(("fmt", "ext"), [("tar", ".tar"), ("zip", ".zip")])
-    def test_mtime_is_reported(self, temp_dir: Path, fmt: str, ext: str) -> None:
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
+    def test_mtime_is_reported(self, archived: ArchivedTree, fmt: str) -> None:
         """Test that mtime crosses the boundary rather than staying at its default."""
-        entries = self._entries(temp_dir, fmt, ext)
+        entry = archived.entries[fmt]["tree/big.bin"]
 
-        entry = entries["tree/big.bin"]
         assert entry.mtime > 0
         # Written moments ago, so it cannot be far from now
-        assert abs(entry.mtime - (temp_dir / "tree" / "big.bin").stat().st_mtime) < 60
+        assert abs(entry.mtime - (archived.tree / "big.bin").stat().st_mtime) < 60
 
-    @pytest.mark.parametrize(("fmt", "ext"), [("tar", ".tar"), ("zip", ".zip")])
-    def test_mode_is_reported(self, temp_dir: Path, fmt: str, ext: str) -> None:
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
+    def test_mode_is_reported(self, archived: ArchivedTree, fmt: str) -> None:
         """Test that mode is reported as permission bits rather than 0."""
-        entries = self._entries(temp_dir, fmt, ext)
+        entries = archived.entries[fmt]
 
         assert entries["tree/big.bin"].mode & 0o400, "expected a readable file mode"
         assert entries["tree/nested"].mode & 0o100, "expected a searchable dir mode"
 
-    @pytest.mark.parametrize(("fmt", "ext"), [("tar", ".tar"), ("zip", ".zip")])
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_size_and_type_still_reported(
-        self, temp_dir: Path, fmt: str, ext: str
+        self, archived: ArchivedTree, fmt: str
     ) -> None:
         """Test that the fields that already worked keep working."""
-        entries = self._entries(temp_dir, fmt, ext)
+        entries = archived.entries[fmt]
 
-        assert entries["tree/big.bin"].size == len(b"compressible " * 4000)
+        assert entries["tree/big.bin"].size == len(BIG_PAYLOAD)
         assert entries["tree/nested"].is_dir is True
         assert entries["tree/big.bin"].is_dir is False
 
-    def test_zip_reports_per_entry_compression(self, temp_dir: Path) -> None:
+    def test_zip_reports_per_entry_compression(self, archived: ArchivedTree) -> None:
         """Test that zip compresses each entry, so it can say how well."""
-        entries = self._entries(temp_dir, "zip", ".zip")
-        entry = entries["tree/big.bin"]
+        entry = archived.entries["zip"]["tree/big.bin"]
 
         assert entry.compressed_size is not None
         assert 0 < entry.compressed_size < entry.size
         assert entry.crc is not None
         assert entry.method is not None
 
-    def test_tar_omits_per_entry_compression(self, temp_dir: Path) -> None:
+    def test_tar_omits_per_entry_compression(self, archived: ArchivedTree) -> None:
         """Test that tar compresses the whole stream, so there is nothing to report."""
-        entries = self._entries(temp_dir, "tar", ".tar")
-        entry = entries["tree/big.bin"]
+        entry = archived.entries["tar"]["tree/big.bin"]
 
         assert entry.compressed_size is None
         assert entry.crc is None
         assert entry.method is None
 
-    def test_zip_crc_matches_the_content(self, temp_dir: Path) -> None:
+    def test_zip_crc_matches_the_content(self, archived: ArchivedTree) -> None:
         """Test that the CRC reported is the one zip actually stored."""
-        entries = self._entries(temp_dir, "zip", ".zip")
-        payload = b"compressible " * 4000
-
-        assert entries["tree/big.bin"].crc == zlib.crc32(payload)
+        assert archived.entries["zip"]["tree/big.bin"].crc == zlib.crc32(BIG_PAYLOAD)

@@ -127,6 +127,39 @@ def make_archive(source_tree: Path, temp_dir: Path) -> Callable[[str], Path]:
 
 
 @dataclass
+class CompressTarget:
+    """What one `compress` call reads and writes."""
+
+    source: Path
+    dest: Path
+    args: tuple[str, ...]
+
+
+@pytest.fixture(params=["file", "tree"])
+def compress_target(
+    request: pytest.FixtureRequest, payload: Path, source_tree: Path, temp_dir: Path
+) -> CompressTarget:
+    """A single file into a .comp container, or a tree into a tar archive.
+
+    The two take different paths through `compress`, but share its
+    overwrite-mode handling.
+
+    Args:
+        request: Pytest request object.
+        payload: The single-file input.
+        source_tree: The directory input.
+        temp_dir: The directory to write the output in.
+
+    Returns:
+        The input, output and any extra arguments for the call.
+    """
+    if request.param == "file":
+        return CompressTarget(payload, temp_dir / "out.comp", ())
+
+    return CompressTarget(source_tree, temp_dir / "out.tar", ("-f", "tar"))
+
+
+@dataclass
 class Bar:
     """One progress bar a command opened."""
 
@@ -381,50 +414,6 @@ class TestCompressRoundTrip:
 
         assert restored.read_bytes() == payload.read_bytes()
 
-    def test_compress_renames_clashing_output_by_default(
-        self, payload: Path, temp_dir: Path
-    ) -> None:
-        """Test that compressing twice to the same output renames the second file
-        rather than overwriting the first."""
-        dest = temp_dir / "out.comp"
-
-        invoke("compress", payload, "-o", dest, "-q")
-        original_bytes = dest.read_bytes()
-
-        invoke("compress", payload, "-o", dest, "-q")
-
-        assert dest.read_bytes() == original_bytes
-        assert (temp_dir / renamed("out.comp")).is_file()
-
-    def test_compress_error_on_conflict_refuses_existing_output(
-        self, payload: Path, temp_dir: Path
-    ) -> None:
-        """Test that --error-on-conflict refuses to touch an existing output."""
-        dest = temp_dir / "out.comp"
-        invoke("compress", payload, "-o", dest, "-q")
-
-        invoke(
-            "compress",
-            payload,
-            "-o",
-            dest,
-            "--error-on-conflict",
-            "-q",
-            expect=EXIT_FAILED,
-        )
-
-    def test_compress_skip_existing_leaves_the_output_untouched(
-        self, payload: Path, temp_dir: Path
-    ) -> None:
-        """Test that --skip-existing leaves the first output as-is and still succeeds."""
-        dest = temp_dir / "out.comp"
-        invoke("compress", payload, "-o", dest, "-q")
-        original_bytes = dest.read_bytes()
-
-        invoke("compress", payload, "-o", dest, "--skip-existing", "-q")
-
-        assert dest.read_bytes() == original_bytes
-
 
 class TestArchiveRoundTrip:
     """Test archive and extract, end to end."""
@@ -538,61 +527,6 @@ class TestArchiveRoundTrip:
             expect=EXIT_FAILED,
         )
 
-    def test_compress_renames_clashing_archive_by_default(
-        self, source_tree: Path, temp_dir: Path
-    ) -> None:
-        """Test that archiving twice to the same output renames the second archive rather
-        than overwriting the first."""
-        archive = temp_dir / "out.tar"
-
-        invoke("compress", source_tree, "-o", archive, "-f", "tar", "-q")
-        original_bytes = archive.read_bytes()
-
-        invoke("compress", source_tree, "-o", archive, "-f", "tar", "-q")
-
-        assert archive.read_bytes() == original_bytes
-        assert (temp_dir / renamed("out.tar")).is_file()
-
-    def test_compress_error_on_conflict_still_refuses(
-        self, source_tree: Path, temp_dir: Path
-    ) -> None:
-        """Test that --error-on-conflict refuses to touch an existing archive."""
-        archive = temp_dir / "out.tar"
-        invoke("compress", source_tree, "-o", archive, "-f", "tar", "-q")
-
-        invoke(
-            "compress",
-            source_tree,
-            "-o",
-            archive,
-            "-f",
-            "tar",
-            "--error-on-conflict",
-            "-q",
-            expect=EXIT_FAILED,
-        )
-
-    def test_compress_skip_existing_leaves_the_archive_untouched(
-        self, source_tree: Path, temp_dir: Path
-    ) -> None:
-        """Test that --skip-existing leaves the first archive as-is and still succeeds."""
-        archive = temp_dir / "out.tar"
-        invoke("compress", source_tree, "-o", archive, "-f", "tar", "-q")
-        original_bytes = archive.read_bytes()
-
-        invoke(
-            "compress",
-            source_tree,
-            "-o",
-            archive,
-            "-f",
-            "tar",
-            "--skip-existing",
-            "-q",
-        )
-
-        assert archive.read_bytes() == original_bytes
-
     @pytest.mark.parametrize("flag", ["--overwrite", "--skip-existing"])
     def test_extract_over_existing_with_a_flag(
         self, temp_dir: Path, make_archive: Callable[[str], Path], flag: str
@@ -603,6 +537,57 @@ class TestArchiveRoundTrip:
         invoke("extract", archive, "-o", dest, "-q")
 
         invoke("extract", archive, "-o", dest, flag, "-q")
+
+
+class TestCompressConflicts:
+    """Test what `compress` does when its output already exists."""
+
+    def test_renames_clashing_output_by_default(
+        self, compress_target: CompressTarget
+    ) -> None:
+        """Test that compressing twice renames the second output rather than
+        overwriting the first."""
+        t = compress_target
+        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
+        original_bytes = t.dest.read_bytes()
+
+        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
+
+        assert t.dest.read_bytes() == original_bytes
+        assert (t.dest.parent / renamed(t.dest.name)).is_file()
+
+    def test_error_on_conflict_refuses_existing_output(
+        self, compress_target: CompressTarget
+    ) -> None:
+        """Test that --error-on-conflict refuses to touch an existing output."""
+        t = compress_target
+        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
+        original_bytes = t.dest.read_bytes()
+
+        invoke(
+            "compress",
+            t.source,
+            "-o",
+            t.dest,
+            *t.args,
+            "--error-on-conflict",
+            "-q",
+            expect=EXIT_FAILED,
+        )
+
+        assert t.dest.read_bytes() == original_bytes
+
+    def test_skip_existing_leaves_the_output_untouched(
+        self, compress_target: CompressTarget
+    ) -> None:
+        """Test that --skip-existing leaves the first output as-is and still succeeds."""
+        t = compress_target
+        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
+        original_bytes = t.dest.read_bytes()
+
+        invoke("compress", t.source, "-o", t.dest, *t.args, "--skip-existing", "-q")
+
+        assert t.dest.read_bytes() == original_bytes
 
 
 class TestInspectAndList:
@@ -637,10 +622,6 @@ class TestInspectAndList:
 
         assert result.returncode == EXIT_OK
         assert "zstd" in result.stdout
-
-    def test_list_shows_backends(self) -> None:
-        """Test that list names the compiled-in algorithms."""
-        assert "zstd" in invoke("list").output
 
     def test_list_shows_level_ranges(self) -> None:
         """Test that list shows each backend's levels, and none for snappy."""
@@ -694,10 +675,6 @@ class TestInspectAndList:
 class TestExitCodes:
     """Test 0 success, 1 the operation failed, 2 the request could not be made."""
 
-    def test_success_is_zero(self, payload: Path, temp_dir: Path) -> None:
-        """Test that a completed job exits 0."""
-        invoke("compress", payload, "-o", temp_dir / "o.comp", "-q", expect=EXIT_OK)
-
     def test_missing_input_is_usage(self, temp_dir: Path) -> None:
         """Test that compressing a file that is not there is a usage error."""
         invoke("compress", temp_dir / "nope.bin", expect=EXIT_USAGE)
@@ -714,6 +691,7 @@ class TestExitCodes:
         """Test the same for extract."""
         invoke("extract", payload, expect=EXIT_USAGE)
 
+    @pytest.mark.parametrize("command", ["compress", "extract"])
     @pytest.mark.parametrize(
         "flags",
         [
@@ -721,43 +699,23 @@ class TestExitCodes:
             ["--overwrite", "--error-on-conflict"],
             ["--skip-existing", "--error-on-conflict"],
         ],
+        ids=["overwrite+skip", "overwrite+error", "skip+error"],
     )
-    def test_mutually_exclusive_flags_are_usage(
-        self, temp_dir: Path, make_archive: Callable[[str], Path], flags: list[str]
+    def test_mutually_exclusive_flag_usage(
+        self,
+        source_tree: Path,
+        temp_dir: Path,
+        make_archive: Callable[[str], Path],
+        command: str,
+        flags: list[str],
     ) -> None:
         """Test that combining any two overwrite-mode flags is contradictory."""
-        result = invoke(
-            "extract",
-            make_archive("tar"),
-            *flags,
-            "-o",
-            temp_dir / "d",
-            expect=EXIT_USAGE,
-        )
-        assert "mutually exclusive" in result.output
+        if command == "compress":
+            args = [source_tree, "-o", temp_dir / "out.tar", "-f", "tar"]
+        else:
+            args = [make_archive("tar"), "-o", temp_dir / "d"]
 
-    @pytest.mark.parametrize(
-        "flags",
-        [
-            ["--overwrite", "--skip-existing"],
-            ["--overwrite", "--error-on-conflict"],
-            ["--skip-existing", "--error-on-conflict"],
-        ],
-    )
-    def test_compress_mutually_exclusive_flags_are_usage(
-        self, source_tree: Path, temp_dir: Path, flags: list[str]
-    ) -> None:
-        """Test that combining any two archive overwrite-mode flags is contradictory."""
-        result = invoke(
-            "compress",
-            source_tree,
-            "-o",
-            temp_dir / "out.tar",
-            "-f",
-            "tar",
-            *flags,
-            expect=EXIT_USAGE,
-        )
+        result = invoke(command, *args, *flags, expect=EXIT_USAGE)
         assert "mutually exclusive" in result.output
 
     @pytest.mark.parametrize(
