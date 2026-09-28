@@ -2,6 +2,8 @@
 #include "unity.h"
 #include <string.h>
 
+#define MiB (1024ULL * 1024)
+
 // Records what the progress callback was handed, so the tests can assert on
 // how often it fired and with what
 typedef struct {
@@ -39,56 +41,56 @@ void test_begin_stage_sets_total_and_clears_counters(void) {
   ctx.done_bytes = 999;
   ctx.last_reported = 999;
 
-  ctx_begin_stage(&ctx, 100 * 1024 * 1024);
+  ctx_begin_stage(&ctx, 100 * MiB);
 
-  TEST_ASSERT_EQUAL_UINT64(100 * 1024 * 1024, ctx.total_bytes);
+  TEST_ASSERT_EQUAL_UINT64(100 * MiB, ctx.total_bytes);
   TEST_ASSERT_EQUAL_UINT64(0, ctx.done_bytes);
   TEST_ASSERT_EQUAL_UINT64(0, ctx.last_reported);
 }
 
 void test_begin_stage_targets_200_reports(void) {
   // 400 MiB / 200 = 2 MiB, comfortably above the 1 MiB floor
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
-  TEST_ASSERT_EQUAL_UINT64(2ULL * 1024 * 1024, ctx.report_interval);
+  ctx_begin_stage(&ctx, 400 * MiB);
+  TEST_ASSERT_EQUAL_UINT64(2 * MiB, ctx.report_interval);
 }
 
 void test_begin_stage_applies_minimum_interval(void) {
   // 10 MiB / 200 = 51.2 KiB, so the 1 MiB floor takes over
-  ctx_begin_stage(&ctx, 10ULL * 1024 * 1024);
-  TEST_ASSERT_EQUAL_UINT64(1024 * 1024, ctx.report_interval);
+  ctx_begin_stage(&ctx, 10 * MiB);
+  TEST_ASSERT_EQUAL_UINT64(MiB, ctx.report_interval);
 }
 
 void test_begin_stage_tolerates_zero_total(void) {
   ctx_begin_stage(&ctx, 0);
   TEST_ASSERT_EQUAL_UINT64(0, ctx.total_bytes);
-  TEST_ASSERT_EQUAL_UINT64(1024 * 1024, ctx.report_interval);
+  TEST_ASSERT_EQUAL_UINT64(MiB, ctx.report_interval);
 }
 
 // ---- ctx_advance ----
 
 void test_advance_accumulates_without_reporting(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024); // 2 MiB interval
+  ctx_begin_stage(&ctx, 400 * MiB); // 2 MiB interval
 
-  TEST_ASSERT_EQUAL_INT(0, ctx_advance(&ctx, 1024 * 1024));
+  TEST_ASSERT_EQUAL_INT(0, ctx_advance(&ctx, MiB));
 
-  TEST_ASSERT_EQUAL_UINT64(1024 * 1024, ctx.done_bytes);
+  TEST_ASSERT_EQUAL_UINT64(MiB, ctx.done_bytes);
   TEST_ASSERT_EQUAL_INT(0, log_state.calls); // Below the threshold
 }
 
 void test_advance_reports_once_threshold_crossed(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024); // 2 MiB interval
+  ctx_begin_stage(&ctx, 400 * MiB); // 2 MiB interval
 
-  ctx_advance(&ctx, 1024 * 1024);
+  ctx_advance(&ctx, MiB);
   TEST_ASSERT_EQUAL_INT(0, log_state.calls);
 
-  ctx_advance(&ctx, 1024 * 1024);
+  ctx_advance(&ctx, MiB);
   TEST_ASSERT_EQUAL_INT(1, log_state.calls);
-  TEST_ASSERT_EQUAL_UINT64(2ULL * 1024 * 1024, log_state.last_done);
-  TEST_ASSERT_EQUAL_UINT64(400ULL * 1024 * 1024, log_state.last_total);
+  TEST_ASSERT_EQUAL_UINT64(2 * MiB, log_state.last_done);
+  TEST_ASSERT_EQUAL_UINT64(400 * MiB, log_state.last_total);
 }
 
 void test_advance_throttles_across_many_chunks(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024); // 2 MiB interval
+  ctx_begin_stage(&ctx, 400 * MiB); // 2 MiB interval
 
   // 400 MiB in 64 KiB chunks: 6400 chunks, but only ~200 reports
   for (int i = 0; i < 6400; i++) {
@@ -99,31 +101,31 @@ void test_advance_throttles_across_many_chunks(void) {
 }
 
 void test_advance_propagates_callback_failure(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
   log_state.return_value = -1;
 
-  TEST_ASSERT_EQUAL_INT(-1, ctx_advance(&ctx, 4ULL * 1024 * 1024));
+  TEST_ASSERT_EQUAL_INT(-1, ctx_advance(&ctx, 4 * MiB));
 }
 
 void test_advance_without_callback_still_accumulates(void) {
   ctx.on_progress = NULL;
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
 
-  TEST_ASSERT_EQUAL_INT(0, ctx_advance(&ctx, 4ULL * 1024 * 1024));
-  TEST_ASSERT_EQUAL_UINT64(4ULL * 1024 * 1024, ctx.done_bytes);
+  TEST_ASSERT_EQUAL_INT(0, ctx_advance(&ctx, 4 * MiB));
+  TEST_ASSERT_EQUAL_UINT64(4 * MiB, ctx.done_bytes);
 }
 
 // ---- Cancellation ----
 
 void test_advance_returns_cancelled_when_flag_set(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
   cancel_flag = 1;
 
   TEST_ASSERT_EQUAL_INT(COMP_CANCELLED, ctx_advance(&ctx, 1));
 }
 
 void test_cancel_checked_every_chunk_not_every_report(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024); // 2 MiB interval
+  ctx_begin_stage(&ctx, 400 * MiB); // 2 MiB interval
   cancel_flag = 1;
 
   // A single byte is below the report threshold, yet cancellation still lands
@@ -132,18 +134,18 @@ void test_cancel_checked_every_chunk_not_every_report(void) {
 }
 
 void test_cancel_takes_precedence_over_reporting(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
   cancel_flag = 1;
 
   // Enough bytes to cross the threshold, but cancellation wins and the
   // callback is never invoked for a run that is being abandoned
-  TEST_ASSERT_EQUAL_INT(COMP_CANCELLED, ctx_advance(&ctx, 4ULL * 1024 * 1024));
+  TEST_ASSERT_EQUAL_INT(COMP_CANCELLED, ctx_advance(&ctx, 4 * MiB));
   TEST_ASSERT_EQUAL_INT(0, log_state.calls);
 }
 
 void test_null_cancel_flag_never_cancels(void) {
   ctx.cancel_flag = NULL;
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
 
   TEST_ASSERT_EQUAL_INT(0, ctx_advance(&ctx, 1024));
 }
@@ -151,27 +153,27 @@ void test_null_cancel_flag_never_cancels(void) {
 // ---- ctx_set_position ----
 
 void test_set_position_tracks_absolute_offset(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
 
-  ctx_set_position(&ctx, 4ULL * 1024 * 1024);
+  ctx_set_position(&ctx, 4 * MiB);
 
-  TEST_ASSERT_EQUAL_UINT64(4ULL * 1024 * 1024, ctx.done_bytes);
+  TEST_ASSERT_EQUAL_UINT64(4 * MiB, ctx.done_bytes);
   TEST_ASSERT_EQUAL_INT(1, log_state.calls);
 }
 
 void test_set_position_never_moves_backwards(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
-  ctx_set_position(&ctx, 8ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
+  ctx_set_position(&ctx, 8 * MiB);
 
   // A library that buffered ahead and then rewound must not make a progress
   // bar jump back
   ctx_set_position(&ctx, 1024);
 
-  TEST_ASSERT_EQUAL_UINT64(8ULL * 1024 * 1024, ctx.done_bytes);
+  TEST_ASSERT_EQUAL_UINT64(8 * MiB, ctx.done_bytes);
 }
 
 void test_set_position_returns_cancelled_when_flag_set(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
   cancel_flag = 1;
 
   TEST_ASSERT_EQUAL_INT(COMP_CANCELLED, ctx_set_position(&ctx, 1024));
@@ -180,16 +182,16 @@ void test_set_position_returns_cancelled_when_flag_set(void) {
 void test_set_position_subtracts_the_stage_base(void) {
   // A stage that starts past a header: the codec reports absolute file
   // offsets, but the total covers only the payload after it
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
   ctx.stage_base = 16;
 
-  ctx_set_position(&ctx, 16 + 4ULL * 1024 * 1024);
+  ctx_set_position(&ctx, 16 + 4 * MiB);
 
-  TEST_ASSERT_EQUAL_UINT64(4ULL * 1024 * 1024, ctx.done_bytes);
+  TEST_ASSERT_EQUAL_UINT64(4 * MiB, ctx.done_bytes);
 }
 
 void test_set_position_inside_the_base_reports_zero(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
   ctx.stage_base = 16;
 
   ctx_set_position(&ctx, 8); // Still within the header
@@ -201,40 +203,40 @@ void test_set_position_inside_the_base_reports_zero(void) {
 void test_done_never_exceeds_total(void) {
   // Codecs can overshoot slightly: a library reading ahead, or framing bytes
   // counted alongside payload
-  ctx_begin_stage(&ctx, 4ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 4 * MiB);
 
-  ctx_advance(&ctx, 8ULL * 1024 * 1024);
+  ctx_advance(&ctx, 8 * MiB);
 
-  TEST_ASSERT_EQUAL_UINT64(4ULL * 1024 * 1024, ctx.done_bytes);
-  TEST_ASSERT_EQUAL_UINT64(4ULL * 1024 * 1024, log_state.last_done);
+  TEST_ASSERT_EQUAL_UINT64(4 * MiB, ctx.done_bytes);
+  TEST_ASSERT_EQUAL_UINT64(4 * MiB, log_state.last_done);
 }
 
 void test_unknown_total_is_left_unclamped(void) {
   // 0 total means unmeasurable (e.g. a pipe), so the counter must still climb
   ctx_begin_stage(&ctx, 0);
 
-  ctx_advance(&ctx, 4ULL * 1024 * 1024);
+  ctx_advance(&ctx, 4 * MiB);
 
-  TEST_ASSERT_EQUAL_UINT64(4ULL * 1024 * 1024, ctx.done_bytes);
+  TEST_ASSERT_EQUAL_UINT64(4 * MiB, ctx.done_bytes);
 }
 
 // ---- ctx_finish ----
 
 void test_finish_reports_one_hundred_percent(void) {
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
   ctx_advance(&ctx, 1024); // Far short of the total, and below the threshold
 
   TEST_ASSERT_EQUAL_INT(0, ctx_finish(&ctx));
 
   // The last thing a caller observes is always done == total
   TEST_ASSERT_EQUAL_INT(1, log_state.calls);
-  TEST_ASSERT_EQUAL_UINT64(400ULL * 1024 * 1024, log_state.last_done);
-  TEST_ASSERT_EQUAL_UINT64(400ULL * 1024 * 1024, log_state.last_total);
+  TEST_ASSERT_EQUAL_UINT64(400 * MiB, log_state.last_done);
+  TEST_ASSERT_EQUAL_UINT64(400 * MiB, log_state.last_total);
 }
 
 void test_finish_without_callback_is_a_noop(void) {
   ctx.on_progress = NULL;
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
 
   TEST_ASSERT_EQUAL_INT(0, ctx_finish(&ctx));
 }
@@ -246,89 +248,89 @@ void test_finish_without_callback_is_a_noop(void) {
 // cumulative across them or the bar would restart halfway through.
 
 void test_job_carries_progress_across_stages(void) {
-  ctx_begin_job(&ctx, 100 * 1024 * 1024);
+  ctx_begin_job(&ctx, 100 * MiB);
 
-  ctx_begin_stage(&ctx, 100 * 1024 * 1024);
-  ctx_advance(&ctx, 100 * 1024 * 1024);
-  TEST_ASSERT_EQUAL_UINT64(100 * 1024 * 1024, log_state.last_done);
+  ctx_begin_stage(&ctx, 100 * MiB);
+  ctx_advance(&ctx, 100 * MiB);
+  TEST_ASSERT_EQUAL_UINT64(100 * MiB, log_state.last_done);
 
   // Second stage starts where the first ended, not at zero
-  ctx_begin_stage(&ctx, 50 * 1024 * 1024);
-  ctx_advance(&ctx, 10 * 1024 * 1024);
+  ctx_begin_stage(&ctx, 50 * MiB);
+  ctx_advance(&ctx, 10 * MiB);
 
-  TEST_ASSERT_EQUAL_UINT64(110ULL * 1024 * 1024, log_state.last_done);
+  TEST_ASSERT_EQUAL_UINT64(110 * MiB, log_state.last_done);
 }
 
 void test_job_total_grows_as_stages_declare_sizes(void) {
   // The estimate covers only the first stage
-  ctx_begin_job(&ctx, 100 * 1024 * 1024);
+  ctx_begin_job(&ctx, 100 * MiB);
 
-  ctx_begin_stage(&ctx, 100 * 1024 * 1024);
-  ctx_advance(&ctx, 100 * 1024 * 1024);
-  TEST_ASSERT_EQUAL_UINT64(100ULL * 1024 * 1024, log_state.last_total);
+  ctx_begin_stage(&ctx, 100 * MiB);
+  ctx_advance(&ctx, 100 * MiB);
+  TEST_ASSERT_EQUAL_UINT64(100 * MiB, log_state.last_total);
 
-  ctx_begin_stage(&ctx, 50 * 1024 * 1024);
-  ctx_advance(&ctx, 10 * 1024 * 1024);
+  ctx_begin_stage(&ctx, 50 * MiB);
+  ctx_advance(&ctx, 10 * MiB);
 
-  TEST_ASSERT_EQUAL_UINT64(150ULL * 1024 * 1024, log_state.last_total);
+  TEST_ASSERT_EQUAL_UINT64(150 * MiB, log_state.last_total);
 }
 
 void test_job_progress_never_goes_backwards(void) {
-  ctx_begin_job(&ctx, 100 * 1024 * 1024);
+  ctx_begin_job(&ctx, 100 * MiB);
 
-  ctx_begin_stage(&ctx, 100 * 1024 * 1024);
+  ctx_begin_stage(&ctx, 100 * MiB);
   for (int i = 0; i < 100; i++) {
-    ctx_advance(&ctx, 1024 * 1024);
+    ctx_advance(&ctx, MiB);
   }
   uint64_t after_first = log_state.last_done;
 
-  ctx_begin_stage(&ctx, 100 * 1024 * 1024);
+  ctx_begin_stage(&ctx, 100 * MiB);
   for (int i = 0; i < 100; i++) {
-    ctx_advance(&ctx, 1024 * 1024);
+    ctx_advance(&ctx, MiB);
     TEST_ASSERT_TRUE(log_state.last_done >= after_first);
   }
 }
 
 void test_job_finish_reports_the_whole_job(void) {
-  ctx_begin_job(&ctx, 100 * 1024 * 1024);
+  ctx_begin_job(&ctx, 100 * MiB);
 
-  ctx_begin_stage(&ctx, 100 * 1024 * 1024);
-  ctx_advance(&ctx, 100 * 1024 * 1024);
-  ctx_begin_stage(&ctx, 40 * 1024 * 1024);
+  ctx_begin_stage(&ctx, 100 * MiB);
+  ctx_advance(&ctx, 100 * MiB);
+  ctx_begin_stage(&ctx, 40 * MiB);
   ctx_advance(&ctx, 1024);
 
   TEST_ASSERT_EQUAL_INT(0, ctx_finish(&ctx));
 
-  TEST_ASSERT_EQUAL_UINT64(140ULL * 1024 * 1024, log_state.last_done);
-  TEST_ASSERT_EQUAL_UINT64(140ULL * 1024 * 1024, log_state.last_total);
+  TEST_ASSERT_EQUAL_UINT64(140 * MiB, log_state.last_done);
+  TEST_ASSERT_EQUAL_UINT64(140 * MiB, log_state.last_total);
 }
 
 void test_job_paces_reports_over_the_whole_job(void) {
   // Throttling follows the job, so a two-stage pipeline does not report twice
   // as often as a single-stage one
-  ctx_begin_job(&ctx, 400ULL * 1024 * 1024);
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_job(&ctx, 400 * MiB);
+  ctx_begin_stage(&ctx, 400 * MiB);
 
-  TEST_ASSERT_EQUAL_UINT64(2ULL * 1024 * 1024, ctx.report_interval);
+  TEST_ASSERT_EQUAL_UINT64(2 * MiB, ctx.report_interval);
 }
 
 void test_single_stage_job_is_unaffected(void) {
   // Without ctx_begin_job the reports stay per-stage
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
-  ctx_advance(&ctx, 4ULL * 1024 * 1024);
+  ctx_begin_stage(&ctx, 400 * MiB);
+  ctx_advance(&ctx, 4 * MiB);
 
-  TEST_ASSERT_EQUAL_UINT64(4ULL * 1024 * 1024, log_state.last_done);
-  TEST_ASSERT_EQUAL_UINT64(400ULL * 1024 * 1024, log_state.last_total);
+  TEST_ASSERT_EQUAL_UINT64(4 * MiB, log_state.last_done);
+  TEST_ASSERT_EQUAL_UINT64(400 * MiB, log_state.last_total);
 
   // A second stage restarts, rather than accumulating
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
-  ctx_advance(&ctx, 4ULL * 1024 * 1024);
-  TEST_ASSERT_EQUAL_UINT64(4ULL * 1024 * 1024, log_state.last_done);
+  ctx_begin_stage(&ctx, 400 * MiB);
+  ctx_advance(&ctx, 4 * MiB);
+  TEST_ASSERT_EQUAL_UINT64(4 * MiB, log_state.last_done);
 }
 
 void test_job_cancellation_still_lands_every_chunk(void) {
-  ctx_begin_job(&ctx, 400ULL * 1024 * 1024);
-  ctx_begin_stage(&ctx, 400ULL * 1024 * 1024);
+  ctx_begin_job(&ctx, 400 * MiB);
+  ctx_begin_stage(&ctx, 400 * MiB);
   cancel_flag = 1;
 
   TEST_ASSERT_EQUAL_INT(COMP_CANCELLED, ctx_advance(&ctx, 1));

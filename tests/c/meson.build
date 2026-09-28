@@ -46,6 +46,7 @@ unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 under_test = static_library('under_test',
   'support/test_stubs.c',
   'support/backend_io.c',
+  'support/files.c',
   csrc / 'common.c',
   csrc / 'format.c',
   csrc / 'fsutil.c',

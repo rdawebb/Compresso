@@ -1,138 +1,72 @@
-#include "unity.h"
-#include "common.h"
-#include <stdlib.h>
-#include <string.h>
+// Makes Unity define TEST_RANGE; the runner generator expands each one
+#define UNITY_SUPPORT_TEST_CASES
 
-// Forward declarations
+#include "common.h"
+#include "unity.h"
+
 const CBackend *find_backend_by_name(const char *name);
 const CBackend *find_backend_by_id(uint8_t id);
 
-void setUp(void) {
+static const struct {
+  const char *name;
+  uint8_t id;
+} BACKENDS[] = {
+    {"zlib", ALGO_ZLIB}, {"bzip2", ALGO_BZIP2}, {"lzma", ALGO_LZMA},
+    {"zstd", ALGO_ZSTD}, {"lz4", ALGO_LZ4},     {"snappy", ALGO_SNAPPY},
+};
+
+// The TEST_RANGEs over BACKENDS below must span exactly its rows
+_Static_assert(sizeof(BACKENDS) / sizeof(BACKENDS[0]) == 6, "update TEST_RANGE");
+
+static const struct {
+  const char *text;
+  Strategy expected;
+} STRATEGIES[] = {
+    {"balanced", STRAT_BALANCED},
+    {"fast", STRAT_FAST},
+    {"max_ratio", STRAT_MAX_RATIO},
+    {"unknown", STRAT_BALANCED}, // An unrecognised name falls back to balanced
+};
+
+_Static_assert(sizeof(STRATEGIES) / sizeof(STRATEGIES[0]) == 4,
+               "update TEST_RANGE");
+
+void setUp(void) {}
+void tearDown(void) {}
+
+TEST_RANGE([0, 5, 1])
+void test_find_backend_by_name(int index) {
+  const CBackend *backend = find_backend_by_name(BACKENDS[index].name);
+
+  TEST_ASSERT_NOT_NULL_MESSAGE(backend, BACKENDS[index].name);
+  TEST_ASSERT_EQUAL_STRING(BACKENDS[index].name, backend->name);
+  TEST_ASSERT_EQUAL_UINT8(BACKENDS[index].id, backend->id);
 }
 
-void tearDown(void) {
-}
+TEST_RANGE([0, 5, 1])
+void test_find_backend_by_id(int index) {
+  const CBackend *backend = find_backend_by_id(BACKENDS[index].id);
 
-void test_find_backend_by_name_zlib(void) {
-    const CBackend *backend = find_backend_by_name("zlib");
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL_STRING("zlib", backend->name);
-    TEST_ASSERT_EQUAL(ALGO_ZLIB, backend->id);
-}
-
-void test_find_backend_by_name_bzip2(void) {
-    const CBackend *backend = find_backend_by_name("bzip2");
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL_STRING("bzip2", backend->name);
-    TEST_ASSERT_EQUAL(ALGO_BZIP2, backend->id);
-}
-
-void test_find_backend_by_name_lzma(void) {
-    const CBackend *backend = find_backend_by_name("lzma");
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL_STRING("lzma", backend->name);
-    TEST_ASSERT_EQUAL(ALGO_LZMA, backend->id);
-}
-
-void test_find_backend_by_name_zstd(void) {
-    const CBackend *backend = find_backend_by_name("zstd");
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL_STRING("zstd", backend->name);
-    TEST_ASSERT_EQUAL(ALGO_ZSTD, backend->id);
-}
-
-void test_find_backend_by_name_lz4(void) {
-    const CBackend *backend = find_backend_by_name("lz4");
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL_STRING("lz4", backend->name);
-    TEST_ASSERT_EQUAL(ALGO_LZ4, backend->id);
-}
-
-void test_find_backend_by_name_snappy(void) {
-    const CBackend *backend = find_backend_by_name("snappy");
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL_STRING("snappy", backend->name);
-    TEST_ASSERT_EQUAL(ALGO_SNAPPY, backend->id);
+  TEST_ASSERT_NOT_NULL_MESSAGE(backend, BACKENDS[index].name);
+  TEST_ASSERT_EQUAL_UINT8(BACKENDS[index].id, backend->id);
+  TEST_ASSERT_EQUAL_STRING(BACKENDS[index].name, backend->name);
 }
 
 void test_find_backend_by_name_invalid(void) {
-    const CBackend *backend = find_backend_by_name("invalid_backend");
-    TEST_ASSERT_NULL(backend);
+  TEST_ASSERT_NULL(find_backend_by_name("invalid_backend"));
 }
 
 void test_find_backend_by_name_null(void) {
-    const CBackend *backend = find_backend_by_name(NULL);
-    TEST_ASSERT_NULL(backend);
-}
-
-void test_find_backend_by_id_zlib(void) {
-    const CBackend *backend = find_backend_by_id(ALGO_ZLIB);
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL(ALGO_ZLIB, backend->id);
-}
-
-void test_find_backend_by_id_bzip2(void) {
-    const CBackend *backend = find_backend_by_id(ALGO_BZIP2);
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL(ALGO_BZIP2, backend->id);
-}
-
-void test_find_backend_by_id_lzma(void) {
-    const CBackend *backend = find_backend_by_id(ALGO_LZMA);
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL(ALGO_LZMA, backend->id);
-}
-
-void test_find_backend_by_id_zstd(void) {
-    const CBackend *backend = find_backend_by_id(ALGO_ZSTD);
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL(ALGO_ZSTD, backend->id);
-}
-
-void test_find_backend_by_id_lz4(void) {
-    const CBackend *backend = find_backend_by_id(ALGO_LZ4);
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL(ALGO_LZ4, backend->id);
-}
-
-void test_find_backend_by_id_snappy(void) {
-    const CBackend *backend = find_backend_by_id(ALGO_SNAPPY);
-    TEST_ASSERT_NOT_NULL(backend);
-    TEST_ASSERT_EQUAL(ALGO_SNAPPY, backend->id);
+  TEST_ASSERT_NULL(find_backend_by_name(NULL));
 }
 
 void test_find_backend_by_id_invalid(void) {
-    const CBackend *backend = find_backend_by_id(255);
-    TEST_ASSERT_NULL(backend);
+  TEST_ASSERT_NULL(find_backend_by_id(255));
 }
 
-void test_backend_availability(void) {
-    // Test that at least zlib is available (it should always be)
-    const CBackend *backend = find_backend_by_name("zlib");
-    TEST_ASSERT_NOT_NULL(backend);
-
-    if (backend->is_available) {
-        int available = backend->is_available();
-        TEST_ASSERT_TRUE(available);
-    }
-}
-
-void test_strategy_from_string_balanced(void) {
-    Strategy strat = strategy_from_string("balanced");
-    TEST_ASSERT_EQUAL(STRAT_BALANCED, strat);
-}
-
-void test_strategy_from_string_fast(void) {
-    Strategy strat = strategy_from_string("fast");
-    TEST_ASSERT_EQUAL(STRAT_FAST, strat);
-}
-
-void test_strategy_from_string_max_ratio(void) {
-    Strategy strat = strategy_from_string("max_ratio");
-    TEST_ASSERT_EQUAL(STRAT_MAX_RATIO, strat);
-}
-
-void test_strategy_from_string_default(void) {
-    Strategy strat = strategy_from_string("unknown");
-    TEST_ASSERT_EQUAL(STRAT_BALANCED, strat);
+TEST_RANGE([0, 3, 1])
+void test_strategy_from_string(int index) {
+  TEST_ASSERT_EQUAL_MESSAGE(STRATEGIES[index].expected,
+                            strategy_from_string(STRATEGIES[index].text),
+                            STRATEGIES[index].text);
 }

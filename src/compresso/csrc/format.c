@@ -15,17 +15,17 @@ Format detect_format_from_magic_bytes(const unsigned char *magic, size_t size) {
     return FORMAT_UNKNOWN;
   }
 
-  // Gzip and bzip2 need only 2 bytes
+  // Gzip needs only 2 bytes
   if (magic_is_gzip(magic, size)) {
     return FORMAT_GZIP;
   }
 
-  if (magic_is_bzip2(magic, size)) {
-    return FORMAT_BZIP2;
-  }
-
   if (size < 4) {
     return FORMAT_UNKNOWN;
+  }
+
+  if (magic_is_bzip2(magic, size)) {
+    return FORMAT_BZIP2;
   }
 
   if (magic_is_compresso(magic, size)) {
