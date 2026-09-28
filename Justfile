@@ -32,9 +32,10 @@ test:
 test-cov:
     uv run pytest -n auto --cov --cov-report=html --cov-report=term
 
-# Run all C tests
+# Run all C tests, configuring their build dir on first use
 test-c:
-    cd tests/c && rake test:all
+    [ -d build/c-tests ] || uv run meson setup build/c-tests tests/c
+    uv run meson test -C build/c-tests --print-errorlogs
 
 # Run all pre-commit hooks
 pre:

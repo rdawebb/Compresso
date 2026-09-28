@@ -4,6 +4,7 @@
 
 #include "../unity.h"
 #include "../lib/backend_io.h"
+#include "../lib/fixtures.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -42,7 +43,7 @@ void test_zlib_compress_small_file(void) {
     const CBackend *backend = get_zlib_backend();
 
     size_t file_size = 0;
-    unsigned char *file_data = read_fixture("../fixtures/xargs.1", &file_size);
+    unsigned char *file_data = read_fixture(FIXTURE_DIR "/xargs.1", &file_size);
     TEST_ASSERT_NOT_NULL(file_data);
     TEST_ASSERT_GREATER_THAN(0, file_size);
 
@@ -62,7 +63,7 @@ void test_zlib_decompress_file_roundtrip(void) {
     const CBackend *backend = get_zlib_backend();
 
     size_t original_size = 0;
-    unsigned char *original = read_fixture("../fixtures/alice29.txt", &original_size);
+    unsigned char *original = read_fixture(FIXTURE_DIR "/alice29.txt", &original_size);
     TEST_ASSERT_NOT_NULL(original);
 
     assert_stream_round_trip(backend, original, original_size, 6);
@@ -94,7 +95,7 @@ void test_zlib_different_compression_levels(void) {
     const CBackend *backend = get_zlib_backend();
 
     size_t file_size = 0;
-    unsigned char *file_data = read_fixture("../fixtures/alice29.txt", &file_size);
+    unsigned char *file_data = read_fixture(FIXTURE_DIR "/alice29.txt", &file_size);
     TEST_ASSERT_NOT_NULL(file_data);
 
     unsigned char *fast = NULL, *best = NULL;

@@ -23,13 +23,16 @@ OUTPUT_FLAGS = {"-o": 1, "-c": 0, "-MD": 0, "-MMD": 0, "-MQ": 1, "-MT": 1, "-MF"
 
 
 def find_database() -> Path | None:
-    """Find the most recently configured Meson build's compile database.
+    """Find the most recently configured extension build's compile database.
+
+    Only the per-interpreter `build/cp*` dirs meson-python creates count; the C
+    test build beside them never compiles `_core.c`.
 
     Returns:
-        The newest `build/*/compile_commands.json`, or None if no build dir
+        The newest `build/cp*/compile_commands.json`, or None if no build dir
         has been configured yet.
     """
-    candidates = list(ROOT.glob("build/*/compile_commands.json"))
+    candidates = list(ROOT.glob("build/cp*/compile_commands.json"))
     if not candidates:
         return None
 

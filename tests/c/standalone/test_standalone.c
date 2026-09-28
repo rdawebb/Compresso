@@ -1,11 +1,12 @@
 #include "../../../src/compresso/csrc/common.h"
 #include "../../../src/compresso/csrc/standalone.h"
+#include "../lib/fixtures.h"
 #include "../unity.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define TEST_INPUT "../fixtures/alice29.txt"
+#define TEST_INPUT FIXTURE_DIR "/alice29.txt"
 
 // The comp_* exception objects are defined (as NULL) by the test harness stub
 // Create them once so error paths that call PyErr_SetString() have a valid
