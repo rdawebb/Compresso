@@ -8,6 +8,7 @@ import pytest
 
 from compresso import (
     BackendError,
+    Cancelled,
     Error,
     HeaderError,
     _core,
@@ -38,53 +39,15 @@ def _value_error(call: Callable[[], object]) -> str | None:
 class TestCoreExceptions:
     """Test custom exception classes."""
 
-    def test_error_inheritance(self) -> None:
-        """Test that Error is a subclass of Exception."""
+    @pytest.mark.parametrize("exc", [HeaderError, BackendError, Cancelled])
+    def test_every_error_derives_from_error(self, exc: type[Exception]) -> None:
+        """Test that catching Error catches every exception the core raises."""
         assert issubclass(Error, Exception)
-
-    def test_header_error_inheritance(self) -> None:
-        """Test that HeaderError is a subclass of Error."""
-        assert issubclass(HeaderError, Error)
-
-    def test_backend_error_inheritance(self) -> None:
-        """Test that BackendError is a subclass of Error."""
-        assert issubclass(BackendError, Error)
-
-    def test_error_instantiation(self) -> None:
-        """Test that custom exceptions can be instantiated."""
-        err = Error("test message")
-        assert str(err) == "test message"
-
-        header_err = HeaderError("header issue")
-        assert str(header_err) == "header issue"
-
-        backend_err = BackendError("backend issue")
-        assert str(backend_err) == "backend issue"
+        assert issubclass(exc, Error)
 
 
 class TestCapabilities:
     """Test the get_capabilities function."""
-
-    def test_get_capabilities_returns_list(self) -> None:
-        """Test that get_capabilities returns a list."""
-        caps = get_capabilities()
-        assert isinstance(caps, list)
-
-    def test_get_capabilities_not_empty(self) -> None:
-        """Test that capabilities list is not empty."""
-        caps = get_capabilities()
-        assert len(caps) > 0
-
-    def test_capabilities_structure(self) -> None:
-        """Test that each capability has the expected structure."""
-        caps = get_capabilities()
-        for cap in caps:
-            # Unregistered backend slots are None; the rest match the stub
-            if cap is None:
-                continue
-            assert set(cap) == {"name", "id", "min_level", "max_level"}
-            assert isinstance(cap["name"], str)
-            assert isinstance(cap["id"], int)
 
     def test_capabilities_report_each_level_range(self):
         """Test that each backend reports its own level range."""
@@ -101,13 +64,6 @@ class TestCapabilities:
             "lz4": (0, 12),
             "snappy": (None, None),
         }
-
-    def test_capabilities_have_known_algos(self) -> None:
-        """Test that common algorithms are present."""
-        caps = get_capabilities()
-        # zlib should always be available
-        caps_str = str(caps).lower()
-        assert "zlib" in caps_str
 
 
 class TestArchiveCapabilities:

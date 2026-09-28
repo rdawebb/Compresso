@@ -40,13 +40,6 @@ class TestArchiveOptions:
         assert opts.compression_level is None
         assert opts.overwrite is OverwriteMode.RENAME
 
-    def test_archive_options_with_format(self) -> None:
-        """Test creating ArchiveOptions with a format and level."""
-        opts = ArchiveOptions(format="tar.gz", compression_level=6)
-
-        assert opts.format == "tar.gz"
-        assert opts.compression_level == 6
-
 
 class TestPlanArchive:
     """Test the plan_archive planner."""

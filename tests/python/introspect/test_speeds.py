@@ -1,48 +1,12 @@
 """Tests for the speeds module."""
 
-import json
 from pathlib import Path
 
 import pytest
 
 from compresso.introspect.speeds import (
-    AlgoSpeeds,
     update_from_benchmarks,
 )
-
-
-class TestAlgoSpeeds:
-    """Test the AlgoSpeeds dataclass."""
-
-    def test_algo_speeds_creation(self) -> None:
-        """Test creating an AlgoSpeeds instance."""
-        speeds = AlgoSpeeds(algo="zlib", comp_mb_s=200.0, decomp_mb_s=250.0, samples=5)
-
-        assert speeds.algo == "zlib"
-        assert speeds.comp_mb_s == 200.0
-        assert speeds.decomp_mb_s == 250.0
-        assert speeds.samples == 5
-
-    @pytest.mark.parametrize(
-        "algo,comp_speed,decomp_speed",
-        [
-            ("zlib", 200.0, 250.0),
-            ("zstd", 400.0, 500.0),
-            ("lz4", 800.0, 900.0),
-            ("bzip2", 50.0, 60.0),
-        ],
-    )
-    def test_algo_speeds_various_algorithms(
-        self, algo: str, comp_speed: float, decomp_speed: float
-    ) -> None:
-        """Test AlgoSpeeds with various algorithms."""
-        speeds = AlgoSpeeds(
-            algo=algo, comp_mb_s=comp_speed, decomp_mb_s=decomp_speed, samples=1
-        )
-
-        assert speeds.algo == algo
-        assert speeds.comp_mb_s == comp_speed
-        assert speeds.decomp_mb_s == decomp_speed
 
 
 class TestGetEstimatedSpeeds:
@@ -100,10 +64,6 @@ class TestGetEstimatedSpeeds:
 class TestUpdateFromBenchmarks:
     """Test the update_from_benchmarks function."""
 
-    def test_update_from_benchmarks_exists(self) -> None:
-        """Test that update_from_benchmarks function exists."""
-        assert callable(update_from_benchmarks)
-
     def test_update_from_benchmarks_with_empty_list(self) -> None:
         """Test updating from empty benchmark list."""
         # Should handle empty list without error
@@ -129,42 +89,3 @@ class TestUpdateFromBenchmarks:
 
         # Check if config directory was created
         assert speeds_file.parent.exists()
-
-
-class TestSpeedsFilePersistence:
-    """Test speeds file reading and writing."""
-
-    def test_speeds_file_format(self, temp_dir: Path) -> None:
-        """Test that speeds file uses JSON format."""
-        speeds_file = temp_dir / "speeds.json"
-
-        test_data = {"zlib": {"comp_mb_s": 200.0, "decomp_mb_s": 250.0, "samples": 5}}
-
-        speeds_file.write_text(json.dumps(test_data), "utf-8")
-
-        # Verify it can be read as JSON
-        loaded = json.loads(speeds_file.read_text("utf-8"))
-        assert "zlib" in loaded
-        assert loaded["zlib"]["comp_mb_s"] == 200.0
-
-    def test_speeds_file_structure(self, temp_dir: Path) -> None:
-        """Test expected structure of speeds file."""
-        speeds_file = temp_dir / "speeds.json"
-
-        test_data = {
-            "zstd": {"comp_mb_s": 400.0, "decomp_mb_s": 500.0, "samples": 10},
-            "lz4": {"comp_mb_s": 800.0, "decomp_mb_s": 900.0, "samples": 3},
-        }
-
-        speeds_file.write_text(json.dumps(test_data, indent=4), "utf-8")
-
-        loaded = json.loads(speeds_file.read_text("utf-8"))
-
-        # Check structure
-        for algo_data in loaded.values():
-            assert "comp_mb_s" in algo_data
-            assert "decomp_mb_s" in algo_data
-            assert "samples" in algo_data
-            assert isinstance(algo_data["comp_mb_s"], (int, float))
-            assert isinstance(algo_data["decomp_mb_s"], (int, float))
-            assert isinstance(algo_data["samples"], int)

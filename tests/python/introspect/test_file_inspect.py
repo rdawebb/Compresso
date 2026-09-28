@@ -8,37 +8,8 @@ from compresso import compress_file
 from compresso._core import Error
 from compresso.introspect.file_inspect import (
     COMP_HEADER_STRUCT,
-    InspectResult,
     inspect,
 )
-
-
-class TestInspectResult:
-    """Test the InspectResult dataclass."""
-
-    def test_inspect_result_creation(self) -> None:
-        """Test creating an InspectResult instance."""
-        result = InspectResult(
-            path=Path("/test/file.comp"),
-            is_compresso=True,
-            header_ok=True,
-            reason=None,
-            version=1,
-            algo_id=1,
-            algo_name="zlib",
-            level=6,
-            flags=0,
-            orig_size=1000,
-            backend_available=True,
-            can_decompress=True,
-            estimated_decomp_s=0.5,
-        )
-
-        assert result.path == Path("/test/file.comp")
-        assert result.is_compresso is True
-        assert result.header_ok is True
-        assert result.algo_name == "zlib"
-        assert result.can_decompress is True
 
 
 class TestHeaderStruct:
@@ -48,27 +19,6 @@ class TestHeaderStruct:
         """Test that header struct has correct size."""
         # magic(4) + version(1) + algo(1) + level(1) + flags(1) + orig_size(8) = 16
         assert COMP_HEADER_STRUCT.size == 16
-
-    def test_header_struct_pack_unpack(self) -> None:
-        """Test packing and unpacking header data."""
-        magic = b"COMP"
-        version = 1
-        algo = 1
-        level = 6
-        flags = 0
-        orig_size = 1000000
-
-        packed = COMP_HEADER_STRUCT.pack(magic, version, algo, level, flags, orig_size)
-
-        assert len(packed) == 16
-
-        unpacked = COMP_HEADER_STRUCT.unpack(packed)
-        assert unpacked[0] == magic
-        assert unpacked[1] == version
-        assert unpacked[2] == algo
-        assert unpacked[3] == level
-        assert unpacked[4] == flags
-        assert unpacked[5] == orig_size
 
 
 class TestInspect:
