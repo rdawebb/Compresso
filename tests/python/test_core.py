@@ -162,8 +162,14 @@ class TestDecompressFile:
         input_file = temp_dir / "nonexistent.comp"
         output_file = temp_dir / "output.txt"
 
-        with pytest.raises(Error):
+        with pytest.raises(FileNotFoundError):
             decompress_file(str(input_file), str(output_file), "")
+
+    def test_decompress_directory(self, temp_dir: Path) -> None:
+        """Test that a directory is refused as unreadable, not as unrecognised."""
+        # Windows refuses to open a directory at all, so it reports EACCES
+        with pytest.raises((IsADirectoryError, PermissionError)):
+            decompress_file(str(temp_dir), str(temp_dir / "output.txt"), "")
 
     def test_decompress_invalid_file(
         self, sample_text_file: Path, temp_dir: Path
@@ -246,6 +252,16 @@ class TestStandaloneFormatErrors:
                 str(sample_text_file), str(temp_dir / "out.bin"), fmt
             )
 
+    @pytest.mark.parametrize("fmt", [None, "gzip"])
+    def test_decompress_nonexistent_file(self, temp_dir: Path, fmt: str | None) -> None:
+        """Test that a missing input is reported as such, with or without a format."""
+        args = [str(temp_dir / "missing.gz"), str(temp_dir / "out.bin")]
+        if fmt:
+            args.append(fmt)
+
+        with pytest.raises(FileNotFoundError):
+            _core.decompress_standalone(*args)
+
     @pytest.mark.parametrize("fmt", ["bogus", "comp", ""])
     def test_unknown_format_is_refused(
         self, sample_text_file: Path, temp_dir: Path, fmt: str
@@ -271,9 +287,17 @@ class TestRecognisedButUnsupportedArchive:
 
     @pytest.fixture
     def fake_7z(self, temp_dir: Path) -> Path:
-        """A file that detects as 7z by its magic bytes alone."""
+        """A file that detects as 7z by its magic bytes alone.
+
+        Args:
+            temp_dir: Pytest temporary path fixture.
+
+        Returns:
+            Path to the fake 7z file.
+        """
         path = temp_dir / "fake.7z"
         path.write_bytes(b"7z\xbc\xaf\x27\x1c" + bytes(32))
+
         return path
 
     def test_listing_names_the_format(self, fake_7z: Path) -> None:

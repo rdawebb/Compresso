@@ -646,6 +646,10 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
     goto fail; // Error already set
   }
 
+  if (check_source_readable(input_path) != 0) {
+    goto fail;
+  }
+
   if (format_name) {
     format = format_from_name(format_name);
 
