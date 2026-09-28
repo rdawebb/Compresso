@@ -1,5 +1,5 @@
 #include "unity.h"
-#include "../../src/compresso/csrc/common.h"
+#include "common.h"
 #include <stdlib.h>
 #include <string.h>
 

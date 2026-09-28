@@ -1,5 +1,5 @@
 #include "unity.h"
-#include "../../src/compresso/csrc/archives.h"
+#include "archives.h"
 #include <string.h>
 
 void setUp(void) {}

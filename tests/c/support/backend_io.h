@@ -3,7 +3,7 @@
 #ifndef BACKEND_IO_H
 #define BACKEND_IO_H
 
-#include "../../../src/compresso/csrc/common.h"
+#include "common.h"
 #include <stddef.h>
 #include <stdint.h>
 

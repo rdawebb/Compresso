@@ -1,10 +1,10 @@
 // Driven by a stub engine rather than a real library, so the driver's own
 // behaviour is tested, not zlib's or zstd's
 
-#include "../../../src/compresso/csrc/codec/codec.h"
-#include "../../../src/compresso/csrc/common.h"
-#include "../lib/fixtures.h"
-#include "../unity.h"
+#include "codec/codec.h"
+#include "common.h"
+#include "fixtures.h"
+#include "unity.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

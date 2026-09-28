@@ -1,7 +1,7 @@
-#include "../../../src/compresso/csrc/common.h"
-#include "../../../src/compresso/csrc/standalone.h"
-#include "../lib/fixtures.h"
-#include "../unity.h"
+#include "common.h"
+#include "standalone.h"
+#include "fixtures.h"
+#include "unity.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

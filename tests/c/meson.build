@@ -12,7 +12,6 @@ project('compresso-c-tests', 'c',
 )
 
 cc = meson.get_compiler('c')
-fs = import('fs')
 py = import('python').find_installation()
 
 # Same fallbacks as the root meson.build
@@ -38,15 +37,15 @@ deps = [
 ]
 
 csrc = '../../src/compresso/csrc'
-inc = include_directories('.', csrc)
+inc = include_directories('support', 'unity', csrc)
 
-unity = static_library('unity', 'unity.c', include_directories: inc)
+unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 
 # _core.c is left out: it reaches the archive API and its libarchive/libzip
-# stack; lib/test_stubs.c supplies the comp_* exception globals it owns instead
+# stack; support/test_stubs.c supplies the comp_* exception globals it owns instead
 under_test = static_library('under_test',
-  'lib/test_stubs.c',
-  'lib/backend_io.c',
+  'support/test_stubs.c',
+  'support/backend_io.c',
   csrc / 'common.c',
   csrc / 'format.c',
   csrc / 'fsutil.c',
@@ -82,7 +81,7 @@ foreach dep : deps
 endforeach
 
 ruby = find_program('ruby')
-generate_runner = files('lib/generate_test_runner.rb')
+generate_runner = files('unity/generate_test_runner.rb')
 
 # Tests run from the build dir so their scratch files land there, and find the
 # fixtures by absolute path instead
@@ -95,18 +94,13 @@ suites = {
   'test_format_detection.c': 'core',
   'test_pipeline.c': 'core',
   'test_router.c': 'core',
-  'codec/test_codec.c': 'codec',
-  'compression/test_bzip2.c': 'compression',
-  'compression/test_lz4.c': 'compression',
-  'compression/test_lzma.c': 'compression',
-  'compression/test_snappy.c': 'compression',
-  'compression/test_zlib.c': 'compression',
-  'compression/test_zstd.c': 'compression',
-  'standalone/test_standalone.c': 'standalone',
+  'test_codec.c': 'codec',
+  'test_backends.c': 'compression',
+  'test_standalone.c': 'standalone',
 }
 
 foreach source, suite : suites
-  name = source.split('/')[-1].replace('.c', '')
+  name = source.replace('.c', '')
 
   runner = custom_target(name + '_runner',
     input: source,
@@ -114,10 +108,8 @@ foreach source, suite : suites
     command: [ruby, generate_runner, '--use_param_tests=1', '@INPUT@', '@OUTPUT@'],
   )
 
-  # A runner repeats its test's #include lines verbatim, so it has to resolve
-  # them from the test's own directory
   exe = executable(name, source, runner,
-    include_directories: [inc, include_directories(fs.parent(source))],
+    include_directories: inc,
     c_args: fixture_dir,
     link_with: [under_test, unity],
     dependencies: compile_deps,
