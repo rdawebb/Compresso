@@ -45,6 +45,10 @@ int fs_is_stream_path(const char *path);
 // Locate the last path separator in `path`, or NULL if it has none
 char *fs_last_sep(const char *path);
 
+// Write `dir` + "/" + `name` into `out`, leaving out the "/" when `dir` is
+// empty or already ends in a separator; -1/ENAMETOOLONG if it would not fit
+int fs_join(char *out, size_t out_size, const char *dir, const char *name);
+
 // Stat `path` itself, without following symlinks (lstat(2)), so a symlink or
 // Windows reparse point reports FS_TYPE_SYMLINK rather than its target's type
 int fs_stat_path(const char *path, fs_stat *out);

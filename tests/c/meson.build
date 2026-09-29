@@ -93,6 +93,7 @@ fixture_dir = '-DFIXTURE_DIR="@0@"'.format(
 suites = {
   'test_context.c': 'core',
   'test_format_detection.c': 'core',
+  'test_fsutil.c': 'core',
   'test_pipeline.c': 'core',
   'test_registry.c': 'core',
   'test_codec.c': 'codec',

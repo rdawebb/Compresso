@@ -68,6 +68,24 @@ char *fs_last_sep(const char *path) {
 #endif
 }
 
+int fs_join(char *out, size_t out_size, const char *dir, const char *name) {
+  size_t dir_len = strlen(dir);
+  size_t name_len = strlen(name);
+  size_t sep_len = dir_len > 0 && !FS_IS_SEP(dir[dir_len - 1]) ? 1 : 0;
+
+  // Both strings are already in memory, so their lengths can't sum past SIZE_MAX
+  if (dir_len + sep_len + name_len >= out_size) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  memcpy(out, dir, dir_len);
+  if (sep_len)
+    out[dir_len] = '/';
+  memcpy(out + dir_len + sep_len, name, name_len + 1);
+  return 0;
+}
+
 int fs_is_stream_path(const char *path) {
 #if defined(_WIN32) || defined(_WIN64)
   // Callers run this after fs_is_absolute, so a surviving colon is a stream

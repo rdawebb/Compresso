@@ -212,7 +212,11 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
   const char *name;
   while ((name = fs_readdir(dir)) != NULL) {
     char full_path[FS_PATH_MAX];
-    snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
+    if (fs_join(full_path, sizeof(full_path), dir_path, name) != 0) {
+      fs_closedir(dir);
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir_path);
+      return -1;
+    }
 
     ArchiveEntry *ae = create_entry_from_path(full_path, prefix_len);
     if (!ae) {
@@ -503,10 +507,9 @@ static uint64_t sum_directory_size(const char *dir_path) {
   const char *name;
   while ((name = fs_readdir(dir)) != NULL) {
     char full_path[FS_PATH_MAX];
-    snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
-
     fs_stat st;
-    if (fs_stat_path(full_path, &st) != 0)
+    if (fs_join(full_path, sizeof(full_path), dir_path, name) != 0 ||
+        fs_stat_path(full_path, &st) != 0)
       continue;
 
     if (st.type == FS_TYPE_DIR)
@@ -744,7 +747,11 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
 
       if (policy->overwrite_existing == 0) {
         char out_path[FS_PATH_MAX];
-        snprintf(out_path, sizeof(out_path), "%s/%s", output_dir, entry.path);
+        if (fs_join(out_path, sizeof(out_path), output_dir, entry.path) != 0) {
+          PyErr_SetFromErrnoWithFilename(PyExc_OSError, entry.path);
+          entry_reset(&entry);
+          return -1;
+        }
 
         fs_stat st;
         if (fs_stat_path(out_path, &st) == 0) {
@@ -883,8 +890,13 @@ static int extract_entries(const CArchive *archive, void *reader,
     for (size_t i = 0; i < num_renames; i++) {
       if (renames[i].old_len > best_len &&
           strncmp(entry.path, renames[i].old_prefix, renames[i].old_len) == 0) {
-        snprintf(rewritten, sizeof(rewritten), "%s%s", renames[i].new_prefix,
-                 entry.path + renames[i].old_len);
+        if (fs_join(rewritten, sizeof(rewritten), renames[i].new_prefix,
+                    entry.path + renames[i].old_len) != 0) {
+          PyErr_SetFromErrnoWithFilename(PyExc_OSError, entry.path);
+          entry_reset(&entry);
+          result = -1;
+          goto cleanup;
+        }
         effective_path = rewritten;
         best_len = renames[i].old_len;
       }
@@ -906,7 +918,12 @@ static int extract_entries(const CArchive *archive, void *reader,
     }
 
     char out_path[FS_PATH_MAX];
-    snprintf(out_path, sizeof(out_path), "%s/%s", output_dir, effective_path);
+    if (fs_join(out_path, sizeof(out_path), output_dir, effective_path) != 0) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, entry.path);
+      entry_reset(&entry);
+      result = -1;
+      goto cleanup;
+    }
 
     if (entry.type == ENTRY_DIR) {
       uint32_t dir_mode = policy->preserve_permissions ? entry.mode : 0755;
