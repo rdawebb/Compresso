@@ -1,0 +1,2 @@
+# bash fails on CRLF, so a Windows checkout must keep shell scripts LF for WSL
+*.sh text eol=lf
