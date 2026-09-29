@@ -53,17 +53,23 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
                      int decompress, FILE *src, FILE *dst, CoreContext *ctx) {
   size_t out_size = ops->out_chunk ? ops->out_chunk : CODEC_CHUNK;
 
-  // A stateless engine is allowed, but safe_malloc rejects a zero size
-  void *state = ops->state_size ? safe_malloc(ops->state_size) : NULL;
+  // A stateless engine is allowed, so a NULL state isn't a failure by itself
+  void *state = NULL;
+  if (ops->state_size) {
+    state = calloc(1, ops->state_size);
+    if (!state) {
+      PyErr_NoMemory();
+      return -1;
+    }
+  }
   unsigned char *in_buf = (unsigned char *)safe_malloc(CODEC_CHUNK);
   unsigned char *out_buf = (unsigned char *)safe_malloc(out_size);
-  if ((ops->state_size && !state) || !in_buf || !out_buf) {
+  if (!in_buf || !out_buf) {
     free(state);
     free(in_buf);
     free(out_buf);
     return -1;
   }
-  memset(state, 0, ops->state_size);
 
   if (ops->begin(state, params, decompress) != 0) {
     set_failure(ops, params, state, FAIL_CODEC, decompress);
