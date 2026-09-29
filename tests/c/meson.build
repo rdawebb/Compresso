@@ -94,7 +94,7 @@ suites = {
   'test_context.c': 'core',
   'test_format_detection.c': 'core',
   'test_pipeline.c': 'core',
-  'test_router.c': 'core',
+  'test_registry.c': 'core',
   'test_codec.c': 'codec',
   'test_backends.c': 'compression',
   'test_standalone.c': 'standalone',
