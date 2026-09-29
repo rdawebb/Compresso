@@ -41,17 +41,19 @@ inc = include_directories('support', 'unity', csrc)
 
 unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 
-# _core.c is left out: it reaches the archive API and its libarchive/libzip
-# stack; support/test_stubs.c supplies the comp_* exception globals it owns instead
+# _core.c and archives.c are left out: they reach libarchive/libzip;
+# support/test_stubs.c supplies the exception globals and archive lookup instead
 under_test = static_library('under_test',
   'support/test_stubs.c',
   'support/backend_io.c',
   'support/files.c',
   csrc / 'common.c',
+  csrc / 'compress.c',
   csrc / 'format.c',
   csrc / 'fsutil.c',
   csrc / 'registry.c',
   csrc / 'strategy.c',
+  csrc / 'validate.c',
   csrc / 'codec/codec.c',
   csrc / 'codec/zstd.c',
   csrc / 'codec/lz4.c',
@@ -96,8 +98,10 @@ suites = {
   'test_fsutil.c': 'core',
   'test_pipeline.c': 'core',
   'test_registry.c': 'core',
+  'test_validate.c': 'core',
   'test_codec.c': 'codec',
   'test_backends.c': 'compression',
+  'test_compress.c': 'compression',
   'test_standalone.c': 'standalone',
 }
 
