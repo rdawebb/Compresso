@@ -57,8 +57,24 @@ jobs:
       # doubles the build for artifacts the extension never links against
       VCPKG_DEFAULT_TRIPLET: x64-windows-release
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+      # Archives are keyed by each port's ABI hash & rebuilt on mismatch
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg_bincache,readwrite
     steps:
       - uses: actions/checkout@v7
+
+      # Prefix-only lookup restores the newest archive set; the save below is
+      # keyed on its contents, so a new entry is written only when a port rebuilt
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg_bincache
+          key: vcpkg-bincache-${{ env.VCPKG_DEFAULT_TRIPLET }}-
+          restore-keys: vcpkg-bincache-${{ env.VCPKG_DEFAULT_TRIPLET }}-
+
+      - name: Create vcpkg binary cache dir
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path vcpkg_bincache | Out-Null
 
       - name: Install C libraries (Windows)
         uses: lukka/run-vcpkg@v11
@@ -66,6 +82,13 @@ jobs:
           vcpkgGitCommitId: 04a9d8e5212d01ee1dd9478eadd9caade4f8b0d4
           runVcpkgInstall: true
           runVcpkgFormatString: "[`install`, `--recurse`, `--clean-after-build`, `--x-install-root`, `$[env.VCPKG_INSTALLED_DIR]`, `--triplet`, `$[env.VCPKG_DEFAULT_TRIPLET]`]"
+
+      - name: Save vcpkg binary cache
+        if: steps.vcpkg-cache.outputs.cache-matched-key != format('vcpkg-bincache-{0}-{1}', env.VCPKG_DEFAULT_TRIPLET, hashFiles('vcpkg_bincache/**'))
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg_bincache
+          key: vcpkg-bincache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('vcpkg_bincache/**') }}
 
       - name: Show installed tree
         shell: pwsh
