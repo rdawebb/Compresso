@@ -11,8 +11,10 @@ static inline int magic_is_gzip(const unsigned char *m, size_t n) {
   return n >= 2 && m[0] == 0x1f && m[1] == 0x8b;
 }
 
+// "BZh" then the block size as a digit, 1-9 (100-900 KB)
 static inline int magic_is_bzip2(const unsigned char *m, size_t n) {
-  return n >= 2 && m[0] == 'B' && m[1] == 'Z';
+  return n >= 4 && m[0] == 'B' && m[1] == 'Z' && m[2] == 'h' && m[3] >= '1' &&
+         m[3] <= '9';
 }
 
 static inline int magic_is_xz(const unsigned char *m, size_t n) {

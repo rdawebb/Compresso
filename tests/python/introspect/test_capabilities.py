@@ -9,24 +9,12 @@ from compresso.introspect.capabilities import (
     list_capabilities,
 )
 
+# The IDs are written into every .comp header, so they must never change
+BACKEND_IDS = {"zlib": 1, "bzip2": 2, "lzma": 3, "zstd": 4, "lz4": 5, "snappy": 6}
+
 
 class TestBackendCapabilities:
     """Test the BackendCapabilities dataclass."""
-
-    def test_capabilities_creation(self) -> None:
-        """Test creating a BackendCapabilities instance."""
-        cap = BackendCapabilities(name="zlib", id=1, min_level=0, max_level=9)
-
-        assert cap.name == "zlib"
-        assert cap.id == 1
-        assert (cap.min_level, cap.max_level) == (0, 9)
-
-    def test_capabilities_is_available(self) -> None:
-        """Test is_available method."""
-        cap = BackendCapabilities(name="test", id=99, min_level=None, max_level=None)
-
-        # Always returns True for compiled backends
-        assert cap.is_available() is True
 
     def test_capabilities_frozen(self) -> None:
         """Test that BackendCapabilities is frozen (immutable)."""
@@ -58,40 +46,6 @@ class TestAcceptsLevel:
 class TestListCapabilities:
     """Test the list_capabilities function."""
 
-    def test_list_capabilities_returns_list(self) -> None:
-        """Test that list_capabilities returns a list."""
-        caps = list_capabilities()
-        assert isinstance(caps, list)
-
-    def test_list_capabilities_not_empty(self) -> None:
-        """Test that capabilities list is not empty."""
-        caps = list_capabilities()
-        assert len(caps) > 0
-
-    def test_list_capabilities_contains_backend_capabilities(self) -> None:
-        """Test that list contains BackendCapabilities instances."""
-        caps = list_capabilities()
-        for cap in caps:
-            assert isinstance(cap, BackendCapabilities)
-
-    def test_list_capabilities_has_zlib(self) -> None:
-        """Test that zlib is in capabilities (should always be available)."""
-        caps = list_capabilities()
-        names = [cap.name for cap in caps]
-        assert "zlib" in names
-
-    def test_list_capabilities_unique_names(self) -> None:
-        """Test that all backend names are unique."""
-        caps = list_capabilities()
-        names = [cap.name for cap in caps]
-        assert len(names) == len(set(names))
-
-    def test_list_capabilities_unique_ids(self) -> None:
-        """Test that all backend IDs are unique."""
-        caps = list_capabilities()
-        ids = [cap.id for cap in caps]
-        assert len(ids) == len(set(ids))
-
     def test_list_capabilities_cached(self) -> None:
         """Test that capabilities are cached."""
         caps1 = list_capabilities()
@@ -103,21 +57,6 @@ class TestListCapabilities:
 
 class TestGetByName:
     """Test the get_by_name function."""
-
-    def test_get_by_name_zlib(self) -> None:
-        """Test getting zlib backend by name."""
-        cap = get_by_name("zlib")
-        assert cap is not None
-        assert cap.name == "zlib"
-        assert isinstance(cap, BackendCapabilities)
-
-    @pytest.mark.parametrize("name", ["zlib", "bzip2", "lzma", "zstd", "lz4", "snappy"])
-    def test_get_by_name_various_backends(self, name: str) -> None:
-        """Test getting various backends by name."""
-        cap = get_by_name(name)
-        if cap is not None:
-            assert cap.name == name
-            assert isinstance(cap, BackendCapabilities)
 
     def test_get_by_name_invalid(self) -> None:
         """Test getting a non-existent backend."""
@@ -142,67 +81,27 @@ class TestGetByName:
 class TestGetById:
     """Test the get_by_id function."""
 
-    def test_get_by_id_valid(self) -> None:
-        """Test getting a backend by valid ID."""
-        # Get a valid ID from the list
+    @pytest.mark.parametrize("algo_id", [9999, -1, 0])
+    def test_unknown_id_is_none(self, algo_id: int) -> None:
+        """Test that an ID no backend has, including the unused slot 0, finds nothing."""
+        assert get_by_id(algo_id) is None
+
+
+class TestBackendLookup:
+    """Test that listing and both lookups agree on every compiled backend."""
+
+    def test_list_holds_exactly_the_compiled_backends(self) -> None:
+        """Test the full name-to-ID mapping, which also rules out duplicates."""
         caps = list_capabilities()
-        if caps:
-            valid_id = caps[0].id
-            cap = get_by_id(valid_id)
-            assert cap is not None
-            assert cap.id == valid_id
-            assert isinstance(cap, BackendCapabilities)
 
-    def test_get_by_id_invalid(self) -> None:
-        """Test getting a backend by invalid ID."""
-        cap = get_by_id(9999)
-        assert cap is None
+        assert {cap.name: cap.id for cap in caps} == BACKEND_IDS
+        assert len(caps) == len(BACKEND_IDS)
 
-    def test_get_by_id_negative(self) -> None:
-        """Test getting a backend by negative ID."""
-        cap = get_by_id(-1)
-        assert cap is None
+    @pytest.mark.parametrize("name,algo_id", BACKEND_IDS.items())
+    def test_name_and_id_find_the_same_backend(self, name: str, algo_id: int) -> None:
+        """Test that both lookups return the one cached object for a backend."""
+        by_name = get_by_name(name)
 
-    def test_get_by_id_zero(self) -> None:
-        """Test getting a backend with ID 0."""
-        cap = get_by_id(0)
-        if cap is not None:
-            assert isinstance(cap, BackendCapabilities)
-
-    @pytest.mark.parametrize("algo_id", [1, 2, 3, 4, 5, 6])
-    def test_get_by_id_common_ids(self, algo_id: int) -> None:
-        """Test getting backends by common algorithm IDs."""
-        cap = get_by_id(algo_id)
-        if cap is not None:
-            assert cap.id == algo_id
-            assert isinstance(cap, BackendCapabilities)
-
-
-class TestCapabilitiesIntegration:
-    """Integration tests for capabilities functions."""
-
-    def test_list_and_get_by_name_consistency(self) -> None:
-        """Test that list_capabilities and get_by_name are consistent."""
-        caps = list_capabilities()
-        for cap in caps:
-            retrieved = get_by_name(cap.name)
-            assert retrieved is not None
-            assert retrieved.name == cap.name
-            assert retrieved.id == cap.id
-
-    def test_list_and_get_by_id_consistency(self) -> None:
-        """Test that list_capabilities and get_by_id are consistent."""
-        caps = list_capabilities()
-        for cap in caps:
-            retrieved = get_by_id(cap.id)
-            assert retrieved is not None
-            assert retrieved.name == cap.name
-            assert retrieved.id == cap.id
-
-    def test_get_by_name_and_id_consistency(self) -> None:
-        """Test that get_by_name and get_by_id return the same backend."""
-        caps = list_capabilities()
-        for cap in caps:
-            by_name = get_by_name(cap.name)
-            by_id = get_by_id(cap.id)
-            assert by_name is by_id  # Should be the same object (cached)
+        assert by_name is not None
+        assert (by_name.name, by_name.id) == (name, algo_id)
+        assert get_by_id(algo_id) is by_name

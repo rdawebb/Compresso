@@ -1,132 +1,105 @@
+// Makes Unity define TEST_RANGE; the runner generator expands each one
+#define UNITY_SUPPORT_TEST_CASES
+
+#include "archives.h"
 #include "unity.h"
-#include "../../src/compresso/csrc/archives.h"
-#include <string.h>
+
+#define COUNT(array) (sizeof(array) / sizeof((array)[0]))
+
+static const struct {
+  const char *name;
+  int level;
+  CompressionPipeline expected;
+} FROM_NAME[] = {
+    {"tar.gz", 5, {ARCHIVE_TAR, FORMAT_GZIP, 5}},
+    {"tzst", -1, {ARCHIVE_TAR, FORMAT_ZSTD, -1}}, // Combined shorthand
+    {"tar", -1, {ARCHIVE_TAR, FORMAT_UNKNOWN, -1}},
+    {"zip", -1, {ARCHIVE_ZIP, FORMAT_UNKNOWN, -1}},
+    {"gzip", -1, {ARCHIVE_NONE, FORMAT_GZIP, -1}},
+    {"nonsense", -1, {ARCHIVE_NONE, FORMAT_UNKNOWN, -1}},
+};
+
+static const struct {
+  CompressionPipeline pipeline;
+  const char *expected;
+} DISPLAY_NAMES[] = {
+    {{ARCHIVE_TAR, FORMAT_GZIP, -1}, "tar.gz"},
+    {{ARCHIVE_TAR, FORMAT_UNKNOWN, -1}, "tar"},
+    {{ARCHIVE_NONE, FORMAT_ZSTD, -1}, "zstd"},
+};
+
+static const char *const COMBINED_NAMES[] = {"tar.gz", "tar.bz2", "tar.xz",
+                                             "tar.zst", "tar.lz4"};
+
+static const struct {
+  const char *label;
+  CompressionPipeline pipeline;
+  int valid;
+} VALIDITY[] = {
+    {"tar with a codec", {ARCHIVE_TAR, FORMAT_GZIP, -1}, 1},
+    {"plain tar", {ARCHIVE_TAR, FORMAT_UNKNOWN, -1}, 1},
+    {"zip", {ARCHIVE_ZIP, FORMAT_UNKNOWN, -1}, 1},
+    {"standalone codec", {ARCHIVE_NONE, FORMAT_ZSTD, -1}, 1},
+    {"empty pipeline", {ARCHIVE_NONE, FORMAT_UNKNOWN, -1}, 0},
+    // ZIP compresses internally, so an external codec stage is not allowed
+    {"zip with a codec", {ARCHIVE_ZIP, FORMAT_GZIP, -1}, 0},
+    // FORMAT_ZIP is not a standalone codec, so it cannot be a codec stage
+    {"unresolvable codec", {ARCHIVE_TAR, FORMAT_ZIP, -1}, 0},
+};
+
+// Each TEST_RANGE below must span exactly its table's rows
+_Static_assert(COUNT(FROM_NAME) == 6, "update TEST_RANGE");
+_Static_assert(COUNT(DISPLAY_NAMES) == 3, "update TEST_RANGE");
+_Static_assert(COUNT(COMBINED_NAMES) == 5, "update TEST_RANGE");
+_Static_assert(COUNT(VALIDITY) == 7, "update TEST_RANGE");
 
 void setUp(void) {}
 void tearDown(void) {}
 
-// ---- pipeline_from_name ----
+TEST_RANGE([0, 5, 1])
+void test_pipeline_from_name(int index) {
+  CompressionPipeline p =
+      pipeline_from_name(FROM_NAME[index].name, FROM_NAME[index].level);
 
-void test_name_combined_dotted(void) {
-    CompressionPipeline p = pipeline_from_name("tar.gz", 5);
-    TEST_ASSERT_EQUAL(ARCHIVE_TAR, p.archive);
-    TEST_ASSERT_EQUAL(FORMAT_GZIP, p.codec);
-    TEST_ASSERT_EQUAL_INT(5, p.compression_level);
+  TEST_ASSERT_EQUAL_MESSAGE(FROM_NAME[index].expected.archive, p.archive,
+                            FROM_NAME[index].name);
+  TEST_ASSERT_EQUAL_MESSAGE(FROM_NAME[index].expected.codec, p.codec,
+                            FROM_NAME[index].name);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(FROM_NAME[index].expected.compression_level,
+                                p.compression_level, FROM_NAME[index].name);
 }
-
-void test_name_combined_shorthand(void) {
-    CompressionPipeline p = pipeline_from_name("tzst", -1);
-    TEST_ASSERT_EQUAL(ARCHIVE_TAR, p.archive);
-    TEST_ASSERT_EQUAL(FORMAT_ZSTD, p.codec);
-}
-
-void test_name_plain_tar(void) {
-    CompressionPipeline p = pipeline_from_name("tar", -1);
-    TEST_ASSERT_EQUAL(ARCHIVE_TAR, p.archive);
-    TEST_ASSERT_EQUAL(FORMAT_UNKNOWN, p.codec);
-}
-
-void test_name_zip(void) {
-    CompressionPipeline p = pipeline_from_name("zip", -1);
-    TEST_ASSERT_EQUAL(ARCHIVE_ZIP, p.archive);
-    TEST_ASSERT_EQUAL(FORMAT_UNKNOWN, p.codec);
-}
-
-void test_name_standalone_codec(void) {
-    CompressionPipeline p = pipeline_from_name("gzip", -1);
-    TEST_ASSERT_EQUAL(ARCHIVE_NONE, p.archive);
-    TEST_ASSERT_EQUAL(FORMAT_GZIP, p.codec);
-}
-
-void test_name_unknown(void) {
-    CompressionPipeline p = pipeline_from_name("nonsense", -1);
-    TEST_ASSERT_EQUAL(ARCHIVE_NONE, p.archive);
-    TEST_ASSERT_EQUAL(FORMAT_UNKNOWN, p.codec);
-}
-
-// ---- archive_id_from_format ----
 
 void test_archive_id_from_format(void) {
-    TEST_ASSERT_EQUAL(ARCHIVE_TAR, archive_id_from_format(FORMAT_TAR));
-    TEST_ASSERT_EQUAL(ARCHIVE_ZIP, archive_id_from_format(FORMAT_ZIP));
-    TEST_ASSERT_EQUAL(ARCHIVE_NONE, archive_id_from_format(FORMAT_GZIP));
-    TEST_ASSERT_EQUAL(ARCHIVE_NONE, archive_id_from_format(FORMAT_UNKNOWN));
+  TEST_ASSERT_EQUAL(ARCHIVE_TAR, archive_id_from_format(FORMAT_TAR));
+  TEST_ASSERT_EQUAL(ARCHIVE_ZIP, archive_id_from_format(FORMAT_ZIP));
+  TEST_ASSERT_EQUAL(ARCHIVE_NONE, archive_id_from_format(FORMAT_GZIP));
+  TEST_ASSERT_EQUAL(ARCHIVE_NONE, archive_id_from_format(FORMAT_UNKNOWN));
 }
 
-// ---- pipeline_display_name ----
+TEST_RANGE([0, 2, 1])
+void test_pipeline_display_name(int index) {
+  char buf[32];
+  pipeline_display_name(&DISPLAY_NAMES[index].pipeline, buf, sizeof(buf));
 
-void test_display_name_combined(void) {
-    CompressionPipeline p = {ARCHIVE_TAR, FORMAT_GZIP, -1};
-    char buf[32];
-    pipeline_display_name(&p, buf, sizeof(buf));
-    TEST_ASSERT_EQUAL_STRING("tar.gz", buf);
+  TEST_ASSERT_EQUAL_STRING(DISPLAY_NAMES[index].expected, buf);
 }
 
-void test_display_name_plain_tar(void) {
-    CompressionPipeline p = {ARCHIVE_TAR, FORMAT_UNKNOWN, -1};
-    char buf[32];
-    pipeline_display_name(&p, buf, sizeof(buf));
-    TEST_ASSERT_EQUAL_STRING("tar", buf);
+TEST_RANGE([0, 4, 1])
+void test_combined_name_round_trips_through_display_name(int index) {
+  CompressionPipeline p = pipeline_from_name(COMBINED_NAMES[index], -1);
+  char buf[32];
+  pipeline_display_name(&p, buf, sizeof(buf));
+
+  TEST_ASSERT_EQUAL_STRING(COMBINED_NAMES[index], buf);
 }
 
-void test_display_name_standalone(void) {
-    CompressionPipeline p = {ARCHIVE_NONE, FORMAT_ZSTD, -1};
-    char buf[32];
-    pipeline_display_name(&p, buf, sizeof(buf));
-    TEST_ASSERT_EQUAL_STRING("zstd", buf);
+TEST_RANGE([0, 6, 1])
+void test_pipeline_is_valid(int index) {
+  TEST_ASSERT_EQUAL_INT_MESSAGE(VALIDITY[index].valid,
+                                pipeline_is_valid(&VALIDITY[index].pipeline) != 0,
+                                VALIDITY[index].label);
 }
 
-// ---- pipeline round-trip: name -> display name ----
-
-void test_name_roundtrip(void) {
-    const char *names[] = {"tar.gz", "tar.bz2", "tar.xz", "tar.zst", "tar.lz4"};
-    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-        CompressionPipeline p = pipeline_from_name(names[i], -1);
-        char buf[32];
-        pipeline_display_name(&p, buf, sizeof(buf));
-        TEST_ASSERT_EQUAL_STRING(names[i], buf);
-    }
-}
-
-// ---- pipeline_is_valid ----
-
-void test_valid_tar_with_codec(void) {
-    CompressionPipeline p = {ARCHIVE_TAR, FORMAT_GZIP, -1};
-    TEST_ASSERT_TRUE(pipeline_is_valid(&p));
-}
-
-void test_valid_plain_tar(void) {
-    CompressionPipeline p = {ARCHIVE_TAR, FORMAT_UNKNOWN, -1};
-    TEST_ASSERT_TRUE(pipeline_is_valid(&p));
-}
-
-void test_valid_zip(void) {
-    CompressionPipeline p = {ARCHIVE_ZIP, FORMAT_UNKNOWN, -1};
-    TEST_ASSERT_TRUE(pipeline_is_valid(&p));
-}
-
-void test_valid_standalone_codec(void) {
-    CompressionPipeline p = {ARCHIVE_NONE, FORMAT_ZSTD, -1};
-    TEST_ASSERT_TRUE(pipeline_is_valid(&p));
-}
-
-void test_invalid_empty_pipeline(void) {
-    CompressionPipeline p = {ARCHIVE_NONE, FORMAT_UNKNOWN, -1};
-    TEST_ASSERT_FALSE(pipeline_is_valid(&p));
-}
-
-void test_invalid_zip_with_codec(void) {
-    // ZIP compresses internally; an external codec stage is not allowed.
-    CompressionPipeline p = {ARCHIVE_ZIP, FORMAT_GZIP, -1};
-    TEST_ASSERT_FALSE(pipeline_is_valid(&p));
-}
-
-void test_invalid_unresolvable_codec(void) {
-    // FORMAT_ZIP is not a standalone codec, so it cannot be a codec stage.
-    CompressionPipeline p = {ARCHIVE_TAR, FORMAT_ZIP, -1};
-    TEST_ASSERT_FALSE(pipeline_is_valid(&p));
-}
-
-void test_invalid_null(void) {
-    TEST_ASSERT_FALSE(pipeline_is_valid(NULL));
+void test_null_pipeline_is_invalid(void) {
+  TEST_ASSERT_FALSE(pipeline_is_valid(NULL));
 }

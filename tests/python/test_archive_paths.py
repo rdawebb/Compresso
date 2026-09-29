@@ -17,22 +17,7 @@ from compresso._core import (
     list_archive_contents,
 )
 
-ARCHIVE_FORMATS = [("tar", ".tar"), ("tar.zst", ".tar.zst"), ("zip", ".zip")]
-
 PAYLOAD = b"compresso entry name test\n"
-
-
-@pytest.fixture(params=ARCHIVE_FORMATS, ids=[f for f, _ in ARCHIVE_FORMATS])
-def archive_format(request: pytest.FixtureRequest) -> tuple[str, str]:
-    """Each archive format paired with its extension.
-
-    Args:
-        request: The pytest request object.
-
-    Returns:
-        The archive format and extension as a tuple.
-    """
-    return request.param
 
 
 def stored_names(archive: Path) -> set[str]:

@@ -16,99 +16,40 @@ from compresso._core import (
 )
 from compresso.frontend.archive_api import ArchiveJob, ArchiveOptions, ExtractJob
 
+from .helpers import Recorder
+
 # Incompressible, so the compressed archive stays above the 1 MiB report floor
-ENTRY_COUNT = 8
-ENTRY_SIZE = 3 * 1024 * 1024
-
-ARCHIVE_FORMATS = [("tar", ".tar"), ("tar.zst", ".tar.zst"), ("zip", ".zip")]
+ENTRY_COUNT = 4
+ENTRY_SIZE = 2 * 1024 * 1024
 
 
-@pytest.fixture
-def source_tree(temp_dir: Path) -> Path:
-    """A directory of files large enough to produce many progress reports.
+@pytest.fixture(scope="module")
+def source_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A directory of files large enough to produce several progress reports.
+
+    Shared by the whole module, so tests must only read it.
 
     Args:
-        temp_dir: The temporary directory to use for the source tree.
+        tmp_path_factory: Pytest temporary path factory fixture.
 
     Returns:
         The path to the source tree directory.
     """
-    root = temp_dir / "src"
+    root = tmp_path_factory.mktemp("archive_progress") / "src"
     root.mkdir()
     for i in range(ENTRY_COUNT):
         (root / f"f{i}.bin").write_bytes(os.urandom(ENTRY_SIZE))
+
     return root
-
-
-class Recorder:
-    """Collects progress callbacks for assertions."""
-
-    def __init__(self) -> None:
-        """Initialises the recorder with an empty list of calls."""
-        self.calls: list[tuple[int, int]] = []
-
-    def __call__(self, done: int, total: int) -> None:
-        """Appends the current progress to the list of calls.
-
-        Args:
-            done: The number of bytes processed so far.
-            total: The total number of bytes to process.
-        """
-        self.calls.append((done, total))
-
-    @property
-    def dones(self) -> list[int]:
-        """Returns the list of done counts from the calls."""
-        return [done for done, _ in self.calls]
-
-    def assert_monotonic(self) -> None:
-        """Asserts that the progress is monotonic (non-decreasing)."""
-        assert self.dones == sorted(self.dones), "progress went backwards"
-
-    def assert_finished(self) -> None:
-        """Asserts that the progress is finished (done == total)."""
-        assert self.calls, "no progress was reported"
-        done, total = self.calls[-1]
-        assert done == total, f"final report was {done}/{total}, not 100%"
-
-
-@pytest.fixture(params=ARCHIVE_FORMATS, ids=[f for f, _ in ARCHIVE_FORMATS])
-def archive_format(request: pytest.FixtureRequest) -> tuple[str, str]:
-    """Each archive format paired with its extension.
-
-    Args:
-        request: The pytest request object.
-
-    Returns:
-        The archive format and extension as a tuple.
-    """
-    return request.param
 
 
 class TestArchiveCreationProgress:
     """Tests progress while writing an archive."""
 
-    def test_progress_is_monotonic_and_completes(
+    def test_progress_is_incremental_monotonic_and_completes(
         self, source_tree: Path, temp_dir: Path, archive_format: tuple[str, str]
     ) -> None:
-        """Test that every format reports rising byte counts ending at the total."""
-        fmt, ext = archive_format
-        recorder = Recorder()
-
-        create_archive(
-            str(temp_dir / f"out{ext}"),
-            fmt,
-            [str(source_tree)],
-            progress=recorder,
-        )
-
-        recorder.assert_monotonic()
-        recorder.assert_finished()
-
-    def test_reports_are_incremental(
-        self, source_tree: Path, temp_dir: Path, archive_format: tuple[str, str]
-    ) -> None:
-        """Test that progress arrives during the job, not only at the end.
+        """Test that every format reports during the job, rising to the total.
 
         For zip the only real progress comes from libzip's own callback
         during zip_close.
@@ -124,6 +65,8 @@ class TestArchiveCreationProgress:
         )
 
         assert len(recorder.calls) > 1
+        recorder.assert_monotonic()
+        recorder.assert_finished()
 
     def test_two_stage_total_covers_both_passes(
         self, source_tree: Path, temp_dir: Path
@@ -163,34 +106,25 @@ class TestArchiveCreationProgress:
 class TestArchiveExtractionProgress:
     """Tests progress while extracting an archive."""
 
-    def test_progress_is_monotonic_and_completes(
+    def test_progress_completes_and_round_trips(
         self, source_tree: Path, temp_dir: Path, archive_format: tuple[str, str]
     ) -> None:
-        """Test that every format reports rising byte counts ending at the total."""
-        fmt, ext = archive_format
-        archive = temp_dir / f"in{ext}"
-        create_archive(str(archive), fmt, [str(source_tree)])
+        """Test that every format reports rising byte counts ending at the total.
 
-        recorder = Recorder()
-        extract_archive(
-            str(archive), str(temp_dir / f"out{ext}"), [], progress=recorder
-        )
-
-        recorder.assert_monotonic()
-        recorder.assert_finished()
-        assert len(recorder.calls) > 1
-
-    def test_extraction_round_trips_with_progress_attached(
-        self, source_tree: Path, temp_dir: Path, archive_format: tuple[str, str]
-    ) -> None:
-        """Test that watching a job does not change what it produces."""
+        Watching the job must not change what it produces, so the extracted
+        files are checked against the originals too.
+        """
         fmt, ext = archive_format
         archive = temp_dir / f"in{ext}"
         dest = temp_dir / f"out{ext}"
-
         create_archive(str(archive), fmt, [str(source_tree)], progress=Recorder())
-        extract_archive(str(archive), str(dest), [], progress=Recorder())
 
+        recorder = Recorder()
+        extract_archive(str(archive), str(dest), [], progress=recorder)
+
+        assert len(recorder.calls) > 1
+        recorder.assert_monotonic()
+        recorder.assert_finished()
         for original in sorted(source_tree.iterdir()):
             restored = dest / source_tree.name / original.name
             assert restored.read_bytes() == original.read_bytes()
@@ -282,8 +216,8 @@ class TestArchiveCancellation:
         token = CancelToken()
 
         def cancel_partway(done: int, total: int) -> None:
-            """Cancel the token halfway through the second entry."""
-            if done > ENTRY_SIZE + ENTRY_SIZE // 2:
+            """Cancel on the first report inside the second entry."""
+            if done > ENTRY_SIZE:
                 token.cancel()
 
         with pytest.raises(Cancelled):

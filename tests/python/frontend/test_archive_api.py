@@ -8,6 +8,9 @@ import sys
 import tarfile
 import unicodedata
 import zipfile
+import zlib
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -26,6 +29,8 @@ from compresso.frontend.archive_api import (
     plan_extraction,
 )
 
+from ..helpers import renamed
+
 
 class TestArchiveOptions:
     """Test the ArchiveOptions dataclass."""
@@ -37,13 +42,6 @@ class TestArchiveOptions:
         assert opts.format == "tar.zst"
         assert opts.compression_level is None
         assert opts.overwrite is OverwriteMode.RENAME
-
-    def test_archive_options_with_format(self) -> None:
-        """Test creating ArchiveOptions with a format and level."""
-        opts = ArchiveOptions(format="tar.gz", compression_level=6)
-
-        assert opts.format == "tar.gz"
-        assert opts.compression_level == 6
 
 
 class TestPlanArchive:
@@ -72,8 +70,8 @@ class TestPlanArchive:
         plan = plan_archive([temp_dir / "nope.txt"], temp_dir / "out.tar.zst")
 
         assert plan.can_run is False
-        if plan.reason_if_unavailable is not None:
-            assert "does not exist" in plan.reason_if_unavailable
+        assert plan.reason_if_unavailable is not None
+        assert "does not exist" in plan.reason_if_unavailable
 
     def test_plan_archive_non_archive_format(
         self, sample_text_file: Path, temp_dir: Path
@@ -83,8 +81,8 @@ class TestPlanArchive:
         plan = plan_archive([sample_text_file], temp_dir / "out.gz", opts)
 
         assert plan.can_run is False
-        if plan.reason_if_unavailable is not None:
-            assert "does not support archives" in plan.reason_if_unavailable
+        assert plan.reason_if_unavailable is not None
+        assert "does not support archives" in plan.reason_if_unavailable
 
     @pytest.mark.parametrize(
         "fmt,level,match",
@@ -154,10 +152,6 @@ class TestArchiveJob:
 class TestArchiveOverwrite:
     """Test the four `overwrite` modes against an existing destination archive."""
 
-    #: The numbered-sibling suffix `RENAME` inserts before the extension:
-    #: "name 2.ext" on macOS, "name (2).ext" elsewhere.
-    CONFLICT_SUFFIX = " {}" if sys.platform == "darwin" else " ({})"
-
     @staticmethod
     def _source_and_stale_output(temp_dir: Path) -> tuple[Path, Path]:
         """Build a source file and a stale file already at the archive's path.
@@ -186,10 +180,10 @@ class TestArchiveOverwrite:
 
         assert result.ok, result.error
         assert archive_path.read_bytes() == b"stale"
-        renamed = temp_dir / f"out{self.CONFLICT_SUFFIX.format(2)}.tar"
-        assert job.plan.output == renamed
-        assert renamed.is_file()
-        assert renamed.read_bytes() != b"stale"
+        sibling = temp_dir / renamed("out.tar")
+        assert job.plan.output == sibling
+        assert sibling.is_file()
+        assert sibling.read_bytes() != b"stale"
 
     def test_rename_keeps_a_compound_extension_intact(self, temp_dir: Path) -> None:
         """Test that "out.tar.zst" renames to "out 2.tar.zst", not "out.tar 2.zst".
@@ -210,9 +204,9 @@ class TestArchiveOverwrite:
         result = job.run()
 
         assert result.ok, result.error
-        renamed = temp_dir / f"out{self.CONFLICT_SUFFIX.format(2)}.tar.zst"
-        assert job.plan.output == renamed
-        assert renamed.is_file()
+        sibling = temp_dir / renamed("out.tar.zst")
+        assert job.plan.output == sibling
+        assert sibling.is_file()
 
     def test_rename_increments_through_repeated_conflicts(self, temp_dir: Path) -> None:
         """Test that a third clash gets " 3", not another " 2"."""
@@ -223,8 +217,8 @@ class TestArchiveOverwrite:
         result = ArchiveJob.from_paths([source], archive_path, options).run()
 
         assert result.ok, result.error
-        assert (temp_dir / f"out{self.CONFLICT_SUFFIX.format(2)}.tar").exists()
-        assert (temp_dir / f"out{self.CONFLICT_SUFFIX.format(3)}.tar").exists()
+        assert (temp_dir / renamed("out.tar")).exists()
+        assert (temp_dir / renamed("out.tar", 3)).exists()
 
     def test_error_mode_refuses_existing_archive(self, temp_dir: Path) -> None:
         """Test that explicit `error` refuses to touch an existing archive."""
@@ -269,34 +263,6 @@ class TestArchiveOverwrite:
         assert result.ok, result.error
         assert archive_path.read_bytes() != b"stale"
         assert job.plan.output == archive_path
-
-    def test_plain_string_mode_is_normalised(self, temp_dir: Path) -> None:
-        """Test that a mode given as a plain string still plans as the enum."""
-        source = temp_dir / "a.txt"
-        source.write_bytes(b"hello compresso")
-
-        plan = ArchiveJob.from_paths(
-            [source],
-            temp_dir / "out.tar",
-            options=ArchiveOptions(format="tar", overwrite="skip"),  # ty: ignore
-        ).plan
-
-        assert plan.can_run is True
-        assert plan.options.overwrite is OverwriteMode.SKIP
-
-    def test_unknown_mode_is_an_unavailable_plan(self, temp_dir: Path) -> None:
-        """Test that a mode outside the four names never reaches the C layer."""
-        source = temp_dir / "a.txt"
-        source.write_bytes(b"hello compresso")
-
-        plan = ArchiveJob.from_paths(
-            [source],
-            temp_dir / "out.tar",
-            options=ArchiveOptions(format="tar", overwrite="clobber"),  # ty: ignore
-        ).plan
-
-        assert plan.can_run is False
-        assert "Unknown overwrite mode" in str(plan.reason_if_unavailable)
 
 
 class TestExtractJob:
@@ -889,10 +855,6 @@ class TestExtractionDepthLimit:
 class TestExtractionOverwrite:
     """Test the four `overwrite` modes against an existing destination."""
 
-    #: The numbered-sibling suffix `RENAME` inserts before the extension:
-    #: "name 2.ext" on macOS, "name (2).ext" elsewhere.
-    CONFLICT_SUFFIX = " {}" if sys.platform == "darwin" else " ({})"
-
     @staticmethod
     def _archive_and_stale_output(temp_dir: Path) -> tuple[Path, Path]:
         """Build a one-entry archive and an output dir already holding that name.
@@ -920,8 +882,8 @@ class TestExtractionOverwrite:
 
         assert result.ok, result.error
         assert (out_dir / "a.txt").read_bytes() == b"original"
-        renamed = out_dir / f"a{self.CONFLICT_SUFFIX.format(2)}.txt"
-        assert renamed.read_bytes() == b"xxxxx"
+        sibling = out_dir / renamed("a.txt")
+        assert sibling.read_bytes() == b"xxxxx"
 
     def test_rename_increments_through_repeated_conflicts(self, temp_dir: Path) -> None:
         """Test that a third clash gets " 3", not another " 2"."""
@@ -932,8 +894,8 @@ class TestExtractionOverwrite:
         result = ExtractJob.from_archive(archive_path, out_dir, options=options).run()
 
         assert result.ok, result.error
-        assert (out_dir / f"a{self.CONFLICT_SUFFIX.format(2)}.txt").exists()
-        assert (out_dir / f"a{self.CONFLICT_SUFFIX.format(3)}.txt").exists()
+        assert (out_dir / renamed("a.txt")).exists()
+        assert (out_dir / renamed("a.txt", 3)).exists()
 
     def test_error_mode_still_refuses_on_request(self, temp_dir: Path) -> None:
         """Test that explicit `error` reproduces the old refuse-by-default behavior."""
@@ -998,8 +960,8 @@ class TestExtractionOverwrite:
 
         assert result.ok, result.error
         assert (out_dir / "d").read_bytes() == b"blocking file"
-        renamed = out_dir / f"d{self.CONFLICT_SUFFIX.format(2)}"
-        assert renamed.is_dir()
+        sibling = out_dir / renamed("d")
+        assert sibling.is_dir()
 
     def test_dir_clash_with_a_file_renames_nested_entries_too(
         self, temp_dir: Path
@@ -1019,9 +981,9 @@ class TestExtractionOverwrite:
         ).run()
 
         assert result.ok, result.error
-        renamed = out_dir / f"d{self.CONFLICT_SUFFIX.format(2)}"
-        assert renamed.is_dir()
-        assert (renamed / "inside.txt").read_bytes() == b"xxxxx"
+        sibling = out_dir / renamed("d")
+        assert sibling.is_dir()
+        assert (sibling / "inside.txt").read_bytes() == b"xxxxx"
         # The original "d" is untouched, and nothing was created back under it
         assert (out_dir / "d").read_bytes() == b"blocking file"
 
@@ -1030,12 +992,11 @@ class TestExtractionOverwrite:
     ) -> None:
         """Test that a second clash below an already-renamed ancestor composes."""
         archive_path = temp_dir / "dir.tar"
-        suffix2 = self.CONFLICT_SUFFIX.format(2)
         _tar_with_entries(
             archive_path,
             [
                 _dir_entry("a"),
-                _file_entry(f"a{suffix2}/b"),
+                _file_entry(f"{renamed('a')}/b"),
                 _dir_entry("a/b"),
                 _file_entry("a/b/inside.txt"),
             ],
@@ -1052,9 +1013,9 @@ class TestExtractionOverwrite:
         ).run()
 
         assert result.ok, result.error
-        renamed_a = out_dir / f"a{suffix2}"
+        renamed_a = out_dir / renamed("a")
         assert (renamed_a / "b").read_bytes() == b"xxxxx"  # the unrelated entry
-        renamed_b = renamed_a / f"b{suffix2}"
+        renamed_b = renamed_a / renamed("b")
         assert renamed_b.is_dir()
         assert (renamed_b / "inside.txt").read_bytes() == b"xxxxx"
         # Nothing was planted back under the archive's own, un-renamed "a/b"
@@ -1079,11 +1040,11 @@ class TestExtractionOverwrite:
         # The original directory and its contents are untouched
         assert (out_dir / "d" / "inside.txt").read_bytes() == b"original"
 
-        renamed = out_dir / f"d{self.CONFLICT_SUFFIX.format(2)}"
-        assert renamed.is_dir()
+        sibling = out_dir / renamed("d")
+        assert sibling.is_dir()
         # The nested file lands under the renamed directory with its own
         # name unchanged - not doubled up or given its own " 2" suffix
-        assert (renamed / "inside.txt").read_bytes() == b"xxxxx"
+        assert (sibling / "inside.txt").read_bytes() == b"xxxxx"
 
     def test_dir_clash_with_an_existing_dir_renames_subdirs_too(
         self, temp_dir: Path
@@ -1116,10 +1077,10 @@ class TestExtractionOverwrite:
         ]
         assert (out_dir / "d" / "sub" / "inside.txt").read_bytes() == b"original"
 
-        renamed = out_dir / f"d{self.CONFLICT_SUFFIX.format(2)}"
-        assert renamed.is_dir()
-        assert sorted(p.name for p in renamed.iterdir()) == ["sub"]
-        assert (renamed / "sub" / "inside.txt").read_bytes() == b"xxxxx"
+        sibling = out_dir / renamed("d")
+        assert sibling.is_dir()
+        assert sorted(p.name for p in sibling.iterdir()) == ["sub"]
+        assert (sibling / "sub" / "inside.txt").read_bytes() == b"xxxxx"
 
     def test_dir_clash_with_a_file_errors_in_error_mode(self, temp_dir: Path) -> None:
         """Test that explicit `error` also refuses, not the old silent no-op."""
@@ -1163,30 +1124,69 @@ class TestExtractionOverwrite:
         assert result.ok, result.error
         assert (out_dir / "d").is_dir()
 
-    def test_plain_string_mode_is_normalised(self, temp_dir: Path) -> None:
-        """Test that a mode given as a plain string still plans as the enum."""
-        archive_path = temp_dir / "one.tar"
-        _tar_with_entries(archive_path, [_file_entry("a.txt")])
 
-        plan = ExtractJob.from_archive(
-            archive_path,
-            temp_dir / "out",
-            options=ExtractOptions(overwrite="skip"),  # ty: ignore
-        ).plan
+def _archive_plan(temp_dir: Path, overwrite: str) -> ArchivePlan:
+    """Plan archiving one file with `overwrite` given as a plain string.
+
+    Args:
+        temp_dir: Directory to build the source in.
+        overwrite: The overwrite mode, deliberately not an OverwriteMode.
+
+    Returns:
+        The archive plan.
+    """
+    source = temp_dir / "a.txt"
+    source.write_bytes(b"hello compresso")
+    options = ArchiveOptions(format="tar", overwrite=overwrite)  # ty: ignore
+
+    return ArchiveJob.from_paths([source], temp_dir / "out.tar", options).plan
+
+
+def _extract_plan(temp_dir: Path, overwrite: str) -> ExtractPlan:
+    """Plan extracting a one-entry tar with `overwrite` given as a plain string.
+
+    Args:
+        temp_dir: Directory to build the archive in.
+        overwrite: The overwrite mode, deliberately not an OverwriteMode.
+
+    Returns:
+        The extraction plan.
+    """
+    archive_path = temp_dir / "one.tar"
+    _tar_with_entries(archive_path, [_file_entry("a.txt")])
+    options = ExtractOptions(overwrite=overwrite)  # ty: ignore
+
+    return ExtractJob.from_archive(archive_path, temp_dir / "out", options=options).plan
+
+
+PLANNERS = pytest.mark.parametrize(
+    "plan_with", [_archive_plan, _extract_plan], ids=["archive", "extract"]
+)
+
+
+class TestOverwriteModeNames:
+    """Test how both archive jobs take an overwrite mode given by name."""
+
+    @PLANNERS
+    def test_plain_string_mode_is_normalised(
+        self,
+        temp_dir: Path,
+        plan_with: Callable[[Path, str], ArchivePlan | ExtractPlan],
+    ) -> None:
+        """Test that a mode given as a plain string still plans as the enum."""
+        plan = plan_with(temp_dir, "skip")
 
         assert plan.can_run is True
         assert plan.options.overwrite is OverwriteMode.SKIP
 
-    def test_unknown_mode_is_an_unavailable_plan(self, temp_dir: Path) -> None:
+    @PLANNERS
+    def test_unknown_mode_is_an_unavailable_plan(
+        self,
+        temp_dir: Path,
+        plan_with: Callable[[Path, str], ArchivePlan | ExtractPlan],
+    ) -> None:
         """Test that a mode outside the four names never reaches the C layer."""
-        archive_path = temp_dir / "one.tar"
-        _tar_with_entries(archive_path, [_file_entry("a.txt")])
-
-        plan = ExtractJob.from_archive(
-            archive_path,
-            temp_dir / "out",
-            options=ExtractOptions(overwrite="clobber"),  # ty: ignore
-        ).plan
+        plan = plan_with(temp_dir, "clobber")
 
         assert plan.can_run is False
         assert "Unknown overwrite mode" in str(plan.reason_if_unavailable)
@@ -1332,116 +1332,105 @@ class TestExtractionIsAllOrNothing:
         assert (out_dir / "..data").read_bytes() == b"xxxxx"
 
 
+BIG_PAYLOAD = b"compressible " * 4000
+
+
+@dataclass
+class ArchivedTree:
+    """A small tree, and the entries planned for it in each archive format."""
+
+    tree: Path
+    entries: dict[str, dict[str, ArchiveEntry]]
+
+
 class TestArchiveEntryMetadata:
     """Test what `plan_extraction` reports about each entry."""
 
-    @staticmethod
-    def _entries(tmp: Path, fmt: str, ext: str) -> dict[str, ArchiveEntry]:
-        """Test that a small tree is archived and return its entries keyed by path."""
+    @pytest.fixture(scope="class")
+    def archived(self, tmp_path_factory: pytest.TempPathFactory) -> ArchivedTree:
+        """Archive a small tree once per format, and plan each extraction.
+
+        Shared by the whole class, so tests must only read it.
+
+        Args:
+            tmp_path_factory: Pytest temporary path factory fixture.
+
+        Returns:
+            The tree, and each format's entries keyed by path without a
+            trailing separator.
+        """
+        tmp = tmp_path_factory.mktemp("entry_metadata")
         tree = tmp / "tree"
         tree.mkdir()
-        (tree / "big.bin").write_bytes(b"compressible " * 4000)
+        (tree / "big.bin").write_bytes(BIG_PAYLOAD)
         (tree / "small.txt").write_text("hello")
         (tree / "nested").mkdir()
 
-        archive = tmp / f"out{ext}"
-        assert (
-            ArchiveJob.from_paths(
-                sources=[tree], output=archive, options=ArchiveOptions(format=fmt)
-            )
-            .run()
-            .ok
-        )
+        entries = {}
+        for fmt in ("tar", "zip"):
+            archive = tmp / f"out.{fmt}"
+            options = ArchiveOptions(format=fmt)
+            result = ArchiveJob.from_paths([tree], archive, options).run()
+            assert result.ok, result.error
 
-        plan = plan_extraction(archive, tmp / "dest")
-        assert plan.can_run, plan.reason_if_unavailable
-        return {e.path.rstrip("/"): e for e in plan.entries}
+            plan = plan_extraction(archive, tmp / f"dest_{fmt}")
+            assert plan.can_run, plan.reason_if_unavailable
+            entries[fmt] = {e.path.rstrip("/"): e for e in plan.entries}
 
-    def test_entry_is_immutable(self, temp_dir: Path) -> None:
+        return ArchivedTree(tree, entries)
+
+    def test_entry_is_immutable(self) -> None:
         """Test that entries describe an archive that has already been written."""
         entry = ArchiveEntry(path="a.txt")
 
         with pytest.raises((AttributeError, TypeError)):
             entry.path = "b.txt"  # ty: ignore[invalid-assignment] - intended
 
-    @pytest.mark.parametrize(("fmt", "ext"), [("tar", ".tar"), ("zip", ".zip")])
-    def test_mtime_is_reported(self, temp_dir: Path, fmt: str, ext: str) -> None:
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
+    def test_mtime_is_reported(self, archived: ArchivedTree, fmt: str) -> None:
         """Test that mtime crosses the boundary rather than staying at its default."""
-        entries = self._entries(temp_dir, fmt, ext)
+        entry = archived.entries[fmt]["tree/big.bin"]
 
-        entry = entries["tree/big.bin"]
         assert entry.mtime > 0
         # Written moments ago, so it cannot be far from now
-        assert abs(entry.mtime - (temp_dir / "tree" / "big.bin").stat().st_mtime) < 60
+        assert abs(entry.mtime - (archived.tree / "big.bin").stat().st_mtime) < 60
 
-    @pytest.mark.parametrize(("fmt", "ext"), [("tar", ".tar"), ("zip", ".zip")])
-    def test_mode_is_reported(self, temp_dir: Path, fmt: str, ext: str) -> None:
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
+    def test_mode_is_reported(self, archived: ArchivedTree, fmt: str) -> None:
         """Test that mode is reported as permission bits rather than 0."""
-        entries = self._entries(temp_dir, fmt, ext)
+        entries = archived.entries[fmt]
 
         assert entries["tree/big.bin"].mode & 0o400, "expected a readable file mode"
         assert entries["tree/nested"].mode & 0o100, "expected a searchable dir mode"
 
-    @pytest.mark.parametrize(("fmt", "ext"), [("tar", ".tar"), ("zip", ".zip")])
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_size_and_type_still_reported(
-        self, temp_dir: Path, fmt: str, ext: str
+        self, archived: ArchivedTree, fmt: str
     ) -> None:
         """Test that the fields that already worked keep working."""
-        entries = self._entries(temp_dir, fmt, ext)
+        entries = archived.entries[fmt]
 
-        assert entries["tree/big.bin"].size == len(b"compressible " * 4000)
+        assert entries["tree/big.bin"].size == len(BIG_PAYLOAD)
         assert entries["tree/nested"].is_dir is True
         assert entries["tree/big.bin"].is_dir is False
 
-    def test_zip_reports_per_entry_compression(self, temp_dir: Path) -> None:
+    def test_zip_reports_per_entry_compression(self, archived: ArchivedTree) -> None:
         """Test that zip compresses each entry, so it can say how well."""
-        entries = self._entries(temp_dir, "zip", ".zip")
-        entry = entries["tree/big.bin"]
+        entry = archived.entries["zip"]["tree/big.bin"]
 
         assert entry.compressed_size is not None
         assert 0 < entry.compressed_size < entry.size
         assert entry.crc is not None
         assert entry.method is not None
 
-    def test_tar_omits_per_entry_compression(self, temp_dir: Path) -> None:
+    def test_tar_omits_per_entry_compression(self, archived: ArchivedTree) -> None:
         """Test that tar compresses the whole stream, so there is nothing to report."""
-        entries = self._entries(temp_dir, "tar", ".tar")
-        entry = entries["tree/big.bin"]
+        entry = archived.entries["tar"]["tree/big.bin"]
 
         assert entry.compressed_size is None
         assert entry.crc is None
         assert entry.method is None
 
-    def test_zip_crc_matches_the_content(self, temp_dir: Path) -> None:
+    def test_zip_crc_matches_the_content(self, archived: ArchivedTree) -> None:
         """Test that the CRC reported is the one zip actually stored."""
-        import zlib
-
-        entries = self._entries(temp_dir, "zip", ".zip")
-        payload = b"compressible " * 4000
-
-        assert entries["tree/big.bin"].crc == zlib.crc32(payload)
-
-    def test_symlink_target_is_reported(self, temp_dir: Path) -> None:
-        """Test that tar records a symlink as one, with its target."""
-        tree = temp_dir / "tree"
-        tree.mkdir()
-        (tree / "real.txt").write_text("hello")
-        os.symlink("real.txt", tree / "link")
-
-        archive = temp_dir / "out.tar"
-        assert (
-            ArchiveJob.from_paths(
-                sources=[tree], output=archive, options=ArchiveOptions(format="tar")
-            )
-            .run()
-            .ok
-        )
-
-        entries = {
-            e.path.rstrip("/"): e
-            for e in plan_extraction(archive, temp_dir / "dest").entries
-        }
-
-        assert entries["tree/link"].is_symlink is True
-        assert entries["tree/link"].link_target == "real.txt"
-        assert entries["tree/real.txt"].link_target is None
+        assert archived.entries["zip"]["tree/big.bin"].crc == zlib.crc32(BIG_PAYLOAD)

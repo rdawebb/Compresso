@@ -1,14 +1,15 @@
 // Driven by a stub engine rather than a real library, so the driver's own
 // behaviour is tested, not zlib's or zstd's
 
-#include "../../../src/compresso/csrc/codec/codec.h"
-#include "../../../src/compresso/csrc/common.h"
-#include "../unity.h"
+#include "codec/codec.h"
+#include "common.h"
+#include "files.h"
+#include "unity.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define TEST_INPUT "../fixtures/alice29.txt"
+#define TEST_INPUT FIXTURE_DIR "/alice29.txt"
 #define TMP_OUT "tmp_codec_driver.out"
 #define TMP_IN "tmp_codec_driver.in"
 
@@ -166,57 +167,6 @@ void tearDown(void) {
   PyErr_Clear();
   remove(TMP_OUT);
   remove(TMP_IN);
-}
-
-static int files_equal(const char *a, const char *b) {
-  FILE *fa = fopen(a, "rb");
-  FILE *fb = fopen(b, "rb");
-  if (!fa || !fb) {
-    if (fa) {
-      fclose(fa);
-    }
-    if (fb) {
-      fclose(fb);
-    }
-    return 0;
-  }
-
-  int equal = 1;
-  for (;;) {
-    int ca = fgetc(fa);
-    int cb = fgetc(fb);
-    if (ca != cb) {
-      equal = 0;
-      break;
-    }
-    if (ca == EOF) {
-      break;
-    }
-  }
-
-  fclose(fa);
-  fclose(fb);
-  return equal;
-}
-
-static void write_file(const char *path, const char *contents) {
-  FILE *f = fopen(path, "wb");
-  TEST_ASSERT_NOT_NULL(f);
-  if (contents[0] != '\0') {
-    fputs(contents, f);
-  }
-  fclose(f);
-}
-
-static long file_size(const char *path) {
-  FILE *f = fopen(path, "rb");
-  if (!f) {
-    return -1;
-  }
-  fseek(f, 0, SEEK_END);
-  long size = ftell(f);
-  fclose(f);
-  return size;
 }
 
 // Runs the driver over `input_path` with `level` selecting the stub's mode

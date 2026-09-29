@@ -12,8 +12,8 @@ typedef struct {
 #define LEVELS_ZLIB {0, 9} // zlib, gzip, and zip's deflate
 #define LEVELS_BZIP2 {1, 9}
 #define LEVELS_LZMA {0, 9}
-#define LEVELS_ZSTD {1, 22} // 1 to ZSTD_maxCLevel(); test_zstd.c checks it
-#define LEVELS_LZ4 {0, 12}  // 0 to LZ4HC_CLEVEL_MAX; test_lz4.c checks it
+#define LEVELS_ZSTD {1, 22} // 1 to ZSTD_maxCLevel(); test_backends.c checks it
+#define LEVELS_LZ4 {0, 12}  // 0 to LZ4HC_CLEVEL_MAX; test_backends.c checks it
 
 static inline int level_range_is_empty(LevelRange r) { return r.min < 0; }
 

@@ -57,8 +57,24 @@ jobs:
       # doubles the build for artifacts the extension never links against
       VCPKG_DEFAULT_TRIPLET: x64-windows-release
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+      # Archives are keyed by each port's ABI hash & rebuilt on mismatch
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg_bincache,readwrite
     steps:
       - uses: actions/checkout@v7
+
+      # Prefix-only lookup restores the newest archive set; the save below is
+      # keyed on its contents, so a new entry is written only when a port rebuilt
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg_bincache
+          key: vcpkg-bincache-${{ env.VCPKG_DEFAULT_TRIPLET }}-
+          restore-keys: vcpkg-bincache-${{ env.VCPKG_DEFAULT_TRIPLET }}-
+
+      - name: Create vcpkg binary cache dir
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path vcpkg_bincache | Out-Null
 
       - name: Install C libraries (Windows)
         uses: lukka/run-vcpkg@v11
@@ -66,6 +82,13 @@ jobs:
           vcpkgGitCommitId: 04a9d8e5212d01ee1dd9478eadd9caade4f8b0d4
           runVcpkgInstall: true
           runVcpkgFormatString: "[`install`, `--recurse`, `--clean-after-build`, `--x-install-root`, `$[env.VCPKG_INSTALLED_DIR]`, `--triplet`, `$[env.VCPKG_DEFAULT_TRIPLET]`]"
+
+      - name: Save vcpkg binary cache
+        if: steps.vcpkg-cache.outputs.cache-matched-key != format('vcpkg-bincache-{0}-{1}', env.VCPKG_DEFAULT_TRIPLET, hashFiles('vcpkg_bincache/**'))
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg_bincache
+          key: vcpkg-bincache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('vcpkg_bincache/**') }}
 
       - name: Show installed tree
         shell: pwsh
@@ -124,7 +147,7 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run Python tests
-        run: uv run pytest
+        run: uv run pytest -n auto
 
   test-python-windows:
     name: Python tests (windows-latest, py${{ matrix.python }})
@@ -173,7 +196,7 @@ jobs:
           Copy-Item "$env:COMPRESSO_VCPKG_BIN_DIR\*.dll" $pyd.DirectoryName -Force
 
       - name: Run Python tests
-        run: uv run pytest
+        run: uv run pytest -n auto
 
   # Windows is intentionally absent; the sources under test are portable and
   # are exercised on Windows through the extension by test-python-windows
@@ -204,17 +227,19 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install zstd lz4 snappy xz
 
-      # The Unity harness links libpython resolved from the `python3`, so
+      # The Unity harness embeds the interpreter Meson runs under, so
       # actions/setup-python ships a linkable libpython plus dev headers
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      # The Linux runner's system gem dir is not writable by the build user
-      - name: Install rake
-        run: ${{ runner.os == 'Linux' && 'sudo gem install rake' || 'gem install rake' }}
+      # Ruby, which generates the Unity runners, is preinstalled on both runners
+      - name: Install Meson
+        run: python -m pip install "meson>=1.3.0,<1.13.0" "ninja>=1.11.1,<1.14.0"
+
+      - name: Configure C tests
+        run: meson setup build/c-tests tests/c
 
       - name: Run C tests
-        working-directory: tests/c
-        run: rake test:all
+        run: meson test -C build/c-tests --print-errorlogs

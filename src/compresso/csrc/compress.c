@@ -180,6 +180,10 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
                     CoreContext *ctx) {
   init_backends();
 
+  if (check_source_readable(src_path) != 0) {
+    return -1;
+  }
+
   Format format = detect_format_from_path(src_path);
   if (format == FORMAT_UNKNOWN) {
     PyErr_SetString(comp_Error, "Unknown or unsupported format");

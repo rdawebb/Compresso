@@ -2,35 +2,72 @@
 
 from __future__ import annotations
 
+import gzip
+import json
 import os
 import subprocess
 import sys
+import tarfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
+import compresso.cli.algos as algos_cmd
+import compresso.cli.compress as compress_cmd
+import compresso.cli.extract as extract_cmd
+import compresso.cli.inspect as inspect_cmd
 from compresso.cli import app
 from compresso.cli._render import (
+    BAR_THRESHOLD,
     EXIT_CANCELLED,
     EXIT_FAILED,
     EXIT_OK,
     EXIT_USAGE,
     format_size,
     format_time,
+    progress_bar,
 )
 from compresso.cli.extract import list_entries
-from compresso.frontend.archive_api import ArchiveEntry
+from compresso.frontend._job import ProgressCallback
+from compresso.frontend.api import CompressionJob
+from compresso.frontend.archive_api import ArchiveEntry, ArchiveJob, ArchiveOptions
+
+from .helpers import renamed
 
 runner = CliRunner()
 
-# Above the 1 MiB bar threshold, and incompressible so the archive stays large
-PAYLOAD_SIZE = 2 * 1024 * 1024
+# Incompressible throughout, so compressed sizes stay close to these
+PAYLOAD_SIZE = 64 * 1024
+TREE_FILE_SIZE = 16 * 1024
+
+# Past the progress bar threshold, for the tests that cover the bar
+LARGE_PAYLOAD_SIZE = 2 * BAR_THRESHOLD
+
+
+def invoke(*args: str | Path, expect: int | None = EXIT_OK) -> Result:
+    """Run the CLI, asserting it exits with `expect`.
+
+    Args:
+        *args: The command line, without the program name.
+        expect: The exit code to assert, or None to leave it unchecked.
+
+    Returns:
+        The runner's result.
+    """
+    result = runner.invoke(app, [str(arg) for arg in args])
+    if expect is not None:
+        assert result.exit_code == expect, result.output
+
+    return result
 
 
 @pytest.fixture
 def payload(temp_dir: Path) -> Path:
-    """A file big enough to exercise the progress path.
+    """A small incompressible file, below the progress bar threshold.
 
     Args:
         temp_dir: The temporary directory to use for the payload.
@@ -48,6 +85,8 @@ def payload(temp_dir: Path) -> Path:
 def source_tree(temp_dir: Path) -> Path:
     """A small directory tree to archive.
 
+    Function-scoped because some tests delete it.
+
     Args:
         temp_dir: The temporary directory to use for the source tree.
 
@@ -57,9 +96,111 @@ def source_tree(temp_dir: Path) -> Path:
     root = temp_dir / "tree"
     root.mkdir()
     for i in range(3):
-        (root / f"f{i}.bin").write_bytes(os.urandom(PAYLOAD_SIZE // 2))
+        (root / f"f{i}.bin").write_bytes(os.urandom(TREE_FILE_SIZE))
 
     return root
+
+
+@pytest.fixture
+def make_archive(source_tree: Path, temp_dir: Path) -> Callable[[str], Path]:
+    """Build an archive of `source_tree` as input for a test.
+
+    Built through the API rather than the CLI, and checked, so a broken setup
+    cannot surface as a confusing failure later in the test.
+
+    Args:
+        source_tree: The tree to archive.
+        temp_dir: The directory to write the archive in.
+
+    Returns:
+        A function taking the format and returning the archive's path.
+    """
+
+    def make(fmt: str) -> Path:
+        archive = temp_dir / f"out.{fmt}"
+        options = ArchiveOptions(format=fmt)
+        result = ArchiveJob.from_paths([source_tree], archive, options).run()
+        assert result.ok, result.error
+        return archive
+
+    return make
+
+
+@dataclass
+class CompressTarget:
+    """What one `compress` call reads and writes."""
+
+    source: Path
+    dest: Path
+    args: tuple[str, ...]
+
+
+@pytest.fixture(params=["file", "tree"])
+def compress_target(
+    request: pytest.FixtureRequest, payload: Path, source_tree: Path, temp_dir: Path
+) -> CompressTarget:
+    """A single file into a .comp container, or a tree into a tar archive.
+
+    The two take different paths through `compress`, but share its
+    overwrite-mode handling.
+
+    Args:
+        request: Pytest request object.
+        payload: The single-file input.
+        source_tree: The directory input.
+        temp_dir: The directory to write the output in.
+
+    Returns:
+        The input, output and any extra arguments for the call.
+    """
+    if request.param == "file":
+        return CompressTarget(payload, temp_dir / "out.comp", ())
+
+    return CompressTarget(source_tree, temp_dir / "out.tar", ("-f", "tar"))
+
+
+@dataclass
+class Bar:
+    """One progress bar a command opened."""
+
+    enabled: bool
+    updates: int = 0
+
+
+@pytest.fixture
+def bars(monkeypatch: pytest.MonkeyPatch) -> list[Bar]:
+    """Record each progress bar a command opens, still drawing the real one.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        The bars opened so far, in order.
+    """
+    opened: list[Bar] = []
+
+    @contextmanager
+    def spy(
+        label: str, total: int, *, enabled: bool
+    ) -> Iterator[ProgressCallback | None]:
+        bar = Bar(enabled)
+        opened.append(bar)
+        with progress_bar(label, total, enabled=enabled) as on_progress:
+            if on_progress is None:
+                yield None
+                return
+
+            def counting(fraction: float, done: int, reported_total: int) -> None:
+                bar.updates += 1
+                on_progress(fraction, done, reported_total)
+
+            yield counting
+
+    # Each command imports progress_bar by name, so each binding is patched
+    monkeypatch.setattr(compress_cmd, "progress_bar", spy)
+    monkeypatch.setattr(extract_cmd, "progress_bar", spy)
+
+    return opened
 
 
 class TestFormatters:
@@ -83,22 +224,21 @@ class TestFormatters:
         assert result == expected
 
     @pytest.mark.parametrize(
-        "seconds,expected_pattern",
+        "seconds,expected",
         [
-            (0.0005, "ms"),  # Less than 1ms
-            (0.5, "ms"),  # 500ms
+            (0.0005, "0ms"),
+            (0.5, "500ms"),
             (1.0, "1.00s"),
             (5.5, "5.50s"),
             (59.9, "59.90s"),
-            (60.0, "1m"),  # 1 minute
-            (90.5, "1m 30"),  # 1m 30s
-            (125.0, "2m"),  # 2m 5s
+            (60.0, "1m 0.0s"),
+            (90.5, "1m 30.5s"),
+            (125.0, "2m 5.0s"),
         ],
     )
-    def test_format_time(self, seconds: float, expected_pattern: str):
+    def test_format_time(self, seconds: float, expected: str):
         """Test time formatting with various values."""
-        result = format_time(seconds)
-        assert expected_pattern in result
+        assert format_time(seconds) == expected
 
 
 class TestAppStructure:
@@ -118,16 +258,14 @@ class TestAppStructure:
     )
     def test_command_is_registered(self, name: str) -> None:
         """Test that each command appears in the top-level help."""
-        result = runner.invoke(app, ["--help"])
-        assert result.exit_code == EXIT_OK
-        assert name in result.output
+        assert name in invoke("--help").output
 
     def test_commands_are_listed_in_workflow_order(self) -> None:
         """Test that the order is chosen in `__init__`, not inherited from import sorting.
 
         Alphabetical imports would put `list` first.
         """
-        output = runner.invoke(app, ["--help"]).output
+        output = invoke("--help").output
 
         # Matched on the alias column, which is unique per row; a bare command
         # name also appears inside other commands' descriptions
@@ -157,9 +295,79 @@ class TestAppStructure:
         ],
     )
     def test_aliases_still_resolve(self, alias: str, command: str) -> None:
-        """Test that the short names keep working after the package split."""
-        result = runner.invoke(app, [alias, "--help"])
-        assert result.exit_code == EXIT_OK
+        """Test that each short name reaches the command it stands for.
+
+        Help is compared without its usage line, which echoes the name typed.
+        """
+
+        def help_body(name: str) -> list[str]:
+            lines = invoke(name, "--help").output.splitlines()
+            return [line for line in lines if "Usage:" not in line]
+
+        assert help_body(alias) == help_body(command)
+
+
+class TestProgressBar:
+    """Test the bar is drawn only for a large job that is not asked to be quiet."""
+
+    @pytest.mark.parametrize(
+        "size,quiet,expected",
+        [
+            (LARGE_PAYLOAD_SIZE, False, True),
+            (LARGE_PAYLOAD_SIZE, True, False),
+            (PAYLOAD_SIZE, False, False),
+        ],
+        ids=["large", "large-quiet", "small"],
+    )
+    def test_compress_bar_follows_size_and_quiet(
+        self, temp_dir: Path, bars: list[Bar], size: int, quiet: bool, expected: bool
+    ) -> None:
+        """Test that the bar needs both a job past the threshold and no --quiet."""
+        source = temp_dir / "source.bin"
+        source.write_bytes(os.urandom(size))
+
+        invoke(
+            "compress", source, "-o", temp_dir / "out.comp", *(["-q"] if quiet else [])
+        )
+
+        assert [bar.enabled for bar in bars] == [expected]
+
+    def test_file_round_trip_draws_both_bars(
+        self, temp_dir: Path, bars: list[Bar]
+    ) -> None:
+        """Test that compress and extract each drive a bar with real progress."""
+        source = temp_dir / "source.bin"
+        source.write_bytes(os.urandom(LARGE_PAYLOAD_SIZE))
+        packed = temp_dir / "out.comp"
+        restored = temp_dir / "restored.bin"
+
+        invoke("compress", source, "-o", packed)
+        invoke("extract", packed, "-o", restored)
+
+        assert [bar.enabled for bar in bars] == [True, True]
+        assert all(bar.updates > 0 for bar in bars)
+        assert restored.read_bytes() == source.read_bytes()
+
+    def test_archive_round_trip_draws_both_bars(
+        self, temp_dir: Path, bars: list[Bar]
+    ) -> None:
+        """Test that archiving and extracting a tree each drive a bar too."""
+        tree = temp_dir / "big_tree"
+        tree.mkdir()
+        for i in range(2):
+            (tree / f"f{i}.bin").write_bytes(os.urandom(LARGE_PAYLOAD_SIZE // 2))
+        archive = temp_dir / "out.tar"
+        dest = temp_dir / "dest"
+
+        invoke("compress", tree, "-o", archive, "-f", "tar")
+        invoke("extract", archive, "-o", dest)
+
+        assert [bar.enabled for bar in bars] == [True, True]
+        assert all(bar.updates > 0 for bar in bars)
+        for original in tree.iterdir():
+            assert (dest / tree.name / original.name).read_bytes() == (
+                original.read_bytes()
+            )
 
 
 class TestCompressRoundTrip:
@@ -170,22 +378,17 @@ class TestCompressRoundTrip:
         archive = temp_dir / "out.comp"
         restored = temp_dir / "restored.bin"
 
-        result = runner.invoke(app, ["compress", str(payload), "-o", str(archive)])
-        assert result.exit_code == EXIT_OK
+        result = invoke("compress", payload, "-o", archive)
         assert "Compression successful" in result.output
 
-        result = runner.invoke(app, ["decompress", str(archive), "-o", str(restored)])
-        assert result.exit_code == EXIT_OK
+        result = invoke("decompress", archive, "-o", restored)
         assert "Decompression successful" in result.output
 
         assert restored.read_bytes() == payload.read_bytes()
 
     def test_quiet_suppresses_output(self, payload: Path, temp_dir: Path) -> None:
         """Test that --quiet prints nothing on success."""
-        result = runner.invoke(
-            app, ["compress", str(payload), "-o", str(temp_dir / "q.comp"), "-q"]
-        )
-        assert result.exit_code == EXIT_OK
+        result = invoke("compress", payload, "-o", temp_dir / "q.comp", "-q")
         assert result.output.strip() == ""
 
     @pytest.mark.parametrize("algo", ["zlib", "zstd", "lz4", "bzip2", "lzma"])
@@ -196,18 +399,9 @@ class TestCompressRoundTrip:
         archive = temp_dir / f"{algo}.comp"
         restored = temp_dir / f"{algo}.out"
 
-        assert (
-            runner.invoke(
-                app, ["compress", str(payload), "-o", str(archive), "-a", algo, "-q"]
-            ).exit_code
-            == EXIT_OK
-        )
-        assert (
-            runner.invoke(
-                app, ["decompress", str(archive), "-o", str(restored), "-q"]
-            ).exit_code
-            == EXIT_OK
-        )
+        invoke("compress", payload, "-o", archive, "-a", algo, "-q")
+        invoke("decompress", archive, "-o", restored, "-q")
+
         assert restored.read_bytes() == payload.read_bytes()
 
     def test_level_above_nine_round_trips(self, payload: Path, temp_dir: Path) -> None:
@@ -215,77 +409,10 @@ class TestCompressRoundTrip:
         archive = temp_dir / "zstd19.comp"
         restored = temp_dir / "zstd19.out"
 
-        result = runner.invoke(
-            app,
-            [
-                "compress",
-                str(payload),
-                "-o",
-                str(archive),
-                "-a",
-                "zstd",
-                "-l",
-                "19",
-                "-q",
-            ],
-        )
-        assert result.exit_code == EXIT_OK
-        assert (
-            runner.invoke(
-                app, ["decompress", str(archive), "-o", str(restored), "-q"]
-            ).exit_code
-            == EXIT_OK
-        )
+        invoke("compress", payload, "-o", archive, "-a", "zstd", "-l", "19", "-q")
+        invoke("decompress", archive, "-o", restored, "-q")
+
         assert restored.read_bytes() == payload.read_bytes()
-
-    def test_compress_renames_clashing_output_by_default(
-        self, payload: Path, temp_dir: Path
-    ) -> None:
-        """Test that compressing twice to the same output renames the second file
-        rather than overwriting the first."""
-        dest = temp_dir / "out.comp"
-
-        first = runner.invoke(app, ["compress", str(payload), "-o", str(dest), "-q"])
-        assert first.exit_code == EXIT_OK
-        original_bytes = dest.read_bytes()
-
-        second = runner.invoke(app, ["compress", str(payload), "-o", str(dest), "-q"])
-        assert second.exit_code == EXIT_OK
-
-        suffix = " 2" if sys.platform == "darwin" else " (2)"
-        renamed = temp_dir / f"out{suffix}.comp"
-
-        assert dest.read_bytes() == original_bytes
-        assert renamed.is_file()
-
-    def test_compress_error_on_conflict_refuses_existing_output(
-        self, payload: Path, temp_dir: Path
-    ) -> None:
-        """Test that --error-on-conflict refuses to touch an existing output."""
-        dest = temp_dir / "out.comp"
-        runner.invoke(app, ["compress", str(payload), "-o", str(dest), "-q"])
-
-        result = runner.invoke(
-            app,
-            ["compress", str(payload), "-o", str(dest), "--error-on-conflict", "-q"],
-        )
-        assert result.exit_code == EXIT_FAILED
-
-    def test_compress_skip_existing_leaves_the_output_untouched(
-        self, payload: Path, temp_dir: Path
-    ) -> None:
-        """Test that --skip-existing leaves the first output as-is and still succeeds."""
-        dest = temp_dir / "out.comp"
-        runner.invoke(app, ["compress", str(payload), "-o", str(dest), "-q"])
-        original_bytes = dest.read_bytes()
-
-        result = runner.invoke(
-            app,
-            ["compress", str(payload), "-o", str(dest), "--skip-existing", "-q"],
-        )
-
-        assert result.exit_code == EXIT_OK
-        assert dest.read_bytes() == original_bytes
 
 
 class TestArchiveRoundTrip:
@@ -299,36 +426,30 @@ class TestArchiveRoundTrip:
         archive = temp_dir / f"out.{fmt}"
         dest = temp_dir / f"dest.{fmt}"
 
-        result = runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", fmt]
-        )
-        assert result.exit_code == EXIT_OK, result.output
+        result = invoke("compress", source_tree, "-o", archive, "-f", fmt)
         assert "Archive created" in result.output
 
-        result = runner.invoke(app, ["extract", str(archive), "-o", str(dest)])
-        assert result.exit_code == EXIT_OK, result.output
+        result = invoke("extract", archive, "-o", dest)
         assert "Extraction successful" in result.output
 
         for original in source_tree.iterdir():
             restored = dest / source_tree.name / original.name
             assert restored.read_bytes() == original.read_bytes()
 
-    def test_extract_list_only(self, source_tree: Path, temp_dir: Path) -> None:
+    def test_extract_list_only(
+        self,
+        temp_dir: Path,
+        make_archive: Callable[[str], Path],
+    ) -> None:
         """Test that --list prints each entry's size and path without writing anything."""
-        archive = temp_dir / "out.tar"
+        archive = make_archive("tar")
         dest = temp_dir / "dest"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
-        )
 
-        result = runner.invoke(
-            app, ["extract", str(archive), "--list", "-o", str(dest)]
-        )
+        result = invoke("extract", archive, "--list", "-o", dest)
 
-        assert result.exit_code == EXIT_OK
         lines = result.output.splitlines()
         f0_line = next(line for line in lines if "f0.bin" in line)
-        assert f0_line.split()[:2] == format_size(PAYLOAD_SIZE // 2).split()
+        assert f0_line.split()[:2] == format_size(TREE_FILE_SIZE).split()
         assert not dest.exists()
 
         # Directories have a blank size; their contents are indented beneath them
@@ -361,158 +482,112 @@ class TestArchiveRoundTrip:
         ]
 
     def test_extract_renames_clashing_top_level_dir_by_default(
-        self, source_tree: Path, temp_dir: Path
+        self,
+        source_tree: Path,
+        temp_dir: Path,
+        make_archive: Callable[[str], Path],
     ) -> None:
         """Test that a repeat extraction renames the clashing top-level directory."""
-        archive = temp_dir / "out.tar"
+        archive = make_archive("tar")
         dest = temp_dir / "dest"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
-        )
 
-        first = runner.invoke(app, ["extract", str(archive), "-o", str(dest), "-q"])
-        assert first.exit_code == EXIT_OK
+        invoke("extract", archive, "-o", dest, "-q")
         before = sorted(p.name for p in dest.rglob("*") if p.is_file())
 
-        second = runner.invoke(app, ["extract", str(archive), "-o", str(dest), "-q"])
-        assert second.exit_code == EXIT_OK
+        invoke("extract", archive, "-o", dest, "-q")
 
         after = sorted(p.name for p in dest.rglob("*") if p.is_file())
         assert len(after) == 2 * len(before)
         # No individual file was renamed; the set of file names is unchanged
         assert after == sorted(before + before)
 
-        suffix = " 2" if sys.platform == "darwin" else " (2)"
         top_level = sorted(p.name for p in dest.iterdir())
-        assert top_level == sorted([source_tree.name, source_tree.name + suffix])
+        assert top_level == sorted([source_tree.name, renamed(source_tree.name)])
 
-        renamed_dir = dest / (source_tree.name + suffix)
+        renamed_dir = dest / renamed(source_tree.name)
         assert sorted(p.name for p in renamed_dir.iterdir()) == sorted(
             p.name for p in (dest / source_tree.name).iterdir()
         )
 
     def test_extract_error_on_conflict_still_refuses(
-        self, source_tree: Path, temp_dir: Path
+        self, temp_dir: Path, make_archive: Callable[[str], Path]
     ) -> None:
         """Test that --error-on-conflict reproduces the old refuse-by-default behavior."""
-        archive = temp_dir / "out.tar"
+        archive = make_archive("tar")
         dest = temp_dir / "dest"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
+
+        invoke("extract", archive, "-o", dest, "-q")
+        invoke(
+            "extract",
+            archive,
+            "-o",
+            dest,
+            "--error-on-conflict",
+            "-q",
+            expect=EXIT_FAILED,
         )
-
-        assert (
-            runner.invoke(
-                app, ["extract", str(archive), "-o", str(dest), "-q"]
-            ).exit_code
-            == EXIT_OK
-        )
-        assert (
-            runner.invoke(
-                app,
-                [
-                    "extract",
-                    str(archive),
-                    "-o",
-                    str(dest),
-                    "--error-on-conflict",
-                    "-q",
-                ],
-            ).exit_code
-            == EXIT_FAILED
-        )
-
-    def test_compress_renames_clashing_archive_by_default(
-        self, source_tree: Path, temp_dir: Path
-    ) -> None:
-        """Test that archiving twice to the same output renames the second archive rather
-        than overwriting the first."""
-        archive = temp_dir / "out.tar"
-
-        first = runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
-        )
-        assert first.exit_code == EXIT_OK
-        original_bytes = archive.read_bytes()
-
-        second = runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
-        )
-        assert second.exit_code == EXIT_OK
-
-        suffix = " 2" if sys.platform == "darwin" else " (2)"
-        renamed = temp_dir / f"out{suffix}.tar"
-
-        assert archive.read_bytes() == original_bytes
-        assert renamed.is_file()
-
-    def test_compress_error_on_conflict_still_refuses(
-        self, source_tree: Path, temp_dir: Path
-    ) -> None:
-        """Test that --error-on-conflict refuses to touch an existing archive."""
-        archive = temp_dir / "out.tar"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
-        )
-
-        result = runner.invoke(
-            app,
-            [
-                "compress",
-                str(source_tree),
-                "-o",
-                str(archive),
-                "-f",
-                "tar",
-                "--error-on-conflict",
-                "-q",
-            ],
-        )
-        assert result.exit_code == EXIT_FAILED
-
-    def test_compress_skip_existing_leaves_the_archive_untouched(
-        self, source_tree: Path, temp_dir: Path
-    ) -> None:
-        """Test that --skip-existing leaves the first archive as-is and still succeeds."""
-        archive = temp_dir / "out.tar"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
-        )
-        original_bytes = archive.read_bytes()
-
-        result = runner.invoke(
-            app,
-            [
-                "compress",
-                str(source_tree),
-                "-o",
-                str(archive),
-                "-f",
-                "tar",
-                "--skip-existing",
-                "-q",
-            ],
-        )
-
-        assert result.exit_code == EXIT_OK
-        assert archive.read_bytes() == original_bytes
 
     @pytest.mark.parametrize("flag", ["--overwrite", "--skip-existing"])
     def test_extract_over_existing_with_a_flag(
-        self, source_tree: Path, temp_dir: Path, flag: str
+        self, temp_dir: Path, make_archive: Callable[[str], Path], flag: str
     ) -> None:
         """Test that either flag makes a repeat extraction succeed."""
-        archive = temp_dir / "out.tar"
+        archive = make_archive("tar")
         dest = temp_dir / "dest"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
-        )
-        runner.invoke(app, ["extract", str(archive), "-o", str(dest), "-q"])
+        invoke("extract", archive, "-o", dest, "-q")
 
-        result = runner.invoke(
-            app, ["extract", str(archive), "-o", str(dest), flag, "-q"]
+        invoke("extract", archive, "-o", dest, flag, "-q")
+
+
+class TestCompressConflicts:
+    """Test what `compress` does when its output already exists."""
+
+    def test_renames_clashing_output_by_default(
+        self, compress_target: CompressTarget
+    ) -> None:
+        """Test that compressing twice renames the second output rather than
+        overwriting the first."""
+        t = compress_target
+        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
+        original_bytes = t.dest.read_bytes()
+
+        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
+
+        assert t.dest.read_bytes() == original_bytes
+        assert (t.dest.parent / renamed(t.dest.name)).is_file()
+
+    def test_error_on_conflict_refuses_existing_output(
+        self, compress_target: CompressTarget
+    ) -> None:
+        """Test that --error-on-conflict refuses to touch an existing output."""
+        t = compress_target
+        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
+        original_bytes = t.dest.read_bytes()
+
+        invoke(
+            "compress",
+            t.source,
+            "-o",
+            t.dest,
+            *t.args,
+            "--error-on-conflict",
+            "-q",
+            expect=EXIT_FAILED,
         )
-        assert result.exit_code == EXIT_OK
+
+        assert t.dest.read_bytes() == original_bytes
+
+    def test_skip_existing_leaves_the_output_untouched(
+        self, compress_target: CompressTarget
+    ) -> None:
+        """Test that --skip-existing leaves the first output as-is and still succeeds."""
+        t = compress_target
+        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
+        original_bytes = t.dest.read_bytes()
+
+        invoke("compress", t.source, "-o", t.dest, *t.args, "--skip-existing", "-q")
+
+        assert t.dest.read_bytes() == original_bytes
 
 
 class TestInspectAndList:
@@ -521,23 +596,19 @@ class TestInspectAndList:
     def test_inspect_reports_a_valid_file(self, payload: Path, temp_dir: Path) -> None:
         """Test that inspect describes a file the CLI just wrote."""
         archive = temp_dir / "out.comp"
-        runner.invoke(app, ["compress", str(payload), "-o", str(archive), "-q"])
+        invoke("compress", payload, "-o", archive, "-q")
 
-        result = runner.invoke(app, ["inspect", str(archive)])
+        result = invoke("inspect", archive)
 
-        assert result.exit_code == EXIT_OK
         assert "Valid Compresso file" in result.output
 
     def test_inspect_json(self, payload: Path, temp_dir: Path) -> None:
         """Test that --json emits parseable output."""
-        import json
-
         archive = temp_dir / "out.comp"
-        runner.invoke(app, ["compress", str(payload), "-o", str(archive), "-q"])
+        invoke("compress", payload, "-o", archive, "-q")
 
-        result = runner.invoke(app, ["inspect", str(archive), "--json"])
+        result = invoke("inspect", archive, "--json")
 
-        assert result.exit_code == EXIT_OK
         assert json.loads(result.output)["is_compresso"] is True
 
     def test_runs_as_a_module(self) -> None:
@@ -552,16 +623,9 @@ class TestInspectAndList:
         assert result.returncode == EXIT_OK
         assert "zstd" in result.stdout
 
-    def test_list_shows_backends(self) -> None:
-        """Test that list names the compiled-in algorithms."""
-        result = runner.invoke(app, ["list"])
-
-        assert result.exit_code == EXIT_OK
-        assert "zstd" in result.output
-
     def test_list_shows_level_ranges(self) -> None:
         """Test that list shows each backend's levels, and none for snappy."""
-        output = runner.invoke(app, ["list"]).output
+        output = invoke("list").output
 
         zstd = output[output.index("- zstd") :].split("\n\n")[0]
         snappy = output[output.index("- snappy") :].split("\n\n")[0]
@@ -569,68 +633,40 @@ class TestInspectAndList:
         assert "Levels: none" in snappy
 
     def test_inspect_archive_summary_omits_entries(
-        self, source_tree: Path, temp_dir: Path
+        self, make_archive: Callable[[str], Path]
     ) -> None:
         """Test that inspecting an archive shows only a summary by default."""
-        archive = temp_dir / "out.zip"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "zip", "-q"]
-        )
+        result = invoke("inspect", make_archive("zip"))
 
-        result = runner.invoke(app, ["inspect", str(archive)])
-
-        assert result.exit_code == EXIT_OK
         assert "Format:" in result.output
         assert "Entries:       4" in result.output
         assert "f0.bin" not in result.output
 
     def test_inspect_archive_json_omits_entries_by_default(
-        self, source_tree: Path, temp_dir: Path
+        self, make_archive: Callable[[str], Path]
     ) -> None:
         """Test that --json without --entries has no entries key."""
-        import json
+        result = invoke("inspect", make_archive("zip"), "--json")
 
-        archive = temp_dir / "out.zip"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "zip", "-q"]
-        )
-
-        result = runner.invoke(app, ["inspect", str(archive), "--json"])
-
-        assert result.exit_code == EXIT_OK
         data = json.loads(result.output)
         assert data["is_archive"] is True
         assert data["entry_count"] == 4
         assert "entries" not in data
 
     def test_inspect_entries_lists_each_entry(
-        self, source_tree: Path, temp_dir: Path
+        self, make_archive: Callable[[str], Path]
     ) -> None:
         """Test that --entries lists each entry's own detail."""
-        archive = temp_dir / "out.zip"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "zip", "-q"]
-        )
+        result = invoke("inspect", make_archive("zip"), "--entries")
 
-        result = runner.invoke(app, ["inspect", str(archive), "--entries"])
-
-        assert result.exit_code == EXIT_OK
         assert "f0.bin" in result.output
 
     def test_inspect_entries_json_lists_each_entry(
-        self, source_tree: Path, temp_dir: Path
+        self, make_archive: Callable[[str], Path]
     ) -> None:
         """Test that --entries --json includes a populated entries list."""
-        import json
+        result = invoke("inspect", make_archive("zip"), "--entries", "--json")
 
-        archive = temp_dir / "out.zip"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "zip", "-q"]
-        )
-
-        result = runner.invoke(app, ["inspect", str(archive), "--entries", "--json"])
-
-        assert result.exit_code == EXIT_OK
         data = json.loads(result.output)
         assert len(data["entries"]) == 4
         assert any("f0.bin" in entry["path"] for entry in data["entries"])
@@ -639,35 +675,23 @@ class TestInspectAndList:
 class TestExitCodes:
     """Test 0 success, 1 the operation failed, 2 the request could not be made."""
 
-    def test_success_is_zero(self, payload: Path, temp_dir: Path) -> None:
-        """Test that a completed job exits 0."""
-        result = runner.invoke(
-            app, ["compress", str(payload), "-o", str(temp_dir / "o.comp"), "-q"]
-        )
-        assert result.exit_code == EXIT_OK
-
     def test_missing_input_is_usage(self, temp_dir: Path) -> None:
         """Test that compressing a file that is not there is a usage error."""
-        result = runner.invoke(app, ["compress", str(temp_dir / "nope.bin")])
-        assert result.exit_code == EXIT_USAGE
+        invoke("compress", temp_dir / "nope.bin", expect=EXIT_USAGE)
 
-    def test_decompressing_a_non_compresso_file_is_usage(
-        self, payload: Path, temp_dir: Path
-    ) -> None:
+    def test_decompressing_a_non_compresso_file_is_usage(self, payload: Path) -> None:
         """Test that the input is wrong, rather than the operation having failed."""
-        result = runner.invoke(app, ["decompress", str(payload)])
-        assert result.exit_code == EXIT_USAGE
+        invoke("decompress", payload, expect=EXIT_USAGE)
 
     def test_inspecting_a_non_compresso_file_is_usage(self, payload: Path) -> None:
         """Test the same for inspect."""
-        result = runner.invoke(app, ["inspect", str(payload)])
-        assert result.exit_code == EXIT_USAGE
+        invoke("inspect", payload, expect=EXIT_USAGE)
 
     def test_extracting_a_non_archive_is_usage(self, payload: Path) -> None:
         """Test the same for extract."""
-        result = runner.invoke(app, ["extract", str(payload)])
-        assert result.exit_code == EXIT_USAGE
+        invoke("extract", payload, expect=EXIT_USAGE)
 
+    @pytest.mark.parametrize("command", ["compress", "extract"])
     @pytest.mark.parametrize(
         "flags",
         [
@@ -675,48 +699,23 @@ class TestExitCodes:
             ["--overwrite", "--error-on-conflict"],
             ["--skip-existing", "--error-on-conflict"],
         ],
+        ids=["overwrite+skip", "overwrite+error", "skip+error"],
     )
-    def test_mutually_exclusive_flags_are_usage(
-        self, source_tree: Path, temp_dir: Path, flags: list[str]
+    def test_mutually_exclusive_flag_usage(
+        self,
+        source_tree: Path,
+        temp_dir: Path,
+        make_archive: Callable[[str], Path],
+        command: str,
+        flags: list[str],
     ) -> None:
         """Test that combining any two overwrite-mode flags is contradictory."""
-        archive = temp_dir / "out.tar"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
-        )
+        if command == "compress":
+            args = [source_tree, "-o", temp_dir / "out.tar", "-f", "tar"]
+        else:
+            args = [make_archive("tar"), "-o", temp_dir / "d"]
 
-        result = runner.invoke(
-            app,
-            ["extract", str(archive), *flags, "-o", str(temp_dir / "d")],
-        )
-        assert result.exit_code == EXIT_USAGE
-        assert "mutually exclusive" in result.output
-
-    @pytest.mark.parametrize(
-        "flags",
-        [
-            ["--overwrite", "--skip-existing"],
-            ["--overwrite", "--error-on-conflict"],
-            ["--skip-existing", "--error-on-conflict"],
-        ],
-    )
-    def test_compress_mutually_exclusive_flags_are_usage(
-        self, source_tree: Path, temp_dir: Path, flags: list[str]
-    ) -> None:
-        """Test that combining any two archive overwrite-mode flags is contradictory."""
-        result = runner.invoke(
-            app,
-            [
-                "compress",
-                str(source_tree),
-                "-o",
-                str(temp_dir / "out.tar"),
-                "-f",
-                "tar",
-                *flags,
-            ],
-        )
-        assert result.exit_code == EXIT_USAGE
+        result = invoke(command, *args, *flags, expect=EXIT_USAGE)
         assert "mutually exclusive" in result.output
 
     @pytest.mark.parametrize(
@@ -732,8 +731,7 @@ class TestExitCodes:
     ) -> None:
         """Test that a level the backend rejects is refused up front, naming the range."""
         dest = temp_dir / "out.bin"
-        result = runner.invoke(app, ["compress", str(payload), "-o", str(dest), *args])
-        assert result.exit_code == EXIT_USAGE
+        result = invoke("compress", payload, "-o", dest, *args, expect=EXIT_USAGE)
         assert message in result.output
         assert not dest.exists()
 
@@ -742,37 +740,46 @@ class TestExitCodes:
     ) -> None:
         """Test that an archive's level is checked against the stage that compresses."""
         dest = temp_dir / "out.tar"
-        result = runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(dest), "-f", "tar", "-l", "5"]
+        result = invoke(
+            "compress",
+            source_tree,
+            "-o",
+            dest,
+            "-f",
+            "tar",
+            "-l",
+            "5",
+            expect=EXIT_USAGE,
         )
-        assert result.exit_code == EXIT_USAGE
         assert "tar has no compression levels" in result.output
         assert not dest.exists()
 
     def test_bad_benchmark_level_is_usage(self, payload: Path) -> None:
         """Test that a level that is not a number is a usage error."""
-        result = runner.invoke(app, ["benchmark", str(payload), "--levels", "nope"])
-        assert result.exit_code == EXIT_USAGE
+        invoke("benchmark", payload, "--levels", "nope", expect=EXIT_USAGE)
 
     def test_unknown_archive_format_is_usage(
         self, source_tree: Path, temp_dir: Path
     ) -> None:
         """Test that a format that cannot hold multiple entries is refused up front."""
-        result = runner.invoke(
-            app,
-            ["compress", str(source_tree), "-o", str(temp_dir / "o.gz"), "-f", "gz"],
+        invoke(
+            "compress",
+            source_tree,
+            "-o",
+            temp_dir / "o.gz",
+            "-f",
+            "gz",
+            expect=EXIT_USAGE,
         )
-        assert result.exit_code == EXIT_USAGE
 
     def test_recognised_but_unsupported_archive_names_itself(
         self, source_tree: Path, temp_dir: Path
     ) -> None:
         """Test that a detected-but-unwritable container reports its own name."""
         dest = temp_dir / "o.7z"
-        result = runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(dest), "-f", "7z"]
+        result = invoke(
+            "compress", source_tree, "-o", dest, "-f", "7z", expect=EXIT_FAILED
         )
-        assert result.exit_code == EXIT_FAILED
         assert "7z archives are recognised but not supported yet" in result.output
         assert not dest.exists()
 
@@ -781,25 +788,27 @@ class TestExitCodes:
     ) -> None:
         """Test that `-o x.7z` alone names 7z rather than writing a zip there."""
         dest = temp_dir / "o.7z"
-        result = runner.invoke(app, ["compress", str(source_tree), "-o", str(dest)])
-        assert result.exit_code == EXIT_FAILED
+        result = invoke("compress", source_tree, "-o", dest, expect=EXIT_FAILED)
         assert "7z archives are recognised but not supported yet" in result.output
         assert not dest.exists()
 
-    def test_failed_operation_is_one(self, source_tree: Path, temp_dir: Path) -> None:
+    def test_failed_operation_is_one(
+        self, temp_dir: Path, make_archive: Callable[[str], Path]
+    ) -> None:
         """Test that a job that starts and then fails exits 1, not 2."""
-        archive = temp_dir / "out.tar"
+        archive = make_archive("tar")
         dest = temp_dir / "dest"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(archive), "-f", "tar", "-q"]
-        )
-        runner.invoke(app, ["extract", str(archive), "-o", str(dest), "-q"])
+        invoke("extract", archive, "-o", dest, "-q")
 
-        result = runner.invoke(
-            app,
-            ["extract", str(archive), "-o", str(dest), "--error-on-conflict", "-q"],
+        invoke(
+            "extract",
+            archive,
+            "-o",
+            dest,
+            "--error-on-conflict",
+            "-q",
+            expect=EXIT_FAILED,
         )
-        assert result.exit_code == EXIT_FAILED
 
 
 class TestInterruption:
@@ -821,44 +830,36 @@ class TestInterruption:
     def test_interrupt_is_reported(
         self,
         payload: Path,
-        temp_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
         command: list[str],
         expected: str,
     ) -> None:
         """Test that each command names itself rather than dying silently."""
-        # Interrupt the first real call each command makes
-        import compresso.cli.algos as algos_mod
-        import compresso.cli.inspect as inspect_mod
-        from compresso.frontend import api
 
+        # Interrupt the first real call each command makes
         def interrupt(*args: object, **kwargs: object) -> None:
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(api.CompressionJob, "from_file", interrupt, raising=False)
-        monkeypatch.setattr(inspect_mod, "inspect_file", interrupt)
-        monkeypatch.setattr(algos_mod, "list_capabilities", interrupt)
+        monkeypatch.setattr(CompressionJob, "from_file", interrupt)
+        monkeypatch.setattr(inspect_cmd, "inspect_file", interrupt)
+        monkeypatch.setattr(algos_cmd, "list_capabilities", interrupt)
 
-        args = [*command]
+        args: list[str | Path] = [*command]
         if command[0] != "list":
-            args.append(str(payload))
+            args.append(payload)
 
-        result = runner.invoke(app, args)
+        result = invoke(*args, expect=EXIT_CANCELLED)
 
-        assert result.exit_code == EXIT_CANCELLED
         assert expected in result.output
 
 
 class TestSmartCompress:
     """Test `compress` picks the job from its inputs and the format asked for."""
 
-    def test_one_file_becomes_a_compresso_container(
-        self, payload: Path, temp_dir: Path
-    ) -> None:
+    def test_one_file_becomes_a_compresso_container(self, payload: Path) -> None:
         """Test that with no format, a single file gets the .comp container."""
-        result = runner.invoke(app, ["compress", str(payload), "-q"])
+        invoke("compress", payload, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert payload.with_suffix(payload.suffix + ".comp").exists()
 
     @pytest.mark.parametrize(
@@ -875,30 +876,24 @@ class TestSmartCompress:
         self, payload: Path, fmt: str, suffix: str
     ) -> None:
         """Test that -f names a single-file container, and the suffix follows from it."""
-        result = runner.invoke(app, ["compress", str(payload), "-f", fmt, "-q"])
+        invoke("compress", payload, "-f", fmt, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert payload.with_suffix(payload.suffix + suffix).exists()
 
     def test_standalone_output_is_a_real_gzip(
         self, payload: Path, temp_dir: Path
     ) -> None:
         """Test that the .gz written is the format, not merely the name."""
-        import gzip
-
         output = temp_dir / "out.gz"
-        runner.invoke(app, ["compress", str(payload), "-o", str(output), "-q"])
+        invoke("compress", payload, "-o", output, "-q")
 
         with gzip.open(output, "rb") as f:
             assert f.read() == payload.read_bytes()
 
-    def test_a_directory_becomes_an_archive(
-        self, source_tree: Path, temp_dir: Path
-    ) -> None:
+    def test_a_directory_becomes_an_archive(self, source_tree: Path) -> None:
         """Test that a directory needs a container that holds many entries."""
-        result = runner.invoke(app, ["compress", str(source_tree), "-q"])
+        invoke("compress", source_tree, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert (source_tree.parent / f"{source_tree.name}.zip").exists()
 
     def test_several_files_become_an_archive(
@@ -909,12 +904,10 @@ class TestSmartCompress:
         second.write_bytes(os.urandom(1024))
         output = temp_dir / "both.tar"
 
-        result = runner.invoke(
-            app, ["compress", str(payload), str(second), "-o", str(output), "-q"]
-        )
+        invoke("compress", payload, second, "-o", output, "-q")
 
-        assert result.exit_code == EXIT_OK
-        assert output.exists()
+        with tarfile.open(output) as tar:
+            assert sorted(tar.getnames()) == [payload.name, second.name]
 
     @pytest.mark.parametrize(
         "name,expected_magic",
@@ -930,9 +923,8 @@ class TestSmartCompress:
         """Test that a recognisable extension on -o chooses the format by itself."""
         output = temp_dir / name
 
-        result = runner.invoke(app, ["compress", str(payload), "-o", str(output), "-q"])
+        invoke("compress", payload, "-o", output, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert output.read_bytes().startswith(expected_magic)
 
     def test_explicit_format_beats_the_output_name(
@@ -941,9 +933,7 @@ class TestSmartCompress:
         """Test that -f overrides whatever the extension suggests."""
         output = temp_dir / "misleading.gz"
 
-        runner.invoke(
-            app, ["compress", str(payload), "-o", str(output), "-f", "zst", "-q"]
-        )
+        invoke("compress", payload, "-o", output, "-f", "zst", "-q")
 
         assert output.read_bytes().startswith(b"\x28\xb5\x2f\xfd")
 
@@ -953,38 +943,32 @@ class TestSmartCompress:
         """Test that the longest matching suffix wins, so out.tar.zst is an archive."""
         output = temp_dir / "out.tar.zst"
 
-        result = runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(output), "-q"]
-        )
+        invoke("compress", source_tree, "-o", output, "-q")
 
-        assert result.exit_code == EXIT_OK
         # Round-trips as an archive rather than as a lone compressed file
         dest = temp_dir / "back"
-        assert (
-            runner.invoke(
-                app, ["extract", str(output), "-o", str(dest), "-q"]
-            ).exit_code
-            == EXIT_OK
-        )
+        invoke("extract", output, "-o", dest, "-q")
         assert (dest / source_tree.name).is_dir()
 
     def test_single_file_format_refuses_several_inputs(
         self, source_tree: Path, temp_dir: Path
     ) -> None:
         """Test that a .gz holds one file, so a directory cannot go into one."""
-        result = runner.invoke(
-            app,
-            ["compress", str(source_tree), "-f", "gz", "-o", str(temp_dir / "o.gz")],
+        result = invoke(
+            "compress",
+            source_tree,
+            "-f",
+            "gz",
+            "-o",
+            temp_dir / "o.gz",
+            expect=EXIT_USAGE,
         )
 
-        assert result.exit_code == EXIT_USAGE
         assert "single file" in result.output
 
     def test_unknown_format_is_refused(self, payload: Path) -> None:
         """Test that an unrecognised -f names neither container."""
-        result = runner.invoke(app, ["compress", str(payload), "-f", "bogus"])
-
-        assert result.exit_code == EXIT_USAGE
+        invoke("compress", payload, "-f", "bogus", expect=EXIT_USAGE)
 
 
 class TestSmartExtract:
@@ -998,10 +982,9 @@ class TestSmartExtract:
         packed = temp_dir / f"p.{fmt}"
         restored = temp_dir / f"back.{fmt}"
 
-        runner.invoke(app, ["compress", str(payload), "-o", str(packed), "-q"])
-        result = runner.invoke(app, ["extract", str(packed), "-o", str(restored), "-q"])
+        invoke("compress", payload, "-o", packed, "-q")
+        invoke("extract", packed, "-o", restored, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert restored.read_bytes() == payload.read_bytes()
 
     def test_dispatch_follows_the_bytes_not_the_name(
@@ -1009,54 +992,47 @@ class TestSmartExtract:
     ) -> None:
         """Test that a renamed .gz is still recognised as one."""
         packed = temp_dir / "p.gz"
-        runner.invoke(app, ["compress", str(payload), "-o", str(packed), "-q"])
+        invoke("compress", payload, "-o", packed, "-q")
 
         disguised = temp_dir / "mystery.dat"
         disguised.write_bytes(packed.read_bytes())
         restored = temp_dir / "back.bin"
 
-        result = runner.invoke(
-            app, ["extract", str(disguised), "-o", str(restored), "-q"]
-        )
+        invoke("extract", disguised, "-o", restored, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert restored.read_bytes() == payload.read_bytes()
 
     def test_an_archive_named_like_anything_still_extracts(
-        self, source_tree: Path, temp_dir: Path
+        self,
+        source_tree: Path,
+        temp_dir: Path,
+        make_archive: Callable[[str], Path],
     ) -> None:
         """Test that a renamed archive still extracts."""
-        packed = temp_dir / "p.tar"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(packed), "-f", "tar", "-q"]
-        )
-
         disguised = temp_dir / "riddle.bin"
-        disguised.write_bytes(packed.read_bytes())
+        disguised.write_bytes(make_archive("tar").read_bytes())
         dest = temp_dir / "out"
 
-        result = runner.invoke(app, ["extract", str(disguised), "-o", str(dest), "-q"])
+        invoke("extract", disguised, "-o", dest, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert (dest / source_tree.name).is_dir()
 
     def test_an_archive_unpacks_beside_itself(
-        self, source_tree: Path, temp_dir: Path
+        self,
+        source_tree: Path,
+        temp_dir: Path,
+        make_archive: Callable[[str], Path],
     ) -> None:
         """Test that with no -o, entries land next to the archive, not in the cwd."""
-        packed = temp_dir / "p.tar"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(packed), "-f", "tar", "-q"]
-        )
+        packed = make_archive("tar")
 
         # The sources are beside the archive, so they would be in the way
         for f in source_tree.iterdir():
             f.unlink()
         source_tree.rmdir()
 
-        result = runner.invoke(app, ["extract", str(packed), "-q"])
+        invoke("extract", packed, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert (temp_dir / source_tree.name).is_dir()
         assert not (Path.cwd() / source_tree.name).exists()
 
@@ -1065,26 +1041,24 @@ class TestSmartExtract:
     ) -> None:
         """Test that -o naming an existing directory puts the file inside it."""
         packed = temp_dir / "p.gz"
-        runner.invoke(app, ["compress", str(payload), "-o", str(packed), "-q"])
+        invoke("compress", payload, "-o", packed, "-q")
 
         into = temp_dir / "into"
         into.mkdir()
 
-        result = runner.invoke(app, ["extract", str(packed), "-o", str(into), "-q"])
+        invoke("extract", packed, "-o", into, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert (into / "p").read_bytes() == payload.read_bytes()
 
     def test_several_inputs_in_one_go(self, payload: Path, temp_dir: Path) -> None:
         """Test that each input is dispatched on its own."""
         first = temp_dir / "a.gz"
         second = temp_dir / "b.zst"
-        runner.invoke(app, ["compress", str(payload), "-o", str(first), "-q"])
-        runner.invoke(app, ["compress", str(payload), "-o", str(second), "-q"])
+        invoke("compress", payload, "-o", first, "-q")
+        invoke("compress", payload, "-o", second, "-q")
 
-        result = runner.invoke(app, ["extract", str(first), str(second), "-q"])
+        invoke("extract", first, second, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert (temp_dir / "a").read_bytes() == payload.read_bytes()
         assert (temp_dir / "b").read_bytes() == payload.read_bytes()
 
@@ -1093,11 +1067,10 @@ class TestSmartExtract:
     ) -> None:
         """Test that there is nothing to list in a container holding one file."""
         packed = temp_dir / "p.gz"
-        runner.invoke(app, ["compress", str(payload), "-o", str(packed), "-q"])
+        invoke("compress", payload, "-o", packed, "-q")
 
-        result = runner.invoke(app, ["extract", str(packed), "--list"])
+        result = invoke("extract", packed, "--list", expect=EXIT_USAGE)
 
-        assert result.exit_code == EXIT_USAGE
         assert "nothing to list" in result.output
 
 
@@ -1111,9 +1084,8 @@ class TestMergedVerbCompatibility:
         """Test that `archive` is an alias of `compress`."""
         output = temp_dir / "out.tar.zst"
 
-        result = runner.invoke(app, [name, str(source_tree), "-o", str(output), "-q"])
+        invoke(name, source_tree, "-o", output, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert output.exists()
 
     @pytest.mark.parametrize("name", ["decompress", "d", "decomp"])
@@ -1123,24 +1095,23 @@ class TestMergedVerbCompatibility:
         """Test that `decompress` is an alias of `extract`."""
         packed = temp_dir / "p.comp"
         restored = temp_dir / "back.bin"
-        runner.invoke(app, ["compress", str(payload), "-o", str(packed), "-q"])
+        invoke("compress", payload, "-o", packed, "-q")
 
-        result = runner.invoke(app, [name, str(packed), "-o", str(restored), "-q"])
+        invoke(name, packed, "-o", restored, "-q")
 
-        assert result.exit_code == EXIT_OK
         assert restored.read_bytes() == payload.read_bytes()
 
     def test_decompress_now_handles_archives_too(
-        self, source_tree: Path, temp_dir: Path
+        self,
+        source_tree: Path,
+        temp_dir: Path,
+        make_archive: Callable[[str], Path],
     ) -> None:
         """Test that the merged verb does not care which name was typed."""
-        packed = temp_dir / "out.tar"
-        runner.invoke(
-            app, ["compress", str(source_tree), "-o", str(packed), "-f", "tar", "-q"]
-        )
+        dest = temp_dir / "out"
 
-        result = runner.invoke(
-            app, ["decompress", str(packed), "-o", str(temp_dir / "out"), "-q"]
-        )
+        invoke("decompress", make_archive("tar"), "-o", dest, "-q")
 
-        assert result.exit_code == EXIT_OK
+        for original in source_tree.iterdir():
+            restored = dest / source_tree.name / original.name
+            assert restored.read_bytes() == original.read_bytes()
