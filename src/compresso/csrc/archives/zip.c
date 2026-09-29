@@ -406,6 +406,7 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
 }
 
 static int zip_skip_entry(void *reader_ptr) {
+  (void)reader_ptr;
   // ZIP reader moves to next entry by default
   return 0;
 }

@@ -193,6 +193,7 @@ static void *tar_create_reader(const char *input_path) {
 }
 
 static int tar_get_entry_count(void *reader_ptr) {
+  (void)reader_ptr;
   // libarchive doesn't provide a direct way to get entry count
   return -1;
 }
@@ -322,6 +323,7 @@ static int tar_skip_entry(void *reader_ptr) {
 }
 
 static int tar_reset_reader(void *reader_ptr) {
+  (void)reader_ptr;
   // TAR archives don't support seeking/resetting
   PyErr_SetString(PyExc_NotImplementedError, "TAR reader cannot be reset");
   return -1;
