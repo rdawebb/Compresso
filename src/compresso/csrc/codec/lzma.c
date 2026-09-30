@@ -9,6 +9,7 @@ typedef struct {
   lzma_stream strm;
   lzma_ret code;
   int started; // strm holds an encoder or decoder, so end() must release it
+  int decompress;
   char message[128];
 } LzmaState;
 
@@ -25,11 +26,16 @@ static uint32_t codec_lzma_preset(int level, int extreme) {
 static int codec_lzma_begin(void *state, const CodecParams *params,
                             int decompress) {
   LzmaState *s = (LzmaState *)state;
+  s->decompress = decompress;
+
+  // liblzma decodes every stream itself, and skips the Stream Padding the .xz
+  // format allows between and after them, so it only ends once input does
+  uint32_t flags = params->concatenated ? LZMA_CONCATENATED : 0;
 
   // The driver zeroes the state, which is what LZMA_STREAM_INIT amounts to
   s->code =
       decompress
-          ? lzma_stream_decoder(&s->strm, LZMA_DECOMPRESS_MEMLIMIT, 0)
+          ? lzma_stream_decoder(&s->strm, LZMA_DECOMPRESS_MEMLIMIT, flags)
           : lzma_easy_encoder(
                 &s->strm, codec_lzma_preset(params->level, params->extreme),
                 LZMA_CHECK_CRC64);
@@ -59,7 +65,7 @@ static int codec_lzma_process(void *state, CodecBuf *buf, int finish) {
   buf->avail_out = s->strm.avail_out;
 
   if (r == LZMA_STREAM_END) {
-    return CODEC_DONE;
+    return s->decompress ? CODEC_STREAM_END : CODEC_DONE;
   }
   if (r != LZMA_OK) {
     s->code = r;

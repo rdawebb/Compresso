@@ -54,7 +54,7 @@ class TestStandaloneDecoding:
             _case("gzip_multi_member.gz", PART1 + PART2),
             _case("gzip_bgzf.gz", ALICE),
             _case("bzip2_pbzip2.bz2", ALICE),
-            _case("xz_concat.xz", PART1 + PART2, first_stream_only=True),
+            _case("xz_concat.xz", PART1 + PART2),
             _case("lz4_concat.lz4", PART1 + PART2, first_stream_only=True),
             _case("lz4_skippable.lz4", PART1 + PART2, first_stream_only=True),
             _case("zstd_concat.zst", PART1 + PART2),
@@ -93,16 +93,51 @@ class TestStandaloneDecoding:
 
         assert restored.read_bytes() == PART1
 
-    def test_comp_rejects_data_after_its_payload(self, temp_dir: Path) -> None:
+    @pytest.mark.parametrize(
+        ("padding", "between"),
+        [(bytes(4), False), (bytes(8), True)],
+        ids=["after", "between"],
+    )
+    def test_xz_skips_stream_padding(
+        self, temp_dir: Path, padding: bytes, between: bool
+    ) -> None:
+        """Test that xz's Stream Padding, null bytes in fours, is skipped silently."""
+        single = (INTEROP / "xz_single.xz").read_bytes()
+        source = temp_dir / "padded.xz"
+        source.write_bytes(single + padding + (single if between else b""))
+        restored = temp_dir / "restored"
+
+        _core.decompress_standalone(str(source), str(restored))
+
+        assert restored.read_bytes() == (PART1 + PART1 if between else PART1)
+
+    @pytest.mark.parametrize(
+        "trailing", [b"junk", bytes(3)], ids=["garbage", "unaligned-padding"]
+    )
+    def test_xz_rejects_trailing_data(self, temp_dir: Path, trailing: bytes) -> None:
+        """Test that xz, as the xz tool does, fails on anything but padding."""
+        source = temp_dir / "trailing.xz"
+        source.write_bytes((INTEROP / "xz_single.xz").read_bytes() + trailing)
+        restored = temp_dir / "restored"
+
+        with pytest.raises(BackendError):
+            _core.decompress_standalone(str(source), str(restored))
+
+        assert not restored.exists()
+
+    @pytest.mark.parametrize("algo", ["zlib", "bzip2", "lzma"])
+    def test_comp_rejects_data_after_its_payload(
+        self, temp_dir: Path, algo: str
+    ) -> None:
         """Test that .comp, which holds exactly one stream, has no such leeway."""
         compressed = temp_dir / "part1.comp"
         _core.compress_file(
-            str(INTEROP / "part1.txt"), str(compressed), "zlib", "balanced", -1
+            str(INTEROP / "part1.txt"), str(compressed), algo, "balanced", -1
         )
-        compressed.write_bytes(compressed.read_bytes() + b"junk")
+        compressed.write_bytes(compressed.read_bytes() + bytes(4))
         restored = temp_dir / "restored"
 
-        with pytest.raises(BackendError, match="after the end of a zlib stream"):
+        with pytest.raises(BackendError, match=f"after the end of a {algo} stream"):
             _core.decompress_file(str(compressed), str(restored), "")
 
         assert not restored.exists()
