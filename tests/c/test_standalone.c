@@ -169,10 +169,6 @@ static void append_file(const char *dst, const char *src) {
 TEST_RANGE([ 0, 4, 1 ])
 void test_decodes_concatenated_streams(int index) {
   const StandaloneFormat *fmt = FORMATS[index].get();
-  if (FORMATS[index].format == FORMAT_LZ4) {
-    TEST_IGNORE_MESSAGE("decodes only the first stream");
-  }
-
   char comp[256], both[256], out[256];
   snprintf(comp, sizeof(comp), "tmp_%s_cat.compressed", fmt->name);
   snprintf(both, sizeof(both), "tmp_%s_cat.both", fmt->name);

@@ -56,8 +56,8 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
     buf->next_out += produced;
     buf->avail_out -= produced;
 
-    // Anything past the first frame is ignored
-    return r == 0 ? CODEC_DONE : CODEC_MORE;
+    // A skippable frame decodes to nothing and ends like any other
+    return r == 0 ? CODEC_STREAM_END : CODEC_MORE;
   }
 
   // The header goes out on its own, leaving a full buffer for the chunk that
@@ -103,6 +103,12 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
   return CODEC_MORE;
 }
 
+static int lz4_reset(void *state) {
+  LZ4State *s = (LZ4State *)state;
+  LZ4F_resetDecompressionContext(s->dctx);
+  return 0;
+}
+
 static void lz4_end(void *state) {
   LZ4State *s = (LZ4State *)state;
   if (s->cctx) {
@@ -119,6 +125,7 @@ static const CodecOps lz4_ops = {
     .out_chunk = LZ4_OUT_CHUNK,
     .begin = lz4_begin,
     .process = lz4_process,
+    .reset = lz4_reset,
     .end = lz4_end,
 };
 

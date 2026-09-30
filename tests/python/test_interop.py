@@ -18,26 +18,22 @@ PART1 = (INTEROP / "part1.txt").read_bytes()
 PART2 = (INTEROP / "part2.txt").read_bytes()
 ALICE = (FIXTURES / "alice29.txt").read_bytes()
 
+# A skippable frame (zstd and lz4 share the format): magic 0x184D2A50, a u32 LE
+# length, then that many bytes to ignore
+SKIPPABLE = b"\x50\x2a\x4d\x18\x04\x00\x00\x00SKIP"
 
-def _case(fixture: str, expected: bytes, *, first_stream_only: bool = False) -> object:
+
+def _case(fixture: str, expected: bytes) -> object:
     """One decoding case, named by its fixture.
 
     Args:
         fixture: The file under tests/fixtures/interop.
         expected: What the whole file decodes to.
-        first_stream_only: Whether the decoder still stops after the first
-            stream, making the case an expected failure.
 
     Returns:
         The pytest parameter set.
     """
-    marks = (
-        [pytest.mark.xfail(reason="decodes only the first stream")]
-        if first_stream_only
-        else []
-    )
-
-    return pytest.param(fixture, expected, id=fixture, marks=marks)
+    return pytest.param(fixture, expected, id=fixture)
 
 
 class TestStandaloneDecoding:
@@ -55,8 +51,8 @@ class TestStandaloneDecoding:
             _case("gzip_bgzf.gz", ALICE),
             _case("bzip2_pbzip2.bz2", ALICE),
             _case("xz_concat.xz", PART1 + PART2),
-            _case("lz4_concat.lz4", PART1 + PART2, first_stream_only=True),
-            _case("lz4_skippable.lz4", PART1 + PART2, first_stream_only=True),
+            _case("lz4_concat.lz4", PART1 + PART2),
+            _case("lz4_skippable.lz4", PART1 + PART2),
             _case("zstd_concat.zst", PART1 + PART2),
             _case("zstd_skippable.zst", PART1 + PART2),
         ],
@@ -125,7 +121,31 @@ class TestStandaloneDecoding:
 
         assert not restored.exists()
 
-    @pytest.mark.parametrize("algo", ["zlib", "bzip2", "lzma"])
+    def test_lz4_skips_a_trailing_skippable_frame(self, temp_dir: Path) -> None:
+        """Test that a skippable frame after the last frame decodes to nothing."""
+        source = temp_dir / "skippable.lz4"
+        source.write_bytes((INTEROP / "lz4_single.lz4").read_bytes() + SKIPPABLE)
+        restored = temp_dir / "restored"
+
+        _core.decompress_standalone(str(source), str(restored))
+
+        assert restored.read_bytes() == PART1
+
+    @pytest.mark.parametrize(
+        "trailing", [b"junk", bytes(8)], ids=["garbage", "zero-padding"]
+    )
+    def test_lz4_rejects_trailing_data(self, temp_dir: Path, trailing: bytes) -> None:
+        """Test that lz4, as the lz4 tool does, fails on anything but a frame."""
+        source = temp_dir / "trailing.lz4"
+        source.write_bytes((INTEROP / "lz4_single.lz4").read_bytes() + trailing)
+        restored = temp_dir / "restored"
+
+        with pytest.raises(BackendError):
+            _core.decompress_standalone(str(source), str(restored))
+
+        assert not restored.exists()
+
+    @pytest.mark.parametrize("algo", ["zlib", "bzip2", "lzma", "lz4"])
     def test_comp_rejects_data_after_its_payload(
         self, temp_dir: Path, algo: str
     ) -> None:
