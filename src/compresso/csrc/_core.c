@@ -10,6 +10,7 @@ PyObject *comp_Error;
 PyObject *comp_HeaderError;
 PyObject *comp_BackendError;
 PyObject *comp_Cancelled;
+PyObject *comp_TrailingDataWarning;
 
 // ---- Cancel Token ----
 
@@ -910,6 +911,15 @@ PyMODINIT_FUNC PyInit__core(void) {
     Py_DECREF(comp_BackendError);
     Py_DECREF(comp_HeaderError);
     Py_DECREF(comp_Error);
+    Py_DECREF(module);
+    return NULL;
+  }
+
+  comp_TrailingDataWarning = PyErr_NewException(
+      "compresso.TrailingDataWarning", PyExc_UserWarning, NULL);
+  if (!comp_TrailingDataWarning ||
+      PyModule_AddObjectRef(module, "TrailingDataWarning",
+                            comp_TrailingDataWarning) < 0) {
     Py_DECREF(module);
     return NULL;
   }

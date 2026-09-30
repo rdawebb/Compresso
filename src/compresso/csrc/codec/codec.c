@@ -96,6 +96,9 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
   int at_boundary = 0;
   int members = 0;
   size_t member_out = 0;
+  uint64_t read_total = 0;
+  uint64_t member_start = 0; // Input offset of the member being decoded
+  int trailing_ignored = 0;
 
   Py_BEGIN_ALLOW_THREADS
 
@@ -110,6 +113,7 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
 
       buf.next_in = in_buf;
       buf.avail_in = nread;
+      read_total += nread;
       if (feof(src)) {
         finish = 1;
       }
@@ -125,9 +129,14 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
       if (buf.avail_in == 0) {
         break; // Only reachable at end of input: the last member was complete
       }
+      member_start = read_total - buf.avail_in;
       if (!params->concatenated || !ops->reset) {
-        err = -1;
-        fail = FAIL_TRAILING;
+        if (params->ignore_trailing) {
+          trailing_ignored = 1;
+        } else {
+          err = -1;
+          fail = FAIL_TRAILING;
+        }
         break;
       }
       if (ops->reset(state) != 0) {
@@ -149,9 +158,15 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
 
       int status = ops->process(state, &buf, finish);
       if (status == CODEC_ERR) {
-        err = -1;
         // Failing before producing anything is a trailing error
-        fail = (members > 0 && member_out == 0) ? FAIL_TRAILING : FAIL_CODEC;
+        int trailing = members > 0 && member_out == 0;
+        if (trailing && params->ignore_trailing) {
+          trailing_ignored = 1;
+          done = 1;
+          break;
+        }
+        err = -1;
+        fail = trailing ? FAIL_TRAILING : FAIL_CODEC;
         break;
       }
 
@@ -194,8 +209,18 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
 
   Py_END_ALLOW_THREADS
 
-      // Before end(), which releases what describe() reads from
-      if (err == -1) {
+      // Fails the run instead when warnings are errors
+      if (err == 0 && trailing_ignored &&
+          PyErr_WarnFormat(comp_TrailingDataWarning, 1,
+                           "Ignored trailing data from byte %llu, after the "
+                           "end of the %s stream",
+                           (unsigned long long)member_start,
+                           codec_label(ops, params)) < 0) {
+    err = -1;
+  }
+
+  // Before end(), which releases what describe() reads from
+  if (err == -1) {
     set_failure(ops, params, state, fail, decompress);
   }
 

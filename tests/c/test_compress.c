@@ -283,3 +283,20 @@ void test_decompress_removes_output_of_a_corrupt_payload(void) {
 
   remove(comp);
 }
+
+void test_decompress_rejects_data_after_the_payload(void) {
+  const char *comp = "tmp_cmp_trailing.comp";
+  TEST_ASSERT_EQUAL_INT(
+      0, compress(TEST_INPUT, comp, ALGO_ZLIB, -1, OW_OVERWRITE, NULL, 0));
+  FILE *f = fopen(comp, "ab");
+  TEST_ASSERT_NOT_NULL(f);
+  fputs("trailing", f);
+  fclose(f);
+
+  // .comp holds exactly one stream, so has no trailing data to tolerate
+  assert_error(decompress_file(comp, "tmp_cmp_trailing.out", ALGO_NONE, NULL),
+               comp_BackendError);
+  TEST_ASSERT_EQUAL_INT(-1, file_size("tmp_cmp_trailing.out"));
+
+  remove(comp);
+}

@@ -4,8 +4,10 @@ repos:
     hooks:
       - id: trailing-whitespace
         name: Check trailing whitespace
+        exclude: ^tests/fixtures/interop/part\d+\.txt$
       - id: end-of-file-fixer
         name: Check end of file newlines
+        exclude: ^tests/fixtures/interop/part\d+\.txt$
       - id: check-yaml
         name: Check YAML
       - id: check-added-large-files

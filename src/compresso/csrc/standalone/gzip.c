@@ -66,8 +66,10 @@ static int gzip_decompress_file(const char *input_path, const char *output_path,
 
   // zlib consumes the header's optional fields and checks the trailer's CRC32
   // and ISIZE itself
-  CodecParams params = {
-      .wrap = CODEC_WRAP_GZIP, .concatenated = 1, .label = "gzip"};
+  CodecParams params = {.wrap = CODEC_WRAP_GZIP,
+                        .concatenated = 1,
+                        .ignore_trailing = 1,
+                        .label = "gzip"};
   return codec_run_file(codec_zlib_ops(), &params, 1, input_path, output_path,
                         ctx, "gzip decompression failed");
 }

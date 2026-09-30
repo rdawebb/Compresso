@@ -15,6 +15,13 @@ class BackendError(Error):
 class Cancelled(Error):
     """Raised when an operation stopped because its CancelToken was set."""
 
+class TrailingDataWarning(UserWarning):
+    """Warned when data after the end of a compressed stream was ignored.
+
+    Only gzip tolerates it, as RFC 1952 allows; the output holds everything
+    before the trailing data, which may be worth checking.
+    """
+
 class CancelToken:
     """Cancellation flag shared with a running compression.
 

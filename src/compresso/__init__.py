@@ -6,6 +6,7 @@ from ._core import (
     CancelToken,
     Error,
     HeaderError,
+    TrailingDataWarning,
     compress_file,
     decompress_file,
 )
@@ -59,6 +60,7 @@ __all__: list[str] = [
     "JobResult",
     "OverwriteMode",
     "ProgressCallback",
+    "TrailingDataWarning",
     "benchmark_file",
     "compress_file",
     "decompress_file",

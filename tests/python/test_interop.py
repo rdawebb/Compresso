@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from compresso import _core
+from compresso import BackendError, TrailingDataWarning, _core
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 INTEROP = FIXTURES / "interop"
@@ -51,8 +51,8 @@ class TestStandaloneDecoding:
             _case("xz_single.xz", PART1),
             _case("lz4_single.lz4", PART1),
             _case("zstd_single.zst", PART1),
-            _case("gzip_multi_member.gz", PART1 + PART2, first_stream_only=True),
-            _case("gzip_bgzf.gz", ALICE, first_stream_only=True),
+            _case("gzip_multi_member.gz", PART1 + PART2),
+            _case("gzip_bgzf.gz", ALICE),
             _case("bzip2_pbzip2.bz2", ALICE, first_stream_only=True),
             _case("xz_concat.xz", PART1 + PART2, first_stream_only=True),
             _case("lz4_concat.lz4", PART1 + PART2, first_stream_only=True),
@@ -70,6 +70,40 @@ class TestStandaloneDecoding:
         _core.decompress_standalone(str(INTEROP / fixture), str(restored))
 
         assert restored.read_bytes() == expected
+
+    @pytest.mark.parametrize(
+        "trailing", [b"junk", bytes(512)], ids=["garbage", "zero-padding"]
+    )
+    def test_gzip_warns_about_trailing_data_and_keeps_the_output(
+        self, temp_dir: Path, trailing: bytes
+    ) -> None:
+        """Test that data after the last gzip member is ignored with a warning.
+
+        RFC 1952 allows it; tape-blocked archives end in zero padding.
+        """
+        single = (INTEROP / "gzip_single.gz").read_bytes()
+        source = temp_dir / "trailing.gz"
+        source.write_bytes(single + trailing)
+        restored = temp_dir / "restored"
+
+        with pytest.warns(TrailingDataWarning, match=f"from byte {len(single)},"):
+            _core.decompress_standalone(str(source), str(restored))
+
+        assert restored.read_bytes() == PART1
+
+    def test_comp_rejects_data_after_its_payload(self, temp_dir: Path) -> None:
+        """Test that .comp, which holds exactly one stream, has no such leeway."""
+        compressed = temp_dir / "part1.comp"
+        _core.compress_file(
+            str(INTEROP / "part1.txt"), str(compressed), "zlib", "balanced", -1
+        )
+        compressed.write_bytes(compressed.read_bytes() + b"junk")
+        restored = temp_dir / "restored"
+
+        with pytest.raises(BackendError, match="after the end of a zlib stream"):
+            _core.decompress_file(str(compressed), str(restored), "")
+
+        assert not restored.exists()
 
 
 class TestTarExtraction:

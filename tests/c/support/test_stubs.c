@@ -8,6 +8,7 @@ PyObject *comp_Error = NULL;
 PyObject *comp_HeaderError = NULL;
 PyObject *comp_BackendError = NULL;
 PyObject *comp_Cancelled = NULL;
+PyObject *comp_TrailingDataWarning = NULL;
 
 // archives.c needs libarchive/libzip, so validate.c's lookup is answered here
 // with just the fields it reads, copied from archives/{tar,zip}.c

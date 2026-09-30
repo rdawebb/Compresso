@@ -181,6 +181,7 @@ void setUp(void) {
   comp_BackendError = PyExc_RuntimeError;
   comp_HeaderError = PyExc_ValueError;
   comp_Error = PyExc_RuntimeError;
+  comp_TrailingDataWarning = PyExc_UserWarning;
 
   stub_end_calls = 0;
   stub_reset_calls = 0;
@@ -197,6 +198,7 @@ void setUp(void) {
 
 void tearDown(void) {
   PyErr_Clear();
+  PyRun_SimpleString("import warnings; warnings.resetwarnings()");
   remove(TMP_OUT);
   remove(TMP_IN);
 }
@@ -419,6 +421,57 @@ void test_driver_reports_a_truncated_later_member(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_members("abc|de", 1));
   TEST_ASSERT_TRUE(error_says("Truncated or incomplete stub stream"));
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+// ---- Ignoring trailing data ----
+
+static int run_members_ignoring(const char *input, int concatenated) {
+  write_file(TMP_IN, input);
+  CodecParams params = {.level = STUB_MEMBERS,
+                        .concatenated = concatenated,
+                        .ignore_trailing = 1};
+  return codec_run_file(&stub_ops, &params, 1, TMP_IN, TMP_OUT, &ctx,
+                        "stub run failed");
+}
+
+// `action` is a warnings.simplefilter action, e.g. "error" to catch a warning
+static void filter_warnings(const char *action) {
+  char code[96];
+  snprintf(code, sizeof(code), "import warnings; warnings.simplefilter('%s')",
+           action);
+  TEST_ASSERT_EQUAL_INT(0, PyRun_SimpleString(code));
+}
+
+void test_driver_keeps_the_output_before_ignored_trailing_data(void) {
+  filter_warnings("ignore");
+
+  TEST_ASSERT_EQUAL_INT(0, run_members_ignoring("abc|def|!junk", 1));
+  TEST_ASSERT_TRUE(output_is("abcdef"));
+}
+
+void test_driver_warns_with_the_offset_of_ignored_trailing_data(void) {
+  filter_warnings("error");
+
+  TEST_ASSERT_EQUAL_INT(-1, run_members_ignoring("abc|def|!junk", 1));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_UserWarning));
+  TEST_ASSERT_TRUE(error_says("from byte 8, after the end of the stub stream"));
+  // A warning raised as an error fails the run like any other
+  TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+void test_driver_ignores_a_second_member_unless_concatenated(void) {
+  filter_warnings("error");
+
+  TEST_ASSERT_EQUAL_INT(-1, run_members_ignoring("abc|def|", 0));
+  TEST_ASSERT_TRUE(error_says("from byte 4"));
+  TEST_ASSERT_EQUAL_INT(0, stub_reset_calls);
+}
+
+void test_driver_still_fails_a_truncated_member_when_ignoring(void) {
+  filter_warnings("error");
+
+  TEST_ASSERT_EQUAL_INT(-1, run_members_ignoring("abc|de", 1));
+  TEST_ASSERT_TRUE(error_says("Truncated or incomplete stub stream"));
 }
 
 // ---- Without a context ----

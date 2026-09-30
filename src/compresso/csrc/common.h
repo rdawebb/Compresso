@@ -177,6 +177,7 @@ extern PyObject *comp_Error;
 extern PyObject *comp_HeaderError;
 extern PyObject *comp_BackendError;
 extern PyObject *comp_Cancelled;
+extern PyObject *comp_TrailingDataWarning;
 
 // ---- Helpers ----
 
