@@ -15,7 +15,9 @@ typedef struct {
   int header_written;
 } LZ4State;
 
-static int lz4_begin(void *state, const CodecParams *params, int decompress) {
+static int lz4_begin(void *state, const CodecParams *params, int decompress,
+                     CoreContext *ctx) {
+  (void)ctx;
   LZ4State *s = (LZ4State *)state;
 
   if (decompress) {

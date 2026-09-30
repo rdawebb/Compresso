@@ -3,6 +3,7 @@
 The fixtures come from scripts/interop_fixtures.sh.
 """
 
+import logging
 import stat
 import sys
 from pathlib import Path
@@ -106,6 +107,36 @@ class TestStandaloneDecoding:
         _core.decompress_standalone(str(source), str(restored))
 
         assert restored.read_bytes() == (PART1 + PART1 if between else PART1)
+
+    def test_xz_decodes_an_unsupported_check_with_a_warning(
+        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that an unknown check type is logged and skipped."""
+        restored = temp_dir / "restored"
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            _core.decompress_standalone(
+                str(INTEROP / "xz_unsupported_check.xz"), str(restored)
+            )
+
+        assert restored.read_bytes() == PART1
+        assert [r.getMessage() for r in caplog.records] == [
+            (
+                "xz stream has an unsupported integrity check type; not "
+                "verifying its integrity"
+            )
+        ]
+
+    def test_xz_with_a_known_check_logs_nothing(
+        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that the warning is specific to the unsupported check type."""
+        with caplog.at_level(logging.DEBUG, logger="compresso"):
+            _core.decompress_standalone(
+                str(INTEROP / "xz_single.xz"), str(temp_dir / "restored")
+            )
+
+        assert not caplog.records
 
     @pytest.mark.parametrize(
         "trailing", [b"junk", bytes(3)], ids=["garbage", "unaligned-padding"]

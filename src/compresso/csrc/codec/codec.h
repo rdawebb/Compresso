@@ -57,8 +57,10 @@ typedef struct CodecOps {
   // 0 means CODEC_CHUNK; lz4 needs its frame bound, which exceeds the input
   size_t out_chunk;
 
-  // GIL held
-  int (*begin)(void *state, const CodecParams *params, int decompress);
+  // GIL held; `ctx` (NULL-tolerant) outlives the run, so an engine may keep it
+  // to ctx_log from process()
+  int (*begin)(void *state, const CodecParams *params, int decompress,
+               CoreContext *ctx);
 
   // GIL released; `finish` is set once the input is exhausted, which is the
   // signal to flush; returns a CodecStatus

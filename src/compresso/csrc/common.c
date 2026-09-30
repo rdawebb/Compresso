@@ -3,6 +3,7 @@
 #include "fsutil.h"
 #include <Python.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -226,4 +227,18 @@ int ctx_finish(CoreContext *ctx) {
     return ctx->on_progress(ctx, ctx->job_total, ctx->job_total);
   }
   return ctx->on_progress(ctx, ctx->total_bytes, ctx->total_bytes);
+}
+
+void ctx_log(CoreContext *ctx, int level, const char *fmt, ...) {
+  if (!ctx || !ctx->on_log) {
+    return;
+  }
+
+  char message[512];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(message, sizeof(message), fmt, args);
+  va_end(args);
+
+  ctx->on_log(ctx, level, message);
 }

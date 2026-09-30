@@ -10,6 +10,8 @@ typedef struct {
   lzma_ret code;
   int started; // strm holds an encoder or decoder, so end() must release it
   int decompress;
+  CoreContext *ctx;
+  const char *label;
   char message[128];
 } LzmaState;
 
@@ -24,21 +26,24 @@ static uint32_t codec_lzma_preset(int level, int extreme) {
 }
 
 static int codec_lzma_begin(void *state, const CodecParams *params,
-                            int decompress) {
+                            int decompress, CoreContext *ctx) {
   LzmaState *s = (LzmaState *)state;
   s->decompress = decompress;
+  s->ctx = ctx;
+  s->label = params->label ? params->label : "lzma";
 
   // liblzma decodes every stream itself, and skips the Stream Padding the .xz
   // format allows between and after them, so it only ends once input does
   uint32_t flags = params->concatenated ? LZMA_CONCATENATED : 0;
+  flags |= LZMA_TELL_UNSUPPORTED_CHECK;
 
   // The driver zeroes the state, which is what LZMA_STREAM_INIT amounts to
   s->code =
       decompress
           ? lzma_stream_decoder(&s->strm, LZMA_DECOMPRESS_MEMLIMIT, flags)
-          : lzma_easy_encoder(
-                &s->strm, codec_lzma_preset(params->level, params->extreme),
-                LZMA_CHECK_CRC64);
+          : lzma_easy_encoder(&s->strm,
+                              codec_lzma_preset(params->level, params->extreme),
+                              LZMA_CHECK_CRC64);
 
   if (s->code != LZMA_OK) {
     return -1;
@@ -66,6 +71,15 @@ static int codec_lzma_process(void *state, CodecBuf *buf, int finish) {
 
   if (r == LZMA_STREAM_END) {
     return s->decompress ? CODEC_STREAM_END : CODEC_DONE;
+  }
+
+  // Reported once per stream, after its header; decoding carries on unchecked
+  if (r == LZMA_UNSUPPORTED_CHECK) {
+    ctx_log(s->ctx, CTX_LOG_WARNING,
+            "%s stream has an unsupported integrity check type; not "
+            "verifying its integrity",
+            s->label);
+    return CODEC_MORE;
   }
   if (r != LZMA_OK) {
     s->code = r;

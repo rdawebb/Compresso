@@ -2,8 +2,8 @@
 # Regenerates tests/fixtures/interop/: files made by the reference tools rather
 # than by Compresso, so the tests catch formats only other producers emit
 #
-# Needs gzip, bgzip (htslib), bzip2, pbzip2, xz, lz4, zstd, GNU tar and
-# Info-ZIP zip; GNU tar is looked up as `gtar` then `tar`, or set GNU_TAR to
+# Needs gzip, bgzip (htslib), bzip2, pbzip2, xz, lz4, zstd, GNU tar, Info-ZIP
+# zip and python3; GNU tar is looked up as `gtar` then `tar`, or set GNU_TAR to
 # override
 #
 # Usage: scripts/interop_fixtures.sh
@@ -26,7 +26,7 @@ if [ -z "${GNU_TAR:-}" ]; then
   if command -v gtar >/dev/null; then GNU_TAR=gtar; else GNU_TAR=tar; fi
 fi
 
-for tool in gzip bgzip bzip2 pbzip2 xz lz4 zstd "$GNU_TAR" zip; do
+for tool in gzip bgzip bzip2 pbzip2 xz lz4 zstd "$GNU_TAR" zip python3; do
   command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }
 done
 "$GNU_TAR" --version | grep -q "GNU tar" || {
@@ -66,6 +66,21 @@ pbzip2 -c -b1 -p2 "$ALICE" >bzip2_pbzip2.bz2
 
 # xz: two whole streams back to back
 { xz -c part1.txt; xz -c part2.txt; } >xz_concat.xz
+
+# xz: check type 0x02, which the format reserves and no xz writes; it has the
+# same 4-byte field as CRC32 (0x01), so only the header and footer flags and
+# their CRCs change, and xz itself warns and decodes it unchecked
+xz --check=crc32 -c part1.txt >xz_unsupported_check.xz
+python3 - xz_unsupported_check.xz <<'PY'
+import struct, sys, zlib
+path = sys.argv[1]
+data = bytearray(open(path, "rb").read())
+data[7] = 0x02
+data[8:12] = struct.pack("<I", zlib.crc32(data[6:8]))
+data[-3] = 0x02
+data[-12:-8] = struct.pack("<I", zlib.crc32(data[-8:-2]))
+open(path, "wb").write(data)
+PY
 
 # lz4 and zstd: back-to-back frames, and a skippable frame between two frames
 { lz4 -q -c part1.txt; lz4 -q -c part2.txt; } >lz4_concat.lz4

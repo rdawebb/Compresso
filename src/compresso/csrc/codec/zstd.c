@@ -15,7 +15,9 @@ static int zstd_level_from_generic(int level) {
   return level;
 }
 
-static int zstd_begin(void *state, const CodecParams *params, int decompress) {
+static int zstd_begin(void *state, const CodecParams *params, int decompress,
+                      CoreContext *ctx) {
+  (void)ctx;
   ZstdState *s = (ZstdState *)state;
 
   if (decompress) {

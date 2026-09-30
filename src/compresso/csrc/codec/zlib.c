@@ -18,7 +18,9 @@ static int zlib_window_bits(int wrap) {
   return wrap == CODEC_WRAP_GZIP ? (16 | MAX_WBITS) : MAX_WBITS;
 }
 
-static int zlib_begin(void *state, const CodecParams *params, int decompress) {
+static int zlib_begin(void *state, const CodecParams *params, int decompress,
+                      CoreContext *ctx) {
+  (void)ctx;
   ZlibState *s = (ZlibState *)state;
   s->decompress = decompress;
 

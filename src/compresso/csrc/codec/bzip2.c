@@ -19,7 +19,9 @@ static int bzip2_block_size_from_level(int level) {
   return level;
 }
 
-static int bzip2_begin(void *state, const CodecParams *params, int decompress) {
+static int bzip2_begin(void *state, const CodecParams *params, int decompress,
+                       CoreContext *ctx) {
+  (void)ctx;
   BzipState *s = (BzipState *)state;
   s->decompress = decompress;
 

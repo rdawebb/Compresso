@@ -181,7 +181,7 @@ void test_lz4_engine_takes_uneven_input(void) {
   CodecParams params = {.level = -1, .checksum = 1};
   void *state = calloc(1, ops->state_size);
   TEST_ASSERT_NOT_NULL(state);
-  TEST_ASSERT_EQUAL_INT(0, ops->begin(state, &params, 0));
+  TEST_ASSERT_EQUAL_INT(0, ops->begin(state, &params, 0, NULL));
 
   size_t out_size = ops->out_chunk;
   unsigned char *out = malloc(out_size);

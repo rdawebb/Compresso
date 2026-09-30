@@ -1,5 +1,6 @@
 #include "context.h"
 #include "unity.h"
+#include <stdio.h>
 #include <string.h>
 
 #define MiB (1024ULL * 1024)
@@ -334,6 +335,41 @@ void test_job_cancellation_still_lands_every_chunk(void) {
   cancel_flag = 1;
 
   TEST_ASSERT_EQUAL_INT(COMP_CANCELLED, ctx_advance(&ctx, 1));
+}
+
+// ---- ctx_log ----
+
+static struct {
+  int calls;
+  int level;
+  char message[64];
+} logged;
+
+static void record_log(CoreContext *c, int level, const char *message) {
+  (void)c;
+  logged.calls++;
+  logged.level = level;
+  snprintf(logged.message, sizeof(logged.message), "%s", message);
+}
+
+void test_log_formats_the_message_and_passes_the_level(void) {
+  memset(&logged, 0, sizeof(logged));
+  ctx.on_log = record_log;
+
+  ctx_log(&ctx, CTX_LOG_WARNING, "skipped %s (%d bytes)", "a.txt", 42);
+
+  TEST_ASSERT_EQUAL_INT(1, logged.calls);
+  TEST_ASSERT_EQUAL_INT(CTX_LOG_WARNING, logged.level);
+  TEST_ASSERT_EQUAL_STRING("skipped a.txt (42 bytes)", logged.message);
+}
+
+void test_log_without_a_hook_is_a_noop(void) {
+  memset(&logged, 0, sizeof(logged));
+
+  ctx_log(&ctx, CTX_LOG_WARNING, "unheard");
+  ctx_log(NULL, CTX_LOG_WARNING, "unheard");
+
+  TEST_ASSERT_EQUAL_INT(0, logged.calls);
 }
 
 // ---- NULL context ----

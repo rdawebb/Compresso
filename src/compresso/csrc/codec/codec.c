@@ -77,7 +77,7 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
     return -1;
   }
 
-  if (ops->begin(state, params, decompress) != 0) {
+  if (ops->begin(state, params, decompress, ctx) != 0) {
     set_failure(ops, params, state, FAIL_CODEC, decompress);
     ops->end(state);
     free(state);

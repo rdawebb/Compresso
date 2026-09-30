@@ -41,8 +41,10 @@ static int stub_reset_calls;
 static int stub_last_finish;
 static const char *stub_last_label;
 
-static int stub_begin(void *state, const CodecParams *params, int decompress) {
+static int stub_begin(void *state, const CodecParams *params, int decompress,
+                      CoreContext *ctx) {
   (void)decompress;
+  (void)ctx;
   StubState *s = (StubState *)state;
   s->mode = params->level;
 

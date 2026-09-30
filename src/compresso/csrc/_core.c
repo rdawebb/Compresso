@@ -83,6 +83,49 @@ static int progress_bridge(CoreContext *ctx, uint64_t done, uint64_t total) {
   return result;
 }
 
+// ---- Log Bridge ----
+
+// Logs to the "compresso" logger; may run inside a codec loop with the GIL
+// released, or on an error path whose exception it must leave in place
+static void log_bridge(CoreContext *ctx, int level, const char *message) {
+  (void)ctx;
+  PyGILState_STATE gstate = PyGILState_Ensure();
+
+#if PY_VERSION_HEX >= 0x030C0000
+  PyObject *pending = PyErr_GetRaisedException();
+#else
+  PyObject *pending_type, *pending, *pending_tb;
+  PyErr_Fetch(&pending_type, &pending, &pending_tb);
+#endif
+
+  // surrogateescape keeps a path in the message that isn't valid UTF-8
+  PyObject *text =
+      PyUnicode_DecodeUTF8(message, strlen(message), "surrogateescape");
+  PyObject *logging = text ? PyImport_ImportModule("logging") : NULL;
+  PyObject *logger =
+      logging ? PyObject_CallMethod(logging, "getLogger", "s", "compresso")
+              : NULL;
+  PyObject *result =
+      logger ? PyObject_CallMethod(logger, "log", "iO", level, text) : NULL;
+
+  // Logging must never fail the operation it describes
+  if (!result) {
+    PyErr_WriteUnraisable(NULL);
+  }
+
+  Py_XDECREF(result);
+  Py_XDECREF(logger);
+  Py_XDECREF(logging);
+  Py_XDECREF(text);
+
+#if PY_VERSION_HEX >= 0x030C0000
+  PyErr_SetRaisedException(pending);
+#else
+  PyErr_Restore(pending_type, pending, pending_tb);
+#endif
+  PyGILState_Release(gstate);
+}
+
 // Populates `ctx` from the optional progress= and cancel= arguments; returns -1
 // with an exception set if either is of the wrong type
 //
@@ -92,6 +135,7 @@ static int core_context_init(CoreContext *ctx, PyObject *progress,
                              PyObject *cancel) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->on_progress = progress_bridge;
+  ctx->on_log = log_bridge;
 
   if (progress && progress != Py_None) {
     if (!PyCallable_Check(progress)) {
