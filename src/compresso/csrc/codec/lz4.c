@@ -3,8 +3,9 @@
 #include <lz4frame.h>
 #include <string.h>
 
-// LZ4F_compressUpdate consumes a whole chunk in one call, so the output buffer
-// has to hold that chunk's worst case rather than a chunk's worth
+// LZ4F_compressUpdate needs room for every block a call completes: with the
+// default 64 KB blocks, at most one per 64 KB of input, each with a 4-byte
+// header, which this covers
 #define LZ4_OUT_CHUNK (CODEC_CHUNK + CODEC_CHUNK / 255 + 16)
 
 typedef struct {
