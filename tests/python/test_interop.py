@@ -53,7 +53,7 @@ class TestStandaloneDecoding:
             _case("zstd_single.zst", PART1),
             _case("gzip_multi_member.gz", PART1 + PART2),
             _case("gzip_bgzf.gz", ALICE),
-            _case("bzip2_pbzip2.bz2", ALICE, first_stream_only=True),
+            _case("bzip2_pbzip2.bz2", ALICE),
             _case("xz_concat.xz", PART1 + PART2, first_stream_only=True),
             _case("lz4_concat.lz4", PART1 + PART2, first_stream_only=True),
             _case("lz4_skippable.lz4", PART1 + PART2, first_stream_only=True),
@@ -71,18 +71,20 @@ class TestStandaloneDecoding:
 
         assert restored.read_bytes() == expected
 
+    @pytest.mark.parametrize("fixture", ["gzip_single.gz", "bzip2_single.bz2"])
     @pytest.mark.parametrize(
         "trailing", [b"junk", bytes(512)], ids=["garbage", "zero-padding"]
     )
-    def test_gzip_warns_about_trailing_data_and_keeps_the_output(
-        self, temp_dir: Path, trailing: bytes
+    def test_warns_about_trailing_data_and_keeps_the_output(
+        self, temp_dir: Path, fixture: str, trailing: bytes
     ) -> None:
-        """Test that data after the last gzip member is ignored with a warning.
+        """Test that data after the last stream is ignored with a warning.
 
-        RFC 1952 allows it; tape-blocked archives end in zero padding.
+        RFC 1952 allows it for gzip, and the gzip and bzip2 tools both only
+        warn; tape-blocked archives end in zero padding.
         """
-        single = (INTEROP / "gzip_single.gz").read_bytes()
-        source = temp_dir / "trailing.gz"
+        single = (INTEROP / fixture).read_bytes()
+        source = temp_dir / f"trailing-{fixture}"
         source.write_bytes(single + trailing)
         restored = temp_dir / "restored"
 

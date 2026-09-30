@@ -18,8 +18,8 @@ class Cancelled(Error):
 class TrailingDataWarning(UserWarning):
     """Warned when data after the end of a compressed stream was ignored.
 
-    Only gzip tolerates it, as RFC 1952 allows; the output holds everything
-    before the trailing data, which may be worth checking.
+    Only gzip and bzip2 tolerate it; the output holds everything before the
+    trailing data, which may be worth checking.
     """
 
 class CancelToken:

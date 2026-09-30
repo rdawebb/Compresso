@@ -55,7 +55,7 @@ static int bzip2_process(void *state, CodecBuf *buf, int finish) {
   buf->avail_out = s->strm.avail_out;
 
   if (r == BZ_STREAM_END) {
-    return CODEC_DONE;
+    return s->decompress ? CODEC_STREAM_END : CODEC_DONE;
   }
   if (r != BZ_OK && r != BZ_RUN_OK && r != BZ_FINISH_OK) {
     s->code = r;
@@ -63,6 +63,20 @@ static int bzip2_process(void *state, CodecBuf *buf, int finish) {
   }
 
   return CODEC_MORE;
+}
+
+// libbzip2 has no reset, so the next stream gets a fresh decoder
+static int bzip2_reset(void *state) {
+  BzipState *s = (BzipState *)state;
+  BZ2_bzDecompressEnd(&s->strm);
+  s->started = 0;
+
+  s->code = BZ2_bzDecompressInit(&s->strm, 0, 0);
+  if (s->code != BZ_OK) {
+    return -1;
+  }
+  s->started = 1;
+  return 0;
 }
 
 static void bzip2_end(void *state) {
@@ -97,6 +111,7 @@ static const CodecOps bzip2_ops = {
     .state_size = sizeof(BzipState),
     .begin = bzip2_begin,
     .process = bzip2_process,
+    .reset = bzip2_reset,
     .end = bzip2_end,
     .describe = bzip2_describe,
 };

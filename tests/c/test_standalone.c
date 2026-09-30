@@ -152,6 +152,49 @@ void test_round_trip(int index) {
   remove(out);
 }
 
+static void append_file(const char *dst, const char *src) {
+  FILE *in = fopen(src, "rb");
+  FILE *out = fopen(dst, "ab");
+  TEST_ASSERT_NOT_NULL(in);
+  TEST_ASSERT_NOT_NULL(out);
+
+  int c;
+  while ((c = fgetc(in)) != EOF) {
+    fputc(c, out);
+  }
+  fclose(in);
+  fclose(out);
+}
+
+TEST_RANGE([ 0, 4, 1 ])
+void test_decodes_concatenated_streams(int index) {
+  const StandaloneFormat *fmt = FORMATS[index].get();
+  if (FORMATS[index].format == FORMAT_XZ ||
+      FORMATS[index].format == FORMAT_LZ4) {
+    TEST_IGNORE_MESSAGE("decodes only the first stream");
+  }
+
+  char comp[256], both[256], out[256];
+  snprintf(comp, sizeof(comp), "tmp_%s_cat.compressed", fmt->name);
+  snprintf(both, sizeof(both), "tmp_%s_cat.both", fmt->name);
+  snprintf(out, sizeof(out), "tmp_%s_cat.out", fmt->name);
+
+  TEST_ASSERT_EQUAL_INT_MESSAGE(
+      0, fmt->compress_file(TEST_INPUT, comp, 6, NULL), fmt->name);
+  remove(both);
+  append_file(both, comp);
+  append_file(both, comp);
+
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, fmt->decompress_file(both, out, NULL),
+                                fmt->name);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(2 * file_size(TEST_INPUT), file_size(out),
+                                fmt->name);
+
+  remove(comp);
+  remove(both);
+  remove(out);
+}
+
 TEST_RANGE([ 0, 4, 1 ])
 void test_detects_corruption(int index) {
   const StandaloneFormat *fmt = FORMATS[index].get();
