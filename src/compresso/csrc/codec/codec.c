@@ -12,6 +12,7 @@ typedef enum {
   FAIL_WRITE,
   FAIL_CODEC,
   FAIL_TRUNCATED,
+  FAIL_TRAILING,
 } FailKind;
 
 static const char *codec_label(const CodecOps *ops, const CodecParams *params) {
@@ -35,10 +36,15 @@ static void set_failure(const CodecOps *ops, const CodecParams *params,
     PyErr_Format(comp_BackendError, "Truncated or incomplete %s stream",
                  codec_label(ops, params));
     return;
+  case FAIL_TRAILING:
+    PyErr_Format(comp_BackendError, "Invalid data after the end of a %s stream",
+                 codec_label(ops, params));
+    return;
   case FAIL_CODEC: {
     const char *message =
-        ops->describe ? ops->describe(state, codec_label(ops, params), decompress)
-                      : NULL;
+        ops->describe
+            ? ops->describe(state, codec_label(ops, params), decompress)
+            : NULL;
     if (message) {
       PyErr_SetString(comp_BackendError, message);
     }
@@ -86,6 +92,11 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
   int finish = 0;
   int done = 0;
 
+  // Set once a member ends, until the input left over is resolved
+  int at_boundary = 0;
+  int members = 0;
+  size_t member_out = 0;
+
   Py_BEGIN_ALLOW_THREADS
 
       while (!done) {
@@ -110,11 +121,28 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
       }
     }
 
+    if (at_boundary) {
+      if (buf.avail_in == 0) {
+        break; // Only reachable at end of input: the last member was complete
+      }
+      if (!params->concatenated || !ops->reset) {
+        err = -1;
+        fail = FAIL_TRAILING;
+        break;
+      }
+      if (ops->reset(state) != 0) {
+        err = -1;
+        fail = FAIL_CODEC;
+        break;
+      }
+      at_boundary = 0;
+      member_out = 0;
+    }
+
     size_t before_in = buf.avail_in;
     size_t produced_pass = 0;
 
-    // Keep pumping while the engine fills the output buffer, since a full
-    // buffer means it may have more waiting
+    // Full buffer means the engine may have more waiting
     do {
       buf.next_out = out_buf;
       buf.avail_out = out_size;
@@ -122,12 +150,14 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
       int status = ops->process(state, &buf, finish);
       if (status == CODEC_ERR) {
         err = -1;
-        fail = FAIL_CODEC;
+        // Failing before producing anything is a trailing error
+        fail = (members > 0 && member_out == 0) ? FAIL_TRAILING : FAIL_CODEC;
         break;
       }
 
       size_t produced = out_size - buf.avail_out;
       produced_pass += produced;
+      member_out += produced;
 
       if (produced > 0 &&
           (fwrite(out_buf, 1, produced, dst) != produced || ferror(dst))) {
@@ -140,14 +170,21 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
         done = 1;
         break;
       }
+      if (status == CODEC_STREAM_END) {
+        at_boundary = 1;
+        members++;
+        break;
+      }
     } while (buf.avail_out == 0);
 
     if (err || done) {
       break;
     }
+    if (at_boundary) {
+      continue; // Whatever input is left is resolved before the next pass
+    }
 
-    // The engine neither consumed nor produced, so another pass would do the
-    // same: the input ran out before the stream ended, or the engine stalled
+    // The input ran out before the stream ended, or the engine stalled
     if (buf.avail_in == before_in && produced_pass == 0) {
       err = -1;
       fail = finish ? FAIL_TRUNCATED : FAIL_CODEC;

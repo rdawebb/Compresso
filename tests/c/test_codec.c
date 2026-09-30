@@ -21,6 +21,9 @@ enum {
   STUB_FAIL_PROCESS,
   STUB_STALL,
   STUB_EXPAND, // Four output bytes per input byte, to force the drain loop
+  // Copies members that each end at a '|'; a member starting with '!' is
+  // invalid, and one without its '|' never completes
+  STUB_MEMBERS,
 };
 
 typedef struct {
@@ -28,11 +31,13 @@ typedef struct {
   int process_calls;
   unsigned char pending; // STUB_EXPAND: byte still being written out
   int pending_left;
+  int in_member; // STUB_MEMBERS: past the current member's first byte
 } StubState;
 
 // The driver frees the state before a test can read it, so what outlives the
 // run is recorded here
 static int stub_end_calls;
+static int stub_reset_calls;
 static int stub_last_finish;
 static const char *stub_last_label;
 
@@ -55,6 +60,25 @@ static int stub_process(void *state, CodecBuf *buf, int finish) {
 
   if (s->mode == STUB_STALL) {
     return CODEC_MORE; // Consumes nothing and produces nothing, forever
+  }
+
+  if (s->mode == STUB_MEMBERS) {
+    if (!s->in_member && buf->avail_in > 0 && *buf->next_in == '!') {
+      return CODEC_ERR;
+    }
+
+    while (buf->avail_in > 0 && buf->avail_out > 0) {
+      unsigned char c = *buf->next_in++;
+      buf->avail_in--;
+      if (c == '|') {
+        s->in_member = 0;
+        return CODEC_STREAM_END;
+      }
+      *buf->next_out++ = c;
+      buf->avail_out--;
+      s->in_member = 1;
+    }
+    return CODEC_MORE;
   }
 
   if (s->mode == STUB_EXPAND) {
@@ -92,6 +116,12 @@ static int stub_process(void *state, CodecBuf *buf, int finish) {
   return CODEC_MORE;
 }
 
+static int stub_reset(void *state) {
+  (void)state;
+  stub_reset_calls++;
+  return 0;
+}
+
 static void stub_end(void *state) {
   (void)state;
   stub_end_calls++;
@@ -110,6 +140,7 @@ static const CodecOps stub_ops = {
     .state_size = sizeof(StubState),
     .begin = stub_begin,
     .process = stub_process,
+    .reset = stub_reset,
     .end = stub_end,
     .describe = stub_describe,
 };
@@ -152,6 +183,7 @@ void setUp(void) {
   comp_Error = PyExc_RuntimeError;
 
   stub_end_calls = 0;
+  stub_reset_calls = 0;
   stub_last_finish = -1;
   stub_last_label = NULL;
   cancel_flag = 0;
@@ -296,6 +328,97 @@ void test_driver_reports_a_missing_input(void) {
   TEST_ASSERT_TRUE(PyErr_Occurred());
   // begin() never ran, so neither did end()
   TEST_ASSERT_EQUAL_INT(0, stub_end_calls);
+}
+
+// ---- Concatenated members ----
+
+// Decodes `input` with STUB_MEMBERS, allowing concatenation or not
+static int run_members(const char *input, int concatenated) {
+  write_file(TMP_IN, input);
+  CodecParams params = {.level = STUB_MEMBERS, .concatenated = concatenated};
+  return codec_run_file(&stub_ops, &params, 1, TMP_IN, TMP_OUT, &ctx,
+                        "stub run failed");
+}
+
+// Whether the pending exception's message contains `needle`; leaves it set
+static int error_says(const char *needle) {
+#if PY_VERSION_HEX >= 0x030C0000
+  PyObject *exc = PyErr_GetRaisedException();
+#else
+  PyObject *type, *exc, *tb;
+  PyErr_Fetch(&type, &exc, &tb);
+  PyErr_NormalizeException(&type, &exc, &tb);
+#endif
+  if (!exc) {
+    return 0;
+  }
+  PyObject *text = PyObject_Str(exc);
+  const char *message = text ? PyUnicode_AsUTF8(text) : NULL;
+  int found = message && strstr(message, needle) != NULL;
+  Py_XDECREF(text);
+#if PY_VERSION_HEX >= 0x030C0000
+  PyErr_SetRaisedException(exc);
+#else
+  PyErr_Restore(type, exc, tb);
+#endif
+  return found;
+}
+
+static int output_is(const char *expected) {
+  write_file(TMP_IN, expected);
+  return files_equal(TMP_IN, TMP_OUT);
+}
+
+void test_driver_decodes_every_member(void) {
+  TEST_ASSERT_EQUAL_INT(0, run_members("abc|def|ghi|", 1));
+  TEST_ASSERT_TRUE(output_is("abcdefghi"));
+  TEST_ASSERT_EQUAL_INT(2, stub_reset_calls);
+}
+
+void test_driver_ends_cleanly_after_a_single_member(void) {
+  TEST_ASSERT_EQUAL_INT(0, run_members("abc|", 1));
+  TEST_ASSERT_TRUE(output_is("abc"));
+  TEST_ASSERT_EQUAL_INT(0, stub_reset_calls);
+}
+
+void test_driver_reads_on_when_a_member_ends_a_chunk(void) {
+  // First member fills the read buffer exactly, so the driver has to read again
+  static char input[CODEC_CHUNK + 8];
+  memset(input, 'a', CODEC_CHUNK - 1);
+  strcpy(input + CODEC_CHUNK - 1, "|def|");
+
+  TEST_ASSERT_EQUAL_INT(0, run_members(input, 1));
+  TEST_ASSERT_EQUAL_INT(CODEC_CHUNK - 1 + 3, file_size(TMP_OUT));
+  TEST_ASSERT_EQUAL_INT(1, stub_reset_calls);
+}
+
+void test_driver_ends_cleanly_when_a_member_ends_the_input_on_a_chunk(void) {
+  static char input[CODEC_CHUNK + 1];
+  memset(input, 'a', CODEC_CHUNK - 1);
+  strcpy(input + CODEC_CHUNK - 1, "|");
+
+  TEST_ASSERT_EQUAL_INT(0, run_members(input, 1));
+  TEST_ASSERT_EQUAL_INT(CODEC_CHUNK - 1, file_size(TMP_OUT));
+  TEST_ASSERT_EQUAL_INT(0, stub_reset_calls);
+}
+
+void test_driver_refuses_a_second_member_unless_concatenated(void) {
+  TEST_ASSERT_EQUAL_INT(-1, run_members("abc|def|", 0));
+  TEST_ASSERT_TRUE(error_says("Invalid data after the end of a stub stream"));
+  TEST_ASSERT_EQUAL_INT(0, stub_reset_calls);
+  TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+void test_driver_reports_trailing_data_that_is_not_a_member(void) {
+  TEST_ASSERT_EQUAL_INT(-1, run_members("abc|!junk", 1));
+  TEST_ASSERT_TRUE(error_says("Invalid data after the end of a stub stream"));
+  TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+void test_driver_reports_a_truncated_later_member(void) {
+  TEST_ASSERT_EQUAL_INT(-1, run_members("abc|de", 1));
+  TEST_ASSERT_TRUE(error_says("Truncated or incomplete stub stream"));
+  TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
 }
 
 // ---- Without a context ----

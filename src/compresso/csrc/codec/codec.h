@@ -14,6 +14,9 @@
 typedef enum {
   CODEC_MORE = 0,
   CODEC_DONE = 1, // Stream complete; nothing further to write
+  // Decoding only: one member ended, and any input left over is either the
+  // next member (see CodecParams.concatenated) or an error
+  CODEC_STREAM_END = 2,
   CODEC_ERR = -1,
 } CodecStatus;
 
@@ -33,10 +36,11 @@ typedef struct {
 // The standalone containers embed integrity checks `.comp` does not, and
 // `.comp`'s lzma asks for an extreme preset `.xz` does not
 typedef struct {
-  int level;    // -1 for the library default
-  int checksum; // Embed, or verify, the codec's own integrity check
-  int extreme;  // lzma: LZMA_PRESET_EXTREME
-  int wrap;     // deflate: a CodecWrap
+  int level;        // -1 for the library default
+  int checksum;     // Embed, or verify, the codec's own integrity check
+  int extreme;      // lzma: LZMA_PRESET_EXTREME
+  int wrap;         // deflate: a CodecWrap
+  int concatenated; // The container allows members back to back
   uint64_t orig_size;
 
   // Codec's name in an error message; NULL uses CodecOps.name
@@ -58,6 +62,10 @@ typedef struct CodecOps {
   // GIL released; `finish` is set once the input is exhausted, which is the
   // signal to flush; returns a CodecStatus
   int (*process)(void *state, CodecBuf *buf, int finish);
+
+  // GIL released; readies a decoder that returned CODEC_STREAM_END for the
+  // next member; NULL for an engine that never returns it
+  int (*reset)(void *state);
 
   // GIL held, on every path including failure and cancellation
   void (*end)(void *state);
