@@ -256,17 +256,23 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
         return ret;
       }
     } else if (ae->type == ENTRY_DIR) {
-      archive->add_entry(writer, ae, NULL, full_path, ctx);
+      int ret = archive->add_entry(writer, ae, NULL, full_path, ctx);
       entry_free(ae);
-      int ret =
-          add_directory_recursive(writer, archive, full_path, prefix_len, ctx);
+      if (ret == 0) {
+        ret = add_directory_recursive(writer, archive, full_path, prefix_len,
+                                      ctx);
+      }
       if (ret != 0) {
         fs_closedir(dir);
         return ret;
       }
     } else {
-      archive->add_entry(writer, ae, NULL, full_path, ctx);
+      int ret = archive->add_entry(writer, ae, NULL, full_path, ctx);
       entry_free(ae);
+      if (ret != 0) {
+        fs_closedir(dir);
+        return ret;
+      }
     }
   }
 

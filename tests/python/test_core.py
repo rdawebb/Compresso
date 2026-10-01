@@ -413,6 +413,27 @@ class TestArchiveErrorTypes:
             else:
                 _core.list_archive_contents(missing)
 
+    # libzip refuses a name that isn't UTF-8, which only Linux allows
+    @pytest.mark.skipif(sys.platform != "linux", reason="needs non-UTF-8 names")
+    @pytest.mark.parametrize("kind", ["directory", "symlink"])
+    def test_entry_refused_inside_a_tree_fails_the_archive(
+        self, temp_dir: Path, kind: str
+    ) -> None:
+        """Test that a nested entry the writer refuses fails the whole job."""
+        tree = temp_dir / "tree"
+        tree.mkdir()
+        bad_name = os.fsencode(tree) + b"/bad\xff"
+        if kind == "directory":
+            os.mkdir(bad_name)
+        else:
+            os.symlink(b"target", bad_name)
+        output = temp_dir / "out.zip"
+
+        with pytest.raises(BackendError, match=f"Failed to add {kind}"):
+            _core.create_archive(str(output), "zip", [str(tree)])
+
+        assert not output.exists()
+
     @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_unwritable_destination_is_an_os_error(
         self, sample_text_file: Path, temp_dir: Path, fmt: str
