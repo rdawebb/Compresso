@@ -1,6 +1,10 @@
 """Tests for the core compression/decompression functionality."""
 
+import io
+import os
 import sys
+import tarfile
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -330,6 +334,94 @@ class TestRecognisedButUnsupportedArchive:
         with pytest.raises(BackendError, match="7z archives are recognised"):
             _core.create_archive(str(dest), "7z", [str(sample_text_file)])
         assert not dest.exists()
+
+
+def _two_entry_tar(path: Path) -> bytes:
+    """Write a GNU tar of two 5000-byte entries, returning its bytes.
+
+    Args:
+        path: Where to write the tar.
+
+    Returns:
+        The tar's bytes: a 512-byte header and 5120 bytes of data per entry.
+    """
+    data = os.urandom(5000)
+    with tarfile.open(path, "w", format=tarfile.GNU_FORMAT) as tf:
+        for name in ("a.bin", "b.bin"):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+    return path.read_bytes()
+
+
+class TestArchiveErrorTypes:
+    """Test that archive failures say whether the input, the OS or policy failed."""
+
+    def test_damaged_later_tar_header_is_corrupt_data(self, temp_dir: Path) -> None:
+        """Test that a bad checksum on the second header is corrupt input."""
+        damaged = bytearray(_two_entry_tar(temp_dir / "good.tar"))
+        damaged[512 + 5120 + 100] ^= 0xFF
+        archive = temp_dir / "damaged.tar"
+        archive.write_bytes(damaged)
+
+        with pytest.raises(CorruptDataError, match="Damaged tar archive"):
+            _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+
+    def test_truncated_tar_is_corrupt_data(self, temp_dir: Path) -> None:
+        """Test that a tar cut off inside an entry's data is corrupt input."""
+        archive = temp_dir / "truncated.tar"
+        archive.write_bytes(_two_entry_tar(temp_dir / "good.tar")[:3000])
+
+        with pytest.raises(CorruptDataError, match="Truncated"):
+            _core.list_archive_contents(str(archive))
+
+    def test_damaged_zip_data_is_corrupt_data(self, temp_dir: Path) -> None:
+        """Test that a zip entry whose deflate stream is damaged is corrupt input."""
+        good = temp_dir / "good.zip"
+        with zipfile.ZipFile(good, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("a.txt", b"hello world " * 500)
+        damaged = bytearray(good.read_bytes())
+        damaged[60] ^= 0xFF  # Inside the first entry's compressed data
+        archive = temp_dir / "damaged.zip"
+        archive.write_bytes(damaged)
+
+        with pytest.raises(CorruptDataError):
+            _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+
+    def test_truncated_zip_is_corrupt_data(self, temp_dir: Path) -> None:
+        """Test that a zip missing the end of its central directory is corrupt."""
+        good = temp_dir / "good.zip"
+        with zipfile.ZipFile(good, "w") as zf:
+            zf.writestr("a.txt", b"hello")
+        archive = temp_dir / "truncated.zip"
+        archive.write_bytes(good.read_bytes()[:-30])
+
+        with pytest.raises(CorruptDataError):
+            _core.list_archive_contents(str(archive))
+
+    @pytest.mark.parametrize("call", ["extract", "list"])
+    def test_missing_archive_is_file_not_found(self, temp_dir: Path, call: str) -> None:
+        """Test that a missing archive is an OS error, not an unknown format."""
+        missing = str(temp_dir / "missing.tar")
+
+        with pytest.raises(FileNotFoundError):
+            if call == "extract":
+                _core.extract_archive(missing, str(temp_dir / "out"), [])
+            else:
+                _core.list_archive_contents(missing)
+
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
+    def test_unwritable_destination_is_an_os_error(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str
+    ) -> None:
+        """Test that a destination in a missing directory carries its errno."""
+        dest = temp_dir / "missing" / f"out.{fmt}"
+
+        with pytest.raises(FileNotFoundError) as info:
+            _core.create_archive(str(dest), fmt, [str(sample_text_file)])
+
+        assert info.value.filename == str(dest)
 
 
 class TestLevelValidation:

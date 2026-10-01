@@ -1113,6 +1113,9 @@ int extract_archive(const char *archive_path, const char *output_dir,
   if (!policy)
     policy = &EXTRACTION_POLICY_DEFAULT;
 
+  if (check_source_readable(archive_path) != 0)
+    return -1;
+
   CompressionPipeline pipe = detect_pipeline_from_path(archive_path);
   if (!pipeline_is_valid(&pipe) || pipe.archive == ARCHIVE_NONE) {
     PyErr_SetString(PyExc_ValueError, "Not an archive format");
@@ -1279,6 +1282,9 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader) {
 }
 
 PyObject *list_archive_contents(const char *archive_path) {
+  if (check_source_readable(archive_path) != 0)
+    return NULL;
+
   CompressionPipeline pipe = detect_pipeline_from_path(archive_path);
   if (!pipeline_is_valid(&pipe) || pipe.archive == ARCHIVE_NONE) {
     PyErr_SetString(PyExc_ValueError, "Not an archive format");

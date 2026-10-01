@@ -8,6 +8,37 @@
 #include <stdlib.h>
 #include <string.h>
 
+// libarchive's own error codes
+#ifdef EFTYPE
+#define TAR_ERRNO_FILE_FORMAT EFTYPE
+#else
+#define TAR_ERRNO_FILE_FORMAT EILSEQ
+#endif
+#define TAR_ERRNO_MISC (-1)
+
+// Raises OSError for a system call's errno, CorruptDataError for a damaged
+// archive while reading, and BackendError otherwise; libarchive's readers
+// report damage as FILE_FORMAT, MISC or EINVAL
+static void set_tar_error(struct archive *a, const char *what, const char *path,
+                          int reading) {
+  int code = archive_errno(a);
+  const char *detail = archive_error_string(a);
+  if (!detail) {
+    detail = "unknown error";
+  }
+
+  int corrupt = code == TAR_ERRNO_FILE_FORMAT ||
+                (reading && (code == TAR_ERRNO_MISC || code == EINVAL));
+  if (corrupt) {
+    PyErr_Format(comp_CorruptDataError, "%s: %s", what, detail);
+  } else if (code > 0 && code != EINVAL) {
+    errno = code;
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+  } else {
+    PyErr_Format(comp_BackendError, "%s: %s", what, detail);
+  }
+}
+
 // ---- TAR Writer ----
 
 typedef struct {
@@ -26,7 +57,7 @@ static void *tar_create_writer(const char *output_path, int compression_level) {
   writer->archive = archive_write_new();
   if (!writer->archive) {
     free(writer);
-    PyErr_SetString(PyExc_RuntimeError, "Failed to create archive writer");
+    PyErr_NoMemory();
     return NULL;
   }
 
@@ -36,8 +67,7 @@ static void *tar_create_writer(const char *output_path, int compression_level) {
   // Open file for writing
   int r = archive_write_open_filename(writer->archive, output_path);
   if (r != ARCHIVE_OK) {
-    PyErr_Format(PyExc_IOError, "Failed to open archive: %s",
-                 archive_error_string(writer->archive));
+    set_tar_error(writer->archive, "Failed to open archive", output_path, 0);
     archive_write_free(writer->archive);
     free(writer);
     return NULL;
@@ -50,7 +80,6 @@ static void *tar_create_writer(const char *output_path, int compression_level) {
 static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
                          FILE *data, const char *source_path,
                          CoreContext *ctx) {
-  (void)source_path; // tar streams from the already-open `data`
   TarWriter *writer = (TarWriter *)writer_ptr;
   struct archive_entry *ae = archive_entry_new();
 
@@ -87,8 +116,8 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   // Write header
   int r = archive_write_header(writer->archive, ae);
   if (r != ARCHIVE_OK) {
-    PyErr_Format(PyExc_IOError, "Failed to write header: %s",
-                 archive_error_string(writer->archive));
+    set_tar_error(writer->archive, "Failed to write header",
+                  writer->output_path, 0);
     archive_entry_free(ae);
     return -1;
   }
@@ -106,8 +135,8 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
       la_ssize_t bytes_written =
           archive_write_data(writer->archive, buffer, bytes_read);
       if (bytes_written < 0) {
-        Py_BLOCK_THREADS PyErr_Format(PyExc_IOError, "Failed to write data: %s",
-                                      archive_error_string(writer->archive));
+        Py_BLOCK_THREADS set_tar_error(writer->archive, "Failed to write data",
+                                       writer->output_path, 0);
         archive_entry_free(ae);
         return -1;
       }
@@ -126,7 +155,8 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
     }
 
     if (ferror(data)) {
-      PyErr_SetString(PyExc_IOError, "Error reading input file");
+      // tar streams from the already-open `data`; the path only names it
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, source_path);
       archive_entry_free(ae);
       return -1;
     }
@@ -144,11 +174,14 @@ static int tar_close_writer(void *writer_ptr, CoreContext *ctx) {
   TarWriter *writer = (TarWriter *)writer_ptr;
 
   int r = archive_write_close(writer->archive);
+  if (r != ARCHIVE_OK) {
+    set_tar_error(writer->archive, "Failed to close archive",
+                  writer->output_path, 0);
+  }
   archive_write_free(writer->archive);
   free(writer);
 
   if (r != ARCHIVE_OK) {
-    PyErr_SetString(PyExc_IOError, "Failed to close archive");
     return -1;
   }
 
@@ -160,6 +193,7 @@ static int tar_close_writer(void *writer_ptr, CoreContext *ctx) {
 typedef struct {
   struct archive *archive;
   struct archive_entry *current_entry;
+  const char *input_path;
 } TarReader;
 
 static void *tar_create_reader(const char *input_path) {
@@ -171,7 +205,7 @@ static void *tar_create_reader(const char *input_path) {
   reader->archive = archive_read_new();
   if (!reader->archive) {
     free(reader);
-    PyErr_SetString(PyExc_RuntimeError, "Failed to create archive reader");
+    PyErr_NoMemory();
     return NULL;
   }
 
@@ -181,14 +215,14 @@ static void *tar_create_reader(const char *input_path) {
 
   int r = archive_read_open_filename(reader->archive, input_path, 10240);
   if (r != ARCHIVE_OK) {
-    PyErr_Format(PyExc_IOError, "Failed to open archive: %s",
-                 archive_error_string(reader->archive));
+    set_tar_error(reader->archive, "Failed to open archive", input_path, 1);
     archive_read_free(reader->archive);
     free(reader);
     return NULL;
   }
 
   reader->current_entry = NULL;
+  reader->input_path = input_path;
   return reader;
 }
 
@@ -211,8 +245,8 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
   }
 
   if (r != ARCHIVE_OK) {
-    PyErr_Format(PyExc_IOError, "Error reading archive: %s",
-                 archive_error_string(reader->archive));
+    set_tar_error(reader->archive, "Error reading archive", reader->input_path,
+                  1);
     return -1; // Error
   }
 
@@ -282,8 +316,7 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
 
     size_t written = fwrite(buffer, 1, bytes_read, output);
     if (written != (size_t)bytes_read || ferror(output)) {
-      Py_BLOCK_THREADS PyErr_SetString(PyExc_IOError,
-                                       "Error writing output file");
+      Py_BLOCK_THREADS PyErr_SetFromErrno(PyExc_OSError);
       return -1;
     }
     total += (uint64_t)bytes_read;
@@ -309,8 +342,8 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
   }
 
   if (bytes_read < 0) {
-    PyErr_Format(PyExc_IOError, "Error reading archive data: %s",
-                 archive_error_string(reader->archive));
+    set_tar_error(reader->archive, "Error reading archive data",
+                  reader->input_path, 1);
     return -1;
   }
 
@@ -333,11 +366,14 @@ static int tar_close_reader(void *reader_ptr) {
   TarReader *reader = (TarReader *)reader_ptr;
 
   int r = archive_read_close(reader->archive);
+  if (r != ARCHIVE_OK) {
+    set_tar_error(reader->archive, "Failed to close archive",
+                  reader->input_path, 1);
+  }
   archive_read_free(reader->archive);
   free(reader);
 
   if (r != ARCHIVE_OK) {
-    PyErr_SetString(PyExc_IOError, "Failed to close archive");
     return -1;
   }
 

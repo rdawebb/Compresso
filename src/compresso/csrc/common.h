@@ -198,8 +198,7 @@ int validate_size(uint64_t size, uint64_t max_size, const char *name);
 
 void *safe_malloc(size_t size);
 
-// Raises the errno-mapped OSError (FileNotFoundError, PermissionError, ...) if
-// `path` cannot be opened and read
+// Raises the errno-mapped OSError if `path` cannot be opened and read
 int check_source_readable(const char *path);
 
 // ---- Backend Error Helper ----
