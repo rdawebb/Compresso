@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import stat
 import subprocess
 import sys
 import tarfile
@@ -526,6 +527,78 @@ class TestArchiveSkipsItsOwnOutput:
         # A new zip doesn't exist until libzip closes it, so nothing is skipped
         assert skipped == (fmt != "zip" or overwrite)
         assert sorted(p.name for p in tree.iterdir()) == ["a.txt", output.name]
+
+
+def _tar_of(path: Path, entries: list[tuple[str, int, int]]) -> None:
+    """Write a tar of directories and files, each with a given mode and mtime.
+
+    Args:
+        path: Where to write the tar.
+        entries: (name, mode, mtime) per entry, in archive order; a name
+            ending in "/" is a directory, anything else a file holding b"x".
+    """
+    with tarfile.open(path, "w", format=tarfile.GNU_FORMAT) as tf:
+        for name, mode, mtime in entries:
+            info = tarfile.TarInfo(name.rstrip("/"))
+            info.mode = mode
+            info.mtime = mtime
+            if name.endswith("/"):
+                info.type = tarfile.DIRTYPE
+                tf.addfile(info)
+            else:
+                info.size = 1
+                tf.addfile(info, io.BytesIO(b"x"))
+
+
+class TestDirectoryMetadata:
+    """Test that a directory's mode and mtime are applied after its contents."""
+
+    MTIME = 1577836800  # 2020-01-01T00:00:00Z
+
+    def test_directory_mtime_is_restored(self, temp_dir: Path) -> None:
+        """Test that writing a directory's files doesn't leave it with today's mtime."""
+        archive = temp_dir / "dated.tar"
+        _tar_of(archive, [("d/", 0o755, self.MTIME), ("d/f", 0o644, self.MTIME)])
+
+        _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+
+        assert int((temp_dir / "out" / "d").stat().st_mtime) == self.MTIME
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+    def test_nested_read_only_directories_are_filled(self, temp_dir: Path) -> None:
+        """Test that read-only directories, nested, all get their files and modes."""
+        archive = temp_dir / "readonly.tar"
+        _tar_of(
+            archive,
+            [
+                ("a/", 0o555, self.MTIME),
+                ("a/b/", 0o555, self.MTIME),
+                ("a/b/f", 0o644, self.MTIME),
+                ("a/g", 0o644, self.MTIME),
+            ],
+        )
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert (out / "a" / "b" / "f").read_bytes() == b"x"
+        assert (out / "a" / "g").read_bytes() == b"x"
+        for directory in (out / "a", out / "a" / "b"):
+            assert stat.S_IMODE(directory.stat().st_mode) == 0o555
+            assert int(directory.stat().st_mtime) == self.MTIME
+
+    def test_existing_directory_keeps_its_metadata(self, temp_dir: Path) -> None:
+        """Test that merging into a directory that already exists leaves it as is."""
+        archive = temp_dir / "dated.tar"
+        _tar_of(archive, [("d/", 0o700, self.MTIME), ("d/f", 0o644, self.MTIME)])
+        existing = temp_dir / "out" / "d"
+        existing.mkdir(parents=True)
+        before = existing.stat()
+
+        _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+
+        assert existing.stat().st_mode == before.st_mode
+        assert int(existing.stat().st_mtime) != self.MTIME
 
 
 class TestLevelValidation:

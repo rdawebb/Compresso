@@ -886,10 +886,72 @@ static int push_rename(PathRename **renames, size_t *num_renames,
 
 // Probes names until an exclusive mkdir succeeds, then records the rename so
 // nested entries redirect to the directory actually created
+// Directories are created writable, so their own entries can be written into
+// them; each one's archived mode and mtime are applied once extraction ends
+#define DIR_CREATE_MODE 0755
+
+typedef struct {
+  char *path;
+  uint32_t mode;
+  int64_t mtime;
+} DeferredDir;
+
+typedef struct {
+  DeferredDir *items;
+  size_t count, cap;
+} DeferredDirs;
+
+static int defer_dir(DeferredDirs *d, const char *path, uint32_t mode,
+                     int64_t mtime) {
+  if (d->count == d->cap) {
+    size_t cap = d->cap ? d->cap * 2 : 16;
+    DeferredDir *items = realloc(d->items, cap * sizeof(*items));
+    if (!items) {
+      PyErr_NoMemory();
+      return -1;
+    }
+    d->items = items;
+    d->cap = cap;
+  }
+
+  char *copy = strdup(path);
+  if (!copy) {
+    PyErr_NoMemory();
+    return -1;
+  }
+  d->items[d->count++] = (DeferredDir){copy, mode, mtime};
+  return 0;
+}
+
+static int deepest_first(const void *a, const void *b) {
+  uint32_t da = path_depth(((const DeferredDir *)a)->path);
+  uint32_t db = path_depth(((const DeferredDir *)b)->path);
+  return (da < db) - (da > db);
+}
+
+// Deepest first, so a parent made read-only or unsearchable can't block its
+// children; best-effort, like the metadata of files
+static void apply_deferred_dirs(DeferredDirs *d,
+                                const ExtractionPolicy *policy) {
+  qsort(d->items, d->count, sizeof(*d->items), deepest_first);
+
+  for (size_t i = 0; i < d->count; i++) {
+    if (policy->preserve_permissions)
+      fs_chmod(d->items[i].path, d->items[i].mode);
+    if (policy->preserve_timestamps && d->items[i].mtime > 0)
+      fs_set_mtime(d->items[i].path, d->items[i].mtime);
+    free(d->items[i].path);
+  }
+
+  free(d->items);
+  *d = (DeferredDirs){0};
+}
+
+// `created` (at least FS_PATH_MAX bytes) receives the directory's real path
 static int rename_conflicting_dir(const char *output_dir, const char *out_path,
-                                  uint32_t dir_mode, const char *entry_path,
-                                  PathRename **renames, size_t *num_renames,
-                                  size_t *cap_renames) {
+                                  const char *entry_path, PathRename **renames,
+                                  size_t *num_renames, size_t *cap_renames,
+                                  char *created) {
   char candidate[FS_PATH_MAX];
 
   for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
@@ -899,7 +961,8 @@ static int rename_conflicting_dir(const char *output_dir, const char *out_path,
       return -1;
     }
 
-    if (fs_mkdir_exclusive(candidate, dir_mode) == 0) {
+    if (fs_mkdir_exclusive(candidate, DIR_CREATE_MODE) == 0) {
+      memcpy(created, candidate, strlen(candidate) + 1);
       return push_rename(renames, num_renames, cap_renames, entry_path,
                          candidate + strlen(output_dir) + 1);
     }
@@ -926,6 +989,7 @@ static int extract_entries(const CArchive *archive, void *reader,
 
   PathRename *renames = NULL;
   size_t num_renames = 0, cap_renames = 0;
+  DeferredDirs deferred = {0};
 
   while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
     // Catches a cancel between entries; extract_entry_data catches one during
@@ -987,7 +1051,7 @@ static int extract_entries(const CArchive *archive, void *reader,
     }
 
     if (entry.type == ENTRY_DIR) {
-      uint32_t dir_mode = policy->preserve_permissions ? entry.mode : 0755;
+      char created[FS_PATH_MAX];
 
       // Strip the entry's trailing separator (e.g. "d/") so a stat of a
       // same-named file below resolves the file
@@ -1002,8 +1066,9 @@ static int extract_entries(const CArchive *archive, void *reader,
       if (found_existing && existing_is_dir &&
           policy->overwrite_existing == 3) {
         // RENAME: rename the clashing directory rather than merge into it
-        if (rename_conflicting_dir(output_dir, out_path, dir_mode, entry.path,
-                                   &renames, &num_renames, &cap_renames) != 0) {
+        if (rename_conflicting_dir(output_dir, out_path, entry.path, &renames,
+                                   &num_renames, &cap_renames, created) != 0 ||
+            defer_dir(&deferred, created, entry.mode, entry.mtime) != 0) {
           entry_reset(&entry);
           result = -1;
           goto cleanup;
@@ -1031,9 +1096,10 @@ static int extract_entries(const CArchive *archive, void *reader,
           // RENAME: probe names as above; no extra containment check needed;
           // the winning candidate is a sibling of out_path, and that parent's
           // containment was already established to reach this fs_stat_path call
-          if (rename_conflicting_dir(output_dir, out_path, dir_mode, entry.path,
-                                     &renames, &num_renames,
-                                     &cap_renames) != 0) {
+          if (rename_conflicting_dir(output_dir, out_path, entry.path, &renames,
+                                     &num_renames, &cap_renames,
+                                     created) != 0 ||
+              defer_dir(&deferred, created, entry.mode, entry.mtime) != 0) {
             entry_reset(&entry);
             result = -1;
             goto cleanup;
@@ -1051,8 +1117,11 @@ static int extract_entries(const CArchive *archive, void *reader,
         }
       }
 
-      if (prepare_output_dir(resolved_root, out_path, dir_mode, entry.path) !=
-          0) {
+      // An existing directory keeps its own metadata
+      if (prepare_output_dir(resolved_root, out_path, DIR_CREATE_MODE,
+                             entry.path) != 0 ||
+          (!existing_is_dir &&
+           defer_dir(&deferred, out_path, entry.mode, entry.mtime) != 0)) {
         entry_reset(&entry);
         result = -1;
         goto cleanup;
@@ -1062,7 +1131,8 @@ static int extract_entries(const CArchive *archive, void *reader,
       if (last_slash) {
         char saved = *last_slash;
         *last_slash = '\0';
-        int rc = prepare_output_dir(resolved_root, out_path, 0755, entry.path);
+        int rc = prepare_output_dir(resolved_root, out_path, DIR_CREATE_MODE,
+                                    entry.path);
         *last_slash = saved;
         if (rc != 0) {
           entry_reset(&entry);
@@ -1163,6 +1233,8 @@ static int extract_entries(const CArchive *archive, void *reader,
   result = ret < 0 ? -1 : 0;
 
 cleanup:
+  // Also after a failure, so what was extracted carries its archived metadata
+  apply_deferred_dirs(&deferred, policy);
   free(renames);
   return result;
 }

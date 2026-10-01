@@ -205,11 +205,6 @@ class TestTarExtraction:
         assert (temp_dir / "hardlink" / "a.txt").read_bytes() == PART1
         assert (temp_dir / "hardlink" / "b.txt").read_bytes() == PART1
 
-    # A read-only directory still accepts new files on Windows
-    @pytest.mark.xfail(
-        sys.platform != "win32",
-        reason="the 0555 mode is applied before the directory is filled",
-    )
     def test_read_only_directory_is_filled_before_its_mode_is_set(
         self, temp_dir: Path
     ) -> None:
