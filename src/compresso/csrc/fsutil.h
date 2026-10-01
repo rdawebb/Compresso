@@ -30,7 +30,15 @@ typedef struct {
   int64_t mtime; // Seconds since the Unix epoch
   uint32_t mode; // POSIX permission bits (0777), best-effort on Windows
   fs_file_type type;
+
+  // Identity, for fs_same_file; on Windows only filled for regular files (the
+  // volume serial and file index), and 0 wherever it is unknown
+  uint64_t dev, ino;
 } fs_stat;
+
+// True if both name the same file, e.g. through a hardlink; false whenever
+// either identity is unknown
+int fs_same_file(const fs_stat *a, const fs_stat *b);
 
 // True if `path` is anything other than a plain relative path: a leading
 // separator, or a drive qualifier; Windows forms are rejected on POSIX too,

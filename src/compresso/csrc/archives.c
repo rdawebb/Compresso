@@ -136,8 +136,23 @@ static int check_storable_entry_name(const char *name) {
 
 // ---- Helpers ----
 
-static ArchiveEntry *create_entry_from_path(const char *path,
-                                            size_t prefix_len) {
+// The archive being written and its temp file, so a walk over their own
+// directory leaves them out: tar writes to one during the walk, and an output
+// that is being overwritten still holds the previous archive
+typedef struct {
+  fs_stat files[2];
+  size_t count;
+} OwnFiles;
+
+static void own_files_add(OwnFiles *own, const char *path) {
+  fs_stat st;
+  if (own->count < 2 && fs_stat_path(path, &st) == 0 && st.type == FS_TYPE_FILE)
+    own->files[own->count++] = st;
+}
+
+// `st` receives the path's stat, for the caller's own checks
+static ArchiveEntry *create_entry_from_path(const char *path, size_t prefix_len,
+                                            fs_stat *out_st) {
   fs_stat st;
   if (fs_stat_path(path, &st) != 0) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
@@ -199,24 +214,36 @@ static ArchiveEntry *create_entry_from_path(const char *path,
     entry->type = ENTRY_SPECIAL;
   }
 
+  *out_st = st;
   return entry;
 }
 
-// A FIFO or device is never opened; returns 1 if `entry` was skipped
-static int skip_special_entry(ArchiveEntry *entry, const char *path,
-                              CoreContext *ctx) {
-  if (entry->type != ENTRY_SPECIAL)
-    return 0;
+// A FIFO or device is never opened, and the archive is never archived into
+// itself; returns 1 if `entry` was skipped, and frees it
+static int skip_entry(ArchiveEntry *entry, const fs_stat *st, const char *path,
+                      const OwnFiles *own, CoreContext *ctx) {
+  if (entry->type == ENTRY_SPECIAL) {
+    ctx_log(ctx, CTX_LOG_WARNING,
+            "Skipped %s: FIFOs, sockets and devices are not archived", path);
+    entry_free(entry);
+    return 1;
+  }
 
-  ctx_log(ctx, CTX_LOG_WARNING,
-          "Skipped %s: FIFOs, sockets and devices are not archived", path);
-  entry_free(entry);
-  return 1;
+  for (size_t i = 0; i < own->count; i++) {
+    if (fs_same_file(st, &own->files[i])) {
+      ctx_log(ctx, CTX_LOG_WARNING,
+              "Skipped %s: it is the archive being created", path);
+      entry_free(entry);
+      return 1;
+    }
+  }
+
+  return 0;
 }
 
 static int add_directory_recursive(void *writer, const CArchive *archive,
                                    const char *dir_path, size_t prefix_len,
-                                   CoreContext *ctx) {
+                                   const OwnFiles *own, CoreContext *ctx) {
   fs_dir *dir = fs_opendir(dir_path);
   if (!dir) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir_path);
@@ -232,12 +259,13 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
       return -1;
     }
 
-    ArchiveEntry *ae = create_entry_from_path(full_path, prefix_len);
+    fs_stat st;
+    ArchiveEntry *ae = create_entry_from_path(full_path, prefix_len, &st);
     if (!ae) {
       fs_closedir(dir);
       return -1;
     }
-    if (skip_special_entry(ae, full_path, ctx))
+    if (skip_entry(ae, &st, full_path, own, ctx))
       continue;
 
     if (ae->type == ENTRY_FILE) {
@@ -260,7 +288,7 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
       entry_free(ae);
       if (ret == 0) {
         ret = add_directory_recursive(writer, archive, full_path, prefix_len,
-                                      ctx);
+                                      own, ctx);
       }
       if (ret != 0) {
         fs_closedir(dir);
@@ -564,7 +592,7 @@ static uint64_t sum_input_size(const char **input_paths, size_t num_paths) {
 // Write every input path into an already-open writer
 static int add_paths_to_writer(const CArchive *archive, void *writer,
                                const char **input_paths, size_t num_paths,
-                               CoreContext *ctx) {
+                               const OwnFiles *own, CoreContext *ctx) {
   for (size_t i = 0; i < num_paths; i++) {
     fs_stat st;
     if (fs_stat_path(input_paths[i], &st) != 0) {
@@ -578,7 +606,7 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
     if (st.type == FS_TYPE_DIR) {
       // Record the directory itself so empty directories are preserved
       ArchiveEntry *dir_entry =
-          create_entry_from_path(input_paths[i], prefix_len);
+          create_entry_from_path(input_paths[i], prefix_len, &st);
       if (!dir_entry)
         return -1;
       int dir_ret =
@@ -588,14 +616,15 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
         return dir_ret;
 
       int walk_ret = add_directory_recursive(writer, archive, input_paths[i],
-                                             prefix_len, ctx);
+                                             prefix_len, own, ctx);
       if (walk_ret != 0)
         return walk_ret;
     } else {
-      ArchiveEntry *entry = create_entry_from_path(input_paths[i], prefix_len);
+      ArchiveEntry *entry =
+          create_entry_from_path(input_paths[i], prefix_len, &st);
       if (!entry)
         return -1;
-      if (skip_special_entry(entry, input_paths[i], ctx))
+      if (skip_entry(entry, &st, input_paths[i], own, ctx))
         continue;
 
       FILE *f = fs_fopen(input_paths[i], "rb");
@@ -687,7 +716,14 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   }
   ctx_begin_stage(ctx, input_total);
 
-  int ret = add_paths_to_writer(archive, writer, input_paths, num_paths, ctx);
+  // Once the writer has opened its output, so a tar's identity is known
+  OwnFiles own = {0};
+  own_files_add(&own, write_path);
+  if (write_path != output_path)
+    own_files_add(&own, output_path);
+
+  int ret =
+      add_paths_to_writer(archive, writer, input_paths, num_paths, &own, ctx);
 
   // libzip does all its compression inside zip_close, so that is where its
   // progress comes from; a run that already failed has nothing left to report

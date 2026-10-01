@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -486,6 +487,45 @@ class TestArchiveSkipsSpecialFiles:
         assert json.loads(result.stdout) == ["tree/", "tree/a.txt"]
         for skipped in (tree / "pipe", temp_dir / "named_pipe"):
             assert f"WARNING Skipped {skipped}:" in result.stderr
+
+
+class TestArchiveSkipsItsOwnOutput:
+    """Test that archiving a tree into itself leaves the archive out."""
+
+    @pytest.mark.parametrize("fmt", ["tar", "tar.gz", "zip"])
+    @pytest.mark.parametrize("overwrite", [False, True], ids=["new", "overwrite"])
+    def test_output_in_the_tree_is_not_archived(
+        self,
+        temp_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+        fmt: str,
+        overwrite: bool,
+    ) -> None:
+        """Test that neither the output nor a temp file beside it is archived.
+
+        Overwriting matters for zip, which only creates its output on close,
+        so an existing one in the tree is all there is to find.
+        """
+        tree = temp_dir / "tree"
+        tree.mkdir()
+        (tree / "a.txt").write_text("a" * 10000)
+        output = tree / f"out.{fmt}"
+        if overwrite:
+            _core.create_archive(str(output), fmt, [str(tree)])
+            caplog.clear()
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            _core.create_archive(str(output), fmt, [str(tree)], overwrite=2)
+
+        listed = [e["path"] for e in _core.list_archive_contents(str(output))]
+        assert listed == ["tree/", "tree/a.txt"]
+        skipped = any(
+            r.getMessage().endswith("it is the archive being created")
+            for r in caplog.records
+        )
+        # A new zip doesn't exist until libzip closes it, so nothing is skipped
+        assert skipped == (fmt != "zip" or overwrite)
+        assert sorted(p.name for p in tree.iterdir()) == ["a.txt", output.name]
 
 
 class TestLevelValidation:

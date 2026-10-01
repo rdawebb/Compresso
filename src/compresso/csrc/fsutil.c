@@ -73,7 +73,8 @@ int fs_join(char *out, size_t out_size, const char *dir, const char *name) {
   size_t name_len = strlen(name);
   size_t sep_len = dir_len > 0 && !FS_IS_SEP(dir[dir_len - 1]) ? 1 : 0;
 
-  // Both strings are already in memory, so their lengths can't sum past SIZE_MAX
+  // Both strings are already in memory, so their lengths can't sum past
+  // SIZE_MAX
   if (dir_len + sep_len + name_len >= out_size) {
     errno = ENAMETOOLONG;
     return -1;
@@ -84,6 +85,10 @@ int fs_join(char *out, size_t out_size, const char *dir, const char *name) {
     out[dir_len] = '/';
   memcpy(out + dir_len + sep_len, name, name_len + 1);
   return 0;
+}
+
+int fs_same_file(const fs_stat *a, const fs_stat *b) {
+  return a->ino != 0 && a->dev == b->dev && a->ino == b->ino;
 }
 
 int fs_is_stream_path(const char *path) {
@@ -294,6 +299,8 @@ int fs_stat_path(const char *path, fs_stat *out) {
   out->size = (uint64_t)st.st_size;
   out->mtime = (int64_t)st.st_mtime;
   out->mode = (uint32_t)(st.st_mode & 0777);
+  out->dev = 0;
+  out->ino = 0;
 
   if (is_reparse)
     out->type = FS_TYPE_SYMLINK;
@@ -303,6 +310,20 @@ int fs_stat_path(const char *path, fs_stat *out) {
     out->type = FS_TYPE_FILE;
   else
     out->type = FS_TYPE_OTHER;
+
+  // _wstat64 leaves st_ino 0, so the identity needs a handle; only regular
+  // files get one, as nothing compares directories
+  if (out->type == FS_TYPE_FILE) {
+    HANDLE h = fs_open_for_metadata(wpath);
+    BY_HANDLE_FILE_INFORMATION info;
+    if (h != INVALID_HANDLE_VALUE) {
+      if (GetFileInformationByHandle(h, &info)) {
+        out->dev = info.dwVolumeSerialNumber;
+        out->ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow;
+      }
+      CloseHandle(h);
+    }
+  }
 
   return 0;
 }
@@ -585,6 +606,8 @@ int fs_stat_path(const char *path, fs_stat *out) {
   out->size = (uint64_t)st.st_size;
   out->mtime = (int64_t)st.st_mtime;
   out->mode = (uint32_t)(st.st_mode & 0777);
+  out->dev = (uint64_t)st.st_dev;
+  out->ino = (uint64_t)st.st_ino;
 
   if (S_ISDIR(st.st_mode))
     out->type = FS_TYPE_DIR;
