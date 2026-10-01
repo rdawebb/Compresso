@@ -12,6 +12,13 @@ class HeaderError(Error):
 class BackendError(Error):
     """Error in compression backend."""
 
+class ExtractionPolicyError(Error):
+    """An archive entry was refused by the extraction policy.
+
+    For example a path escaping the output directory, a symlink the policy
+    denies, or the size cap.
+    """
+
 class CorruptDataError(BackendError):
     """The input is corrupt, truncated, or not the format it claims to be."""
 

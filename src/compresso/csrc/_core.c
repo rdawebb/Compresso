@@ -10,6 +10,7 @@ PyObject *comp_Error;
 PyObject *comp_HeaderError;
 PyObject *comp_BackendError;
 PyObject *comp_CorruptDataError;
+PyObject *comp_ExtractionPolicyError;
 PyObject *comp_Cancelled;
 PyObject *comp_TrailingDataWarning;
 
@@ -962,6 +963,15 @@ PyMODINIT_FUNC PyInit__core(void) {
   if (!comp_CorruptDataError ||
       PyModule_AddObjectRef(module, "CorruptDataError", comp_CorruptDataError) <
           0) {
+    Py_DECREF(module);
+    return NULL;
+  }
+
+  comp_ExtractionPolicyError =
+      PyErr_NewException("compresso.ExtractionPolicyError", comp_Error, NULL);
+  if (!comp_ExtractionPolicyError ||
+      PyModule_AddObjectRef(module, "ExtractionPolicyError",
+                            comp_ExtractionPolicyError) < 0) {
     Py_DECREF(module);
     return NULL;
   }

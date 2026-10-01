@@ -317,8 +317,8 @@ static int prepare_output_dir(const char *resolved_root, const char *dir,
     // Check before creating: mkdir first would already have made directories
     // through any symlink
     if (existing_ancestor_is_contained(resolved_root, dir) != 1) {
-      PyErr_Format(PyExc_ValueError, "Path traversal detected in entry: %s",
-                   entry_path);
+      PyErr_Format(comp_ExtractionPolicyError,
+                   "Path traversal detected in entry: %s", entry_path);
       return -1;
     }
 
@@ -333,8 +333,8 @@ static int prepare_output_dir(const char *resolved_root, const char *dir,
   }
 
   if (contained != 1) {
-    PyErr_Format(PyExc_ValueError, "Path traversal detected in entry: %s",
-                 entry_path);
+    PyErr_Format(comp_ExtractionPolicyError,
+                 "Path traversal detected in entry: %s", entry_path);
     return -1;
   }
 
@@ -346,21 +346,22 @@ static int validate_entry_path(const char *output_dir,
                                const char *entry_path, uint32_t depth,
                                const ExtractionPolicy *policy) {
   if (fs_is_absolute(entry_path)) {
-    PyErr_Format(PyExc_ValueError, "Archive entry has an absolute path: %s",
-                 entry_path);
+    PyErr_Format(comp_ExtractionPolicyError,
+                 "Archive entry has an absolute path: %s", entry_path);
     return -1;
   }
 
   if (fs_is_stream_path(entry_path)) {
-    PyErr_Format(PyExc_ValueError,
+    PyErr_Format(comp_ExtractionPolicyError,
                  "Archive entry names an alternate data stream: %s",
                  entry_path);
     return -1;
   }
 
   if (policy->max_depth > 0 && depth > policy->max_depth) {
-    PyErr_Format(PyExc_ValueError, "Archive entry exceeds max depth (%u): %s",
-                 policy->max_depth, entry_path);
+    PyErr_Format(comp_ExtractionPolicyError,
+                 "Archive entry exceeds max depth (%u): %s", policy->max_depth,
+                 entry_path);
     return -1;
   }
 
@@ -391,8 +392,8 @@ static int validate_entry_path(const char *output_dir,
     *last_sep = saved_sep;
 
   if (traversal) {
-    PyErr_Format(PyExc_ValueError, "Path traversal detected in entry: %s",
-                 entry_path);
+    PyErr_Format(comp_ExtractionPolicyError,
+                 "Path traversal detected in entry: %s", entry_path);
     return -1;
   }
 
@@ -403,7 +404,7 @@ static int check_entry_policy(const ArchiveEntry *entry,
                               const ExtractionPolicy *policy) {
   if (entry->type == ENTRY_SYMLINK) {
     if (!policy->allow_symlinks) {
-      PyErr_Format(PyExc_ValueError,
+      PyErr_Format(comp_ExtractionPolicyError,
                    "Archive contains symlink, but policy denies it: %s",
                    entry->path);
       return -1;
@@ -417,7 +418,7 @@ static int check_entry_policy(const ArchiveEntry *entry,
   }
 
   if (entry->type == ENTRY_SPECIAL && !policy->allow_special_files) {
-    PyErr_Format(PyExc_ValueError,
+    PyErr_Format(comp_ExtractionPolicyError,
                  "Archive contains special file, but policy denies it: %s",
                  entry->path);
     return -1;
@@ -738,7 +739,7 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
       declared_total += entry.size;
       if (policy->max_total_size > 0 &&
           declared_total > policy->max_total_size) {
-        PyErr_Format(PyExc_ValueError,
+        PyErr_Format(comp_ExtractionPolicyError,
                      "Archive exceeds the maximum extracted size (%llu bytes)",
                      (unsigned long long)policy->max_total_size);
         entry_reset(&entry);

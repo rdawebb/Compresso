@@ -11,6 +11,7 @@ from compresso import (
     Cancelled,
     CorruptDataError,
     Error,
+    ExtractionPolicyError,
     HeaderError,
     _core,
     compress_file,
@@ -41,7 +42,8 @@ class TestCoreExceptions:
     """Test custom exception classes."""
 
     @pytest.mark.parametrize(
-        "exc", [HeaderError, BackendError, CorruptDataError, Cancelled]
+        "exc",
+        [HeaderError, BackendError, CorruptDataError, ExtractionPolicyError, Cancelled],
     )
     def test_every_error_derives_from_error(self, exc: type[Exception]) -> None:
         """Test that catching Error catches every exception the core raises."""

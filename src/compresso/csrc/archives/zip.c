@@ -389,7 +389,7 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
 
   if (over_limit) {
     zip_fclose(zf);
-    PyErr_SetString(PyExc_ValueError,
+    PyErr_SetString(comp_ExtractionPolicyError,
                     "Archive exceeds the maximum extracted size");
     return -1;
   }

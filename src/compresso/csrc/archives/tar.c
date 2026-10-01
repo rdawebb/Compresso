@@ -303,7 +303,7 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
   }
 
   if (over_limit) {
-    PyErr_SetString(PyExc_ValueError,
+    PyErr_SetString(comp_ExtractionPolicyError,
                     "Archive exceeds the maximum extracted size");
     return -1;
   }

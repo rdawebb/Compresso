@@ -9,6 +9,7 @@ PyObject *comp_Error = NULL;
 PyObject *comp_HeaderError = NULL;
 PyObject *comp_BackendError = NULL;
 PyObject *comp_CorruptDataError = NULL;
+PyObject *comp_ExtractionPolicyError = NULL;
 PyObject *comp_Cancelled = NULL;
 PyObject *comp_TrailingDataWarning = NULL;
 
@@ -24,8 +25,10 @@ void ensure_comp_exceptions(void) {
   comp_CorruptDataError =
       PyErr_NewException("compresso.CorruptDataError", comp_BackendError, NULL);
   comp_Cancelled = PyErr_NewException("compresso.Cancelled", comp_Error, NULL);
-  comp_TrailingDataWarning = PyErr_NewException(
-      "compresso.TrailingDataWarning", PyExc_UserWarning, NULL);
+  comp_ExtractionPolicyError =
+      PyErr_NewException("compresso.ExtractionPolicyError", comp_Error, NULL);
+  comp_TrailingDataWarning = PyErr_NewException("compresso.TrailingDataWarning",
+                                                PyExc_UserWarning, NULL);
 }
 
 // archives.c needs libarchive/libzip, so validate.c's lookup is answered here
