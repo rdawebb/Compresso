@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include "codec.h"
 #include <lz4frame.h>
+#include <stdio.h>
 #include <string.h>
 
 // LZ4F_compressUpdate needs room for every block a call completes: with the
@@ -13,6 +14,8 @@ typedef struct {
   LZ4F_decompressionContext_t dctx;
   LZ4F_preferences_t prefs;
   int header_written;
+  size_t code; // The failing call's result; 0 when begin() failed
+  char message[128];
 } LZ4State;
 
 static int lz4_begin(void *state, const CodecParams *params, int decompress,
@@ -51,6 +54,7 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
     size_t r = LZ4F_decompress(s->dctx, buf->next_out, &produced, buf->next_in,
                                &consumed, NULL);
     if (LZ4F_isError(r)) {
+      s->code = r;
       return CODEC_ERR;
     }
 
@@ -69,6 +73,7 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
     size_t n =
         LZ4F_compressBegin(s->cctx, buf->next_out, buf->avail_out, &s->prefs);
     if (LZ4F_isError(n)) {
+      s->code = n;
       return CODEC_ERR;
     }
 
@@ -82,6 +87,7 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
     size_t n = LZ4F_compressUpdate(s->cctx, buf->next_out, buf->avail_out,
                                    buf->next_in, buf->avail_in, NULL);
     if (LZ4F_isError(n)) {
+      s->code = n;
       return CODEC_ERR;
     }
 
@@ -95,6 +101,7 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
   if (finish) {
     size_t n = LZ4F_compressEnd(s->cctx, buf->next_out, buf->avail_out, NULL);
     if (LZ4F_isError(n)) {
+      s->code = n;
       return CODEC_ERR;
     }
 
@@ -122,6 +129,24 @@ static void lz4_end(void *state) {
   }
 }
 
+static const char *lz4_describe(void *state, const char *label, int decompress,
+                                int *corrupt) {
+  LZ4State *s = (LZ4State *)state;
+  const char *op = decompress ? "decompression" : "compression";
+
+  if (!s->code) {
+    *corrupt = 0;
+    snprintf(s->message, sizeof(s->message), "%s %s failed", label, op);
+    return s->message;
+  }
+
+  // Error codes are only public under LZ4F_STATIC_LINKING_ONLY
+  const char *name = LZ4F_getErrorName(s->code);
+  *corrupt = decompress && strcmp(name, "ERROR_allocation_failed") != 0;
+  snprintf(s->message, sizeof(s->message), "%s %s failed: %s", label, op, name);
+  return s->message;
+}
+
 static const CodecOps lz4_ops = {
     .name = "lz4",
     .state_size = sizeof(LZ4State),
@@ -130,6 +155,7 @@ static const CodecOps lz4_ops = {
     .process = lz4_process,
     .reset = lz4_reset,
     .end = lz4_end,
+    .describe = lz4_describe,
 };
 
 const CodecOps *codec_lz4_ops(void) { return &lz4_ops; }

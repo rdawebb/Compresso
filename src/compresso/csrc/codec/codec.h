@@ -74,8 +74,10 @@ typedef struct CodecOps {
   void (*end)(void *state);
 
   // GIL re-acquired, so a code captured inside the loop can become an
-  // exception; `label` is the codec's name; NULL leaves message to the caller
-  const char *(*describe)(void *state, const char *label, int decompress);
+  // exception; `label` is the codec's name; sets *corrupt when the input caused
+  // a decoding failure; NULL leaves the message to the caller
+  const char *(*describe)(void *state, const char *label, int decompress,
+                          int *corrupt);
 } CodecOps;
 
 // `ctx` is NULL-tolerant; returns 0, -1 with a Python exception set, or

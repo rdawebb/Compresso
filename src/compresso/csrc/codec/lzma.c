@@ -97,8 +97,13 @@ static void codec_lzma_end(void *state) {
 }
 
 static const char *codec_lzma_describe(void *state, const char *label,
-                                       int decompress) {
+                                       int decompress, int *corrupt) {
   LzmaState *s = (LzmaState *)state;
+
+  // Exceeding the memory limit is the input's demand, not proof of corruption
+  *corrupt = decompress &&
+             (s->code == LZMA_FORMAT_ERROR || s->code == LZMA_OPTIONS_ERROR ||
+              s->code == LZMA_DATA_ERROR || s->code == LZMA_BUF_ERROR);
 
   if (!decompress) {
     snprintf(s->message, sizeof(s->message), "%s compression failed", label);

@@ -176,6 +176,7 @@ const CBackend *get_snappy_backend(void);
 extern PyObject *comp_Error;
 extern PyObject *comp_HeaderError;
 extern PyObject *comp_BackendError;
+extern PyObject *comp_CorruptDataError;
 extern PyObject *comp_Cancelled;
 extern PyObject *comp_TrailingDataWarning;
 

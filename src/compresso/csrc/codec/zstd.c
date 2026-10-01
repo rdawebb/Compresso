@@ -1,10 +1,14 @@
 #define PY_SSIZE_T_CLEAN
 #include "codec.h"
+#include <stdio.h>
 #include <zstd.h>
+#include <zstd_errors.h>
 
 typedef struct {
   ZSTD_CCtx *cctx;
   ZSTD_DCtx *dctx;
+  size_t code; // The failing call's result; 0 when begin() failed
+  char message[128];
 } ZstdState;
 
 static int zstd_level_from_generic(int level) {
@@ -64,6 +68,7 @@ static int zstd_process(void *state, CodecBuf *buf, int finish) {
   }
 
   if (ZSTD_isError(r)) {
+    s->code = r;
     return CODEC_ERR;
   }
 
@@ -87,12 +92,31 @@ static void zstd_end(void *state) {
   ZSTD_freeDCtx(s->dctx);
 }
 
+static const char *zstd_describe(void *state, const char *label, int decompress,
+                                 int *corrupt) {
+  ZstdState *s = (ZstdState *)state;
+  const char *op = decompress ? "decompression" : "compression";
+
+  if (!s->code) {
+    *corrupt = 0;
+    snprintf(s->message, sizeof(s->message), "%s %s failed", label, op);
+    return s->message;
+  }
+
+  *corrupt =
+      decompress && ZSTD_getErrorCode(s->code) != ZSTD_error_memory_allocation;
+  snprintf(s->message, sizeof(s->message), "%s %s failed: %s", label, op,
+           ZSTD_getErrorName(s->code));
+  return s->message;
+}
+
 static const CodecOps zstd_ops = {
     .name = "zstd",
     .state_size = sizeof(ZstdState),
     .begin = zstd_begin,
     .process = zstd_process,
     .end = zstd_end,
+    .describe = zstd_describe,
 };
 
 const CodecOps *codec_zstd_ops(void) { return &zstd_ops; }

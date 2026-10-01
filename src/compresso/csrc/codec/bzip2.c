@@ -95,8 +95,10 @@ static void bzip2_end(void *state) {
 }
 
 static const char *bzip2_describe(void *state, const char *label,
-                                  int decompress) {
+                                  int decompress, int *corrupt) {
   BzipState *s = (BzipState *)state;
+  *corrupt = decompress &&
+             (s->code == BZ_DATA_ERROR || s->code == BZ_DATA_ERROR_MAGIC);
 
   const char *reason =
       !decompress ? "compression failed"

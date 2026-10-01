@@ -4,6 +4,7 @@
 #include "codec/codec.h"
 #include "common.h"
 #include "files.h"
+#include "test_stubs.h"
 #include "unity.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -130,9 +131,10 @@ static void stub_end(void *state) {
 }
 
 static const char *stub_describe(void *state, const char *label,
-                                 int decompress) {
+                                 int decompress, int *corrupt) {
   (void)state;
-  (void)decompress;
+  // Blames the input when decoding, as a real engine's data errors would
+  *corrupt = decompress;
   stub_last_label = label;
   return "stub engine failed";
 }
@@ -178,12 +180,7 @@ void setUp(void) {
     Py_Initialize();
   }
 
-  // test_stubs.c leaves these NULL, which the driver would hand to
-  // PyErr_SetString as an exception type
-  comp_BackendError = PyExc_RuntimeError;
-  comp_HeaderError = PyExc_ValueError;
-  comp_Error = PyExc_RuntimeError;
-  comp_TrailingDataWarning = PyExc_UserWarning;
+  ensure_comp_exceptions();
 
   stub_end_calls = 0;
   stub_reset_calls = 0;
@@ -300,6 +297,20 @@ void test_driver_reports_a_process_failure(void) {
   TEST_ASSERT_EQUAL_INT(1, stub_end_calls);
 }
 
+void test_driver_blames_the_engine_for_an_encoding_failure(void) {
+  TEST_ASSERT_EQUAL_INT(-1, run_stub(STUB_FAIL_PROCESS, TEST_INPUT));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_BackendError));
+  TEST_ASSERT_FALSE(PyErr_ExceptionMatches(comp_CorruptDataError));
+}
+
+void test_driver_blames_the_input_when_the_engine_does(void) {
+  CodecParams params = {.level = STUB_FAIL_PROCESS};
+
+  TEST_ASSERT_EQUAL_INT(-1, codec_run_file(&stub_ops, &params, 1, TEST_INPUT,
+                                           TMP_OUT, &ctx, "stub run failed"));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+}
+
 void test_driver_unlinks_the_output_on_failure(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_stub(STUB_FAIL_PROCESS, TEST_INPUT));
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
@@ -409,6 +420,7 @@ void test_driver_ends_cleanly_when_a_member_ends_the_input_on_a_chunk(void) {
 void test_driver_refuses_a_second_member_unless_concatenated(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_members("abc|def|", 0));
   TEST_ASSERT_TRUE(error_says("Invalid data after the end of a stub stream"));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
   TEST_ASSERT_EQUAL_INT(0, stub_reset_calls);
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
 }
@@ -416,12 +428,14 @@ void test_driver_refuses_a_second_member_unless_concatenated(void) {
 void test_driver_reports_trailing_data_that_is_not_a_member(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_members("abc|!junk", 1));
   TEST_ASSERT_TRUE(error_says("Invalid data after the end of a stub stream"));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
 }
 
 void test_driver_reports_a_truncated_later_member(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_members("abc|de", 1));
   TEST_ASSERT_TRUE(error_says("Truncated or incomplete stub stream"));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
 }
 

@@ -9,6 +9,7 @@ import pytest
 from compresso import (
     BackendError,
     Cancelled,
+    CorruptDataError,
     Error,
     HeaderError,
     _core,
@@ -39,11 +40,17 @@ def _value_error(call: Callable[[], object]) -> str | None:
 class TestCoreExceptions:
     """Test custom exception classes."""
 
-    @pytest.mark.parametrize("exc", [HeaderError, BackendError, Cancelled])
+    @pytest.mark.parametrize(
+        "exc", [HeaderError, BackendError, CorruptDataError, Cancelled]
+    )
     def test_every_error_derives_from_error(self, exc: type[Exception]) -> None:
         """Test that catching Error catches every exception the core raises."""
         assert issubclass(Error, Exception)
         assert issubclass(exc, Error)
+
+    def test_corrupt_data_is_still_a_backend_error(self) -> None:
+        """Test that code catching BackendError for bad input keeps working."""
+        assert issubclass(CorruptDataError, BackendError)
 
 
 class TestCapabilities:

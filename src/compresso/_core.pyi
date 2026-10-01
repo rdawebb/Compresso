@@ -12,6 +12,9 @@ class HeaderError(Error):
 class BackendError(Error):
     """Error in compression backend."""
 
+class CorruptDataError(BackendError):
+    """The input is corrupt, truncated, or not the format it claims to be."""
+
 class Cancelled(Error):
     """Raised when an operation stopped because its CancelToken was set."""
 

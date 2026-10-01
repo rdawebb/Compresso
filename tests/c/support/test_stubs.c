@@ -1,14 +1,32 @@
 // Test-harness definitions for symbols that live in _core.c and archives.c
 
 #define PY_SSIZE_T_CLEAN
+#include "test_stubs.h"
 #include "archives.h"
 #include <Python.h>
 
 PyObject *comp_Error = NULL;
 PyObject *comp_HeaderError = NULL;
 PyObject *comp_BackendError = NULL;
+PyObject *comp_CorruptDataError = NULL;
 PyObject *comp_Cancelled = NULL;
 PyObject *comp_TrailingDataWarning = NULL;
+
+void ensure_comp_exceptions(void) {
+  if (comp_Error) {
+    return;
+  }
+  comp_Error = PyErr_NewException("compresso.Error", NULL, NULL);
+  comp_HeaderError =
+      PyErr_NewException("compresso.HeaderError", comp_Error, NULL);
+  comp_BackendError =
+      PyErr_NewException("compresso.BackendError", comp_Error, NULL);
+  comp_CorruptDataError =
+      PyErr_NewException("compresso.CorruptDataError", comp_BackendError, NULL);
+  comp_Cancelled = PyErr_NewException("compresso.Cancelled", comp_Error, NULL);
+  comp_TrailingDataWarning = PyErr_NewException(
+      "compresso.TrailingDataWarning", PyExc_UserWarning, NULL);
+}
 
 // archives.c needs libarchive/libzip, so validate.c's lookup is answered here
 // with just the fields it reads, copied from archives/{tar,zip}.c

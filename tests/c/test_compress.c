@@ -7,6 +7,7 @@
 #include "common.h"
 #include "files.h"
 #include "fsutil.h"
+#include "test_stubs.h"
 #include "unity.h"
 #include <Python.h>
 #include <stdio.h>
@@ -21,17 +22,6 @@ static const AlgoID ALGOS[] = {ALGO_ZLIB, ALGO_BZIP2, ALGO_LZMA,
 
 // Every TEST_RANGE over ALGOS must span exactly these rows
 _Static_assert(sizeof(ALGOS) / sizeof(ALGOS[0]) == 6, "update TEST_RANGE");
-
-static void ensure_comp_exceptions(void) {
-  if (!comp_Error)
-    comp_Error = PyErr_NewException("compresso.Error", NULL, NULL);
-  if (!comp_HeaderError)
-    comp_HeaderError =
-        PyErr_NewException("compresso.HeaderError", comp_Error, NULL);
-  if (!comp_BackendError)
-    comp_BackendError =
-        PyErr_NewException("compresso.BackendError", comp_Error, NULL);
-}
 
 void setUp(void) {
   if (!Py_IsInitialized()) {
@@ -278,7 +268,7 @@ void test_decompress_removes_output_of_a_corrupt_payload(void) {
   fclose(f);
 
   TEST_ASSERT_EQUAL_INT(-1, decompress_file(comp, out, ALGO_NONE, NULL));
-  TEST_ASSERT_NOT_NULL(PyErr_Occurred());
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
   TEST_ASSERT_EQUAL_INT(-1, file_size(out));
 
   remove(comp);
@@ -295,7 +285,7 @@ void test_decompress_rejects_data_after_the_payload(void) {
 
   // .comp holds exactly one stream, so has no trailing data to tolerate
   assert_error(decompress_file(comp, "tmp_cmp_trailing.out", ALGO_NONE, NULL),
-               comp_BackendError);
+               comp_CorruptDataError);
   TEST_ASSERT_EQUAL_INT(-1, file_size("tmp_cmp_trailing.out"));
 
   remove(comp);

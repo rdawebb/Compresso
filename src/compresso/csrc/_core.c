@@ -9,6 +9,7 @@
 PyObject *comp_Error;
 PyObject *comp_HeaderError;
 PyObject *comp_BackendError;
+PyObject *comp_CorruptDataError;
 PyObject *comp_Cancelled;
 PyObject *comp_TrailingDataWarning;
 
@@ -832,8 +833,8 @@ static PyObject *py_check_level(PyObject *self UNUSED, PyObject *args,
       PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
       return NULL;
     }
-    if (validate_compression_request(ALGO_NONE, STRAT_BALANCED, level,
-                                     &pipe) != 0) {
+    if (validate_compression_request(ALGO_NONE, STRAT_BALANCED, level, &pipe) !=
+        0) {
       return NULL;
     }
     Py_RETURN_NONE;
@@ -876,8 +877,7 @@ static PyMethodDef CoreMethods[] = {
      "mtime, mode, link_target, plus compressed_size, crc and method where "
      "the container records them)."},
 
-    {"compress_standalone",
-     (PyCFunction)(void (*)(void))py_compress_standalone,
+    {"compress_standalone", (PyCFunction)(void (*)(void))py_compress_standalone,
      METH_VARARGS | METH_KEYWORDS,
      "Compress a file using a standalone compression format."},
     {"decompress_standalone",
@@ -948,8 +948,6 @@ PyMODINIT_FUNC PyInit__core(void) {
     return NULL;
   }
 
-  // Subclasses Error, not BaseException: the frontend jobs catch Exception to
-  // honour their "never raises" contract, which a cancellation must not evade
   comp_Cancelled = PyErr_NewException("compresso.Cancelled", comp_Error, NULL);
   if (!comp_Cancelled) {
     Py_DECREF(comp_BackendError);
@@ -959,8 +957,17 @@ PyMODINIT_FUNC PyInit__core(void) {
     return NULL;
   }
 
-  comp_TrailingDataWarning = PyErr_NewException(
-      "compresso.TrailingDataWarning", PyExc_UserWarning, NULL);
+  comp_CorruptDataError =
+      PyErr_NewException("compresso.CorruptDataError", comp_BackendError, NULL);
+  if (!comp_CorruptDataError ||
+      PyModule_AddObjectRef(module, "CorruptDataError", comp_CorruptDataError) <
+          0) {
+    Py_DECREF(module);
+    return NULL;
+  }
+
+  comp_TrailingDataWarning = PyErr_NewException("compresso.TrailingDataWarning",
+                                                PyExc_UserWarning, NULL);
   if (!comp_TrailingDataWarning ||
       PyModule_AddObjectRef(module, "TrailingDataWarning",
                             comp_TrailingDataWarning) < 0) {

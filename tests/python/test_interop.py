@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from compresso import BackendError, TrailingDataWarning, _core
+from compresso import CorruptDataError, TrailingDataWarning, _core
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 INTEROP = FIXTURES / "interop"
@@ -147,7 +147,7 @@ class TestStandaloneDecoding:
         source.write_bytes((INTEROP / "xz_single.xz").read_bytes() + trailing)
         restored = temp_dir / "restored"
 
-        with pytest.raises(BackendError):
+        with pytest.raises(CorruptDataError):
             _core.decompress_standalone(str(source), str(restored))
 
         assert not restored.exists()
@@ -171,7 +171,7 @@ class TestStandaloneDecoding:
         source.write_bytes((INTEROP / "lz4_single.lz4").read_bytes() + trailing)
         restored = temp_dir / "restored"
 
-        with pytest.raises(BackendError):
+        with pytest.raises(CorruptDataError):
             _core.decompress_standalone(str(source), str(restored))
 
         assert not restored.exists()
@@ -188,7 +188,7 @@ class TestStandaloneDecoding:
         compressed.write_bytes(compressed.read_bytes() + bytes(4))
         restored = temp_dir / "restored"
 
-        with pytest.raises(BackendError, match=f"after the end of a {algo} stream"):
+        with pytest.raises(CorruptDataError, match=f"after the end of a {algo} stream"):
             _core.decompress_file(str(compressed), str(restored), "")
 
         assert not restored.exists()

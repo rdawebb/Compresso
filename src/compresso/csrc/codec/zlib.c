@@ -109,9 +109,10 @@ static void zlib_end(void *state) {
   }
 }
 
-static const char *zlib_describe(void *state, const char *label,
-                                 int decompress) {
+static const char *zlib_describe(void *state, const char *label, int decompress,
+                                 int *corrupt) {
   ZlibState *s = (ZlibState *)state;
+  *corrupt = decompress && (s->code == Z_DATA_ERROR || s->code == Z_NEED_DICT);
   const char *op = decompress ? "decompression" : "compression";
 
   if (s->strm.msg) {

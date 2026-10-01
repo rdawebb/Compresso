@@ -4,6 +4,7 @@
 #include "common.h"
 #include "files.h"
 #include "standalone.h"
+#include "test_stubs.h"
 #include "unity.h"
 #include <stdio.h>
 
@@ -73,20 +74,6 @@ static const FormatCase FORMATS[] = {
 
 // Every TEST_RANGE below must span exactly these rows
 _Static_assert(sizeof(FORMATS) / sizeof(FORMATS[0]) == 5, "update TEST_RANGE");
-
-// The comp_* exception objects are defined (as NULL) by the test harness stub
-// Create them once so error paths that call PyErr_SetString() have a valid
-// exception type
-static void ensure_comp_exceptions(void) {
-  if (!comp_Error)
-    comp_Error = PyErr_NewException("compresso.Error", NULL, NULL);
-  if (!comp_HeaderError)
-    comp_HeaderError =
-        PyErr_NewException("compresso.HeaderError", comp_Error, NULL);
-  if (!comp_BackendError)
-    comp_BackendError =
-        PyErr_NewException("compresso.BackendError", comp_Error, NULL);
-}
 
 void setUp(void) {
   if (!Py_IsInitialized()) {
@@ -214,6 +201,8 @@ void test_detects_corruption(int index) {
   // Decompression must fail (CRC/checksum or structural error)
   TEST_ASSERT_EQUAL_INT_MESSAGE(-1, fmt->decompress_file(comp, out, NULL),
                                 fmt->name);
+  TEST_ASSERT_TRUE_MESSAGE(PyErr_ExceptionMatches(comp_CorruptDataError),
+                           fmt->name);
 
   remove(comp);
   remove(out);

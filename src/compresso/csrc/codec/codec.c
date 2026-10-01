@@ -33,20 +33,23 @@ static void set_failure(const CodecOps *ops, const CodecParams *params,
     PyErr_SetString(PyExc_IOError, "Error writing output file");
     return;
   case FAIL_TRUNCATED:
-    PyErr_Format(comp_BackendError, "Truncated or incomplete %s stream",
-                 codec_label(ops, params));
+    PyErr_Format(decompress ? comp_CorruptDataError : comp_BackendError,
+                 "Truncated or incomplete %s stream", codec_label(ops, params));
     return;
   case FAIL_TRAILING:
-    PyErr_Format(comp_BackendError, "Invalid data after the end of a %s stream",
+    PyErr_Format(comp_CorruptDataError,
+                 "Invalid data after the end of a %s stream",
                  codec_label(ops, params));
     return;
   case FAIL_CODEC: {
-    const char *message =
-        ops->describe
-            ? ops->describe(state, codec_label(ops, params), decompress)
-            : NULL;
+    int corrupt = 0;
+    const char *message = ops->describe
+                              ? ops->describe(state, codec_label(ops, params),
+                                              decompress, &corrupt)
+                              : NULL;
     if (message) {
-      PyErr_SetString(comp_BackendError, message);
+      PyErr_SetString(corrupt ? comp_CorruptDataError : comp_BackendError,
+                      message);
     }
     return; // No describe: the caller applies its own fallback
   }
