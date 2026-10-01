@@ -23,7 +23,7 @@ void ensure_comp_exceptions(void) {
   comp_BackendError =
       PyErr_NewException("compresso.BackendError", comp_Error, NULL);
   comp_CorruptDataError =
-      PyErr_NewException("compresso.CorruptDataError", comp_BackendError, NULL);
+      PyErr_NewException("compresso.CorruptDataError", comp_Error, NULL);
   comp_Cancelled = PyErr_NewException("compresso.Cancelled", comp_Error, NULL);
   comp_ExtractionPolicyError =
       PyErr_NewException("compresso.ExtractionPolicyError", comp_Error, NULL);

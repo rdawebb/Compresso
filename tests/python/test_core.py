@@ -54,9 +54,9 @@ class TestCoreExceptions:
         assert issubclass(Error, Exception)
         assert issubclass(exc, Error)
 
-    def test_corrupt_data_is_still_a_backend_error(self) -> None:
-        """Test that code catching BackendError for bad input keeps working."""
-        assert issubclass(CorruptDataError, BackendError)
+    def test_corrupt_data_is_not_a_backend_error(self) -> None:
+        """Test that bad input is told apart from a backend failure."""
+        assert not issubclass(CorruptDataError, BackendError)
 
 
 class TestCapabilities:

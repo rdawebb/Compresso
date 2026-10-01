@@ -19,7 +19,7 @@ class ExtractionPolicyError(Error):
     denies, or the size cap.
     """
 
-class CorruptDataError(BackendError):
+class CorruptDataError(Error):
     """The input is corrupt, truncated, or not the format it claims to be."""
 
 class Cancelled(Error):

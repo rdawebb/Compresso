@@ -959,7 +959,7 @@ PyMODINIT_FUNC PyInit__core(void) {
   }
 
   comp_CorruptDataError =
-      PyErr_NewException("compresso.CorruptDataError", comp_BackendError, NULL);
+      PyErr_NewException("compresso.CorruptDataError", comp_Error, NULL);
   if (!comp_CorruptDataError ||
       PyModule_AddObjectRef(module, "CorruptDataError", comp_CorruptDataError) <
           0) {
