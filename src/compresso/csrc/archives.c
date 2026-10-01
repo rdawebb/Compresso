@@ -193,11 +193,25 @@ static ArchiveEntry *create_entry_from_path(const char *path,
     if (fs_readlink(path, target, sizeof(target)) == 0) {
       entry->symlink_target = strdup(target);
     }
-  } else {
+  } else if (st.type == FS_TYPE_FILE) {
     entry->type = ENTRY_FILE;
+  } else {
+    entry->type = ENTRY_SPECIAL;
   }
 
   return entry;
+}
+
+// A FIFO or device is never opened; returns 1 if `entry` was skipped
+static int skip_special_entry(ArchiveEntry *entry, const char *path,
+                              CoreContext *ctx) {
+  if (entry->type != ENTRY_SPECIAL)
+    return 0;
+
+  ctx_log(ctx, CTX_LOG_WARNING,
+          "Skipped %s: FIFOs, sockets and devices are not archived", path);
+  entry_free(entry);
+  return 1;
 }
 
 static int add_directory_recursive(void *writer, const CArchive *archive,
@@ -223,6 +237,8 @@ static int add_directory_recursive(void *writer, const CArchive *archive,
       fs_closedir(dir);
       return -1;
     }
+    if (skip_special_entry(ae, full_path, ctx))
+      continue;
 
     if (ae->type == ENTRY_FILE) {
       FILE *f = fs_fopen(full_path, "rb");
@@ -573,6 +589,8 @@ static int add_paths_to_writer(const CArchive *archive, void *writer,
       ArchiveEntry *entry = create_entry_from_path(input_paths[i], prefix_len);
       if (!entry)
         return -1;
+      if (skip_special_entry(entry, input_paths[i], ctx))
+        continue;
 
       FILE *f = fs_fopen(input_paths[i], "rb");
       if (!f) {

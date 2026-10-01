@@ -1,7 +1,9 @@
 """Tests for the core compression/decompression functionality."""
 
 import io
+import json
 import os
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -422,6 +424,47 @@ class TestArchiveErrorTypes:
             _core.create_archive(str(dest), fmt, [str(sample_text_file)])
 
         assert info.value.filename == str(dest)
+
+
+# Runs in a child process: a FIFO opened for reading blocks with the GIL held,
+# so a regression would hang the test worker rather than fail
+_ARCHIVE_AND_LIST = """
+import json, logging, sys
+logging.basicConfig(format="%(levelname)s %(message)s")
+from compresso import _core
+output, fmt, *inputs = sys.argv[1:]
+_core.create_archive(output, fmt, inputs)
+print(json.dumps([e["path"] for e in _core.list_archive_contents(output)]))
+"""
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs os.mkfifo")
+class TestArchiveSkipsSpecialFiles:
+    """Test that FIFOs are skipped with a warning instead of being read."""
+
+    @pytest.mark.parametrize("fmt", ["tar", "zip", "tar.gz"])
+    def test_fifo_is_skipped_not_read(self, temp_dir: Path, fmt: str) -> None:
+        """Test that a FIFO in the tree, or named directly, is left out."""
+        tree = temp_dir / "tree"
+        tree.mkdir()
+        (tree / "a.txt").write_text("a")
+        os.mkfifo(tree / "pipe")
+        os.mkfifo(temp_dir / "named_pipe")
+        output = temp_dir / f"out.{fmt}"
+
+        result = subprocess.run(
+            [sys.executable, "-c", _ARCHIVE_AND_LIST, str(output), fmt]
+            + [str(tree), str(temp_dir / "named_pipe")],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == ["tree/", "tree/a.txt"]
+        for skipped in (tree / "pipe", temp_dir / "named_pipe"):
+            assert f"WARNING Skipped {skipped}:" in result.stderr
 
 
 class TestLevelValidation:
