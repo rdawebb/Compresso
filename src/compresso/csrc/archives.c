@@ -20,6 +20,7 @@ static const ExtractionPolicy EXTRACTION_POLICY_DEFAULT = {
     .overwrite_existing = 0,
     .preserve_permissions = 1,
     .preserve_timestamps = 1,
+    .overwrite_dir_metadata = 0,
     .max_depth = 32,
     .max_total_size = 0,
 };
@@ -1117,10 +1118,12 @@ static int extract_entries(const CArchive *archive, void *reader,
         }
       }
 
-      // An existing directory keeps its own metadata
+      // An existing directory keeps its own metadata unless asked otherwise
+      int restore = !existing_is_dir || (policy->overwrite_dir_metadata &&
+                                         policy->overwrite_existing != 1);
       if (prepare_output_dir(resolved_root, out_path, DIR_CREATE_MODE,
                              entry.path) != 0 ||
-          (!existing_is_dir &&
+          (restore &&
            defer_dir(&deferred, out_path, entry.mode, entry.mtime) != 0)) {
         entry_reset(&entry);
         result = -1;

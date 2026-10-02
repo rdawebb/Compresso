@@ -131,6 +131,9 @@ class ExtractOptions:
         max_depth: Maximum nesting depth of an entry path; 0 means unlimited.
         preserve_permissions: Whether to restore each entry's mode bits.
         preserve_timestamps: Whether to restore each entry's modification time.
+        overwrite_dir_metadata: Whether a directory that already exists also
+            gets the archive's mode and modification time; by default only directories
+            the extraction creates get them; never applies with `OverwriteMode.SKIP`.
     """
 
     overwrite: OverwriteMode = OverwriteMode.RENAME
@@ -138,6 +141,7 @@ class ExtractOptions:
     max_depth: int = 32
     preserve_permissions: bool = True
     preserve_timestamps: bool = True
+    overwrite_dir_metadata: bool = False
 
 
 @dataclass(frozen=True)
@@ -554,6 +558,7 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
                 max_depth=options.max_depth,
                 preserve_permissions=options.preserve_permissions,
                 preserve_timestamps=options.preserve_timestamps,
+                overwrite_dir_metadata=options.overwrite_dir_metadata,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )

@@ -1259,6 +1259,32 @@ class TestExtractionMetadata:
             1_000_000_000, abs=2
         )
 
+    @pytest.mark.parametrize("opt_in", [False, True])
+    def test_existing_directory_metadata_follows_the_option(
+        self, temp_dir: Path, opt_in: bool
+    ) -> None:
+        """Test that only the opt-in re-dates a directory that already exists."""
+        archive_path = temp_dir / "meta.tar"
+        directory = _dir_entry("d")
+        directory.mtime = 1_000_000_000
+        _tar_with_entries(archive_path, [directory, _file_entry("d/a.txt")])
+        out_dir = temp_dir / "out"
+        (out_dir / "d").mkdir(parents=True)
+
+        result = ExtractJob.from_archive(
+            archive_path,
+            out_dir,
+            options=ExtractOptions(
+                overwrite=OverwriteMode.OVERWRITE, overwrite_dir_metadata=opt_in
+            ),
+        ).run()
+
+        assert result.ok, result.error
+        restored = (out_dir / "d").stat().st_mtime == pytest.approx(
+            1_000_000_000, abs=2
+        )
+        assert restored == opt_in
+
     def test_preserve_timestamps_off_uses_the_current_time(
         self, temp_dir: Path
     ) -> None:

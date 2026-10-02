@@ -89,9 +89,13 @@ typedef struct {
   int allow_special_files;  // 0 = reject device nodes, FIFOs, sockets (default)
   int preserve_permissions; // 1 = restore mode bits, 0 = apply umask
   int preserve_timestamps;  // 1 = restore mtime, 0 = use current time
-  uint32_t max_depth;       // maximum recursive nesting depth (0 = unlimited,
-                            // recommend 32)
-  uint64_t max_total_size;  // maximum total extracted bytes (0 = unlimited)
+  // 1 = also restore a directory's mode and mtime when it already exists, 0 =
+  // only on directories the extraction creates (default); never in SKIP mode,
+  // which leaves existing paths alone
+  int overwrite_dir_metadata;
+  uint32_t max_depth;      // maximum recursive nesting depth (0 = unlimited,
+                           // recommend 32)
+  uint64_t max_total_size; // maximum total extracted bytes (0 = unlimited)
 } ExtractionPolicy;
 
 ExtractionPolicy extraction_policy_default(void); // returns safe defaults

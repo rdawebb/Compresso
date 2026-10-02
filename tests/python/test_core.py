@@ -658,6 +658,54 @@ class TestDirectoryMetadata:
         assert existing.stat().st_mode == before.st_mode
         assert int(existing.stat().st_mtime) != self.MTIME
 
+    def test_opt_in_restores_an_existing_directory(self, temp_dir: Path) -> None:
+        """Test that overwrite_dir_metadata applies GNU tar's behaviour."""
+        archive = temp_dir / "dated.tar"
+        _tar_of(archive, [("d/", 0o700, self.MTIME), ("d/f", 0o644, self.MTIME)])
+        existing = temp_dir / "out" / "d"
+        existing.mkdir(parents=True)
+
+        _core.extract_archive(
+            str(archive), str(temp_dir / "out"), [], overwrite_dir_metadata=True
+        )
+
+        assert int(existing.stat().st_mtime) == self.MTIME
+        if sys.platform != "win32":
+            assert stat.S_IMODE(existing.stat().st_mode) == 0o700
+
+    def test_opt_in_covers_a_directory_listed_after_its_contents(
+        self, temp_dir: Path
+    ) -> None:
+        """Test that a directory created as a parent still gets its own entry's metadata."""
+        archive = temp_dir / "late.tar"
+        _tar_of(archive, [("d/f", 0o644, self.MTIME), ("d/", 0o755, self.MTIME)])
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), [], overwrite_dir_metadata=True)
+
+        assert int((out / "d").stat().st_mtime) == self.MTIME
+
+    def test_opt_in_never_touches_an_existing_directory_when_skipping(
+        self, temp_dir: Path
+    ) -> None:
+        """Test that SKIP mode keeps its promise to leave existing paths alone."""
+        archive = temp_dir / "dated.tar"
+        _tar_of(archive, [("d/", 0o700, self.MTIME), ("d/f", 0o644, self.MTIME)])
+        existing = temp_dir / "out" / "d"
+        existing.mkdir(parents=True)
+        before = existing.stat()
+
+        _core.extract_archive(
+            str(archive),
+            str(temp_dir / "out"),
+            [],
+            overwrite=1,
+            overwrite_dir_metadata=True,
+        )
+
+        assert existing.stat().st_mode == before.st_mode
+        assert int(existing.stat().st_mtime) != self.MTIME
+
 
 class TestLevelValidation:
     """Test that each backend, format and container checks its own level range."""
