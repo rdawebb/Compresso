@@ -212,7 +212,6 @@ int fs_mkdir_p(const char *path, uint32_t mode) {
 #include <io.h>
 #include <share.h>
 #include <sys/stat.h>
-#include <sys/utime.h>
 #include <wchar.h>
 #include <windows.h>
 #include <winioctl.h>
@@ -491,10 +490,25 @@ int fs_set_mtime(const char *path, int64_t mtime) {
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
     return -1;
 
-  struct __utimbuf64 times;
-  times.actime = (__time64_t)mtime;
-  times.modtime = (__time64_t)mtime;
-  return _wutime64(wpath, &times);
+  // _wutime64 opens the path as a file, which fails for a directory
+  HANDLE h = CreateFileW(wpath, FILE_WRITE_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  if (h == INVALID_HANDLE_VALUE) {
+    errno = EACCES;
+    return -1;
+  }
+
+  // FILETIME counts 100ns intervals since 1601-01-01
+  ULONGLONG ticks = (ULONGLONG)(mtime + 11644473600LL) * 10000000ULL;
+  FILETIME ft = {(DWORD)ticks, (DWORD)(ticks >> 32)};
+  BOOL ok = SetFileTime(h, NULL, &ft, &ft);
+  CloseHandle(h);
+  if (!ok) {
+    errno = EACCES;
+    return -1;
+  }
+  return 0;
 }
 
 // Resolves `path` to an absolute path, following reparse points if necessary
