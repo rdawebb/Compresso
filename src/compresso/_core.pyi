@@ -1,6 +1,6 @@
 """Type stubs for the _core C extension module."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 class Error(Exception):
@@ -145,7 +145,7 @@ def create_archive(
 def extract_archive(
     archive_path: str,
     output_dir: str,
-    files: list[str],
+    files: Sequence[str],
     *,
     overwrite: int = ...,
     max_total_size: int = ...,

@@ -503,23 +503,46 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
+  // Prevents a bare string from being treated as a sequence of characters
+  if (PyUnicode_Check(files_obj) || PyBytes_Check(files_obj)) {
+    PyErr_Format(PyExc_TypeError, "files must be a sequence of str, not %s",
+                 Py_TYPE(files_obj)->tp_name);
+    return NULL;
+  }
+
+  // Private tuple, so a progress callback that mutates the caller's list
+  // can't free the names out from under the extraction
+  PyObject *files_tuple = PySequence_Tuple(files_obj);
+  if (!files_tuple) {
+    return NULL;
+  }
+
+  size_t num_files = (size_t)PyTuple_GET_SIZE(files_tuple);
   const char **files = NULL;
-  size_t num_files = 0;
+  if (num_files > 0) {
+    files = safe_malloc(num_files * sizeof(char *));
+    if (!files) {
+      Py_DECREF(files_tuple);
+      return NULL;
+    }
+  }
 
   // `files` are archive-internal entry names matched against the stored (UTF-8)
   // paths, so they are decoded as UTF-8 rather than fs-encoded
-  if (files_obj && PyList_Check(files_obj)) {
-    num_files = PyList_Size(files_obj);
-    if (num_files > 0) {
-      files = safe_malloc(num_files * sizeof(char *));
-      if (!files) {
-        return NULL;
-      }
-
-      for (size_t i = 0; i < num_files; i++) {
-        PyObject *item = PyList_GetItem(files_obj, i);
-        files[i] = PyUnicode_AsUTF8(item);
-      }
+  for (size_t i = 0; i < num_files; i++) {
+    PyObject *item = PyTuple_GET_ITEM(files_tuple, i);
+    if (!PyUnicode_Check(item)) {
+      PyErr_Format(PyExc_TypeError, "files must contain only str, not %s",
+                   Py_TYPE(item)->tp_name);
+      free(files);
+      Py_DECREF(files_tuple);
+      return NULL;
+    }
+    files[i] = PyUnicode_AsUTF8(item);
+    if (!files[i]) {
+      free(files);
+      Py_DECREF(files_tuple);
+      return NULL;
     }
   }
 
@@ -532,6 +555,7 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
     Py_XDECREF(archive_path_bytes);
     Py_XDECREF(output_dir_bytes);
     free(files);
+    Py_DECREF(files_tuple);
     return NULL; // Error already set
   }
 
@@ -540,6 +564,7 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
     Py_DECREF(archive_path_bytes);
     Py_DECREF(output_dir_bytes);
     free(files);
+    Py_DECREF(files_tuple);
     return NULL;
   }
 
@@ -549,6 +574,7 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   Py_DECREF(archive_path_bytes);
   Py_DECREF(output_dir_bytes);
   free(files);
+  Py_DECREF(files_tuple);
   if (result != 0) {
     set_cancelled_error(result);
     return NULL; // Error already set

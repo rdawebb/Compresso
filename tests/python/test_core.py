@@ -299,6 +299,64 @@ class TestListArchiveContentsArgs:
             _core.list_archive_contents(str(temp_dir / "a.tar"), bogus=1)  # type: ignore[call-arg]  # ty:ignore[unknown-argument]
 
 
+class TestExtractArchiveFilesArg:
+    """Test the validation of extract_archive's `files` selection."""
+
+    @pytest.fixture
+    def two_files(self, temp_dir: Path) -> Path:
+        """A tar holding a.txt and b.txt.
+
+        Args:
+            temp_dir: Pytest temporary path fixture.
+
+        Returns:
+            Path to the tar.
+        """
+        archive = temp_dir / "two.tar"
+        _tar_of(archive, [("a.txt", 0o644, 0), ("b.txt", 0o644, 0)])
+
+        return archive
+
+    @pytest.mark.parametrize(
+        "files",
+        [["a.txt"], ("a.txt",), iter(["a.txt"])],
+        ids=["list", "tuple", "iterator"],
+    )
+    def test_any_sequence_selects(
+        self, two_files: Path, temp_dir: Path, files: object
+    ) -> None:
+        """Test that a tuple or iterator selects like a list, not as "everything"."""
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(two_files), str(out), files)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+
+        assert sorted(p.name for p in out.iterdir()) == ["a.txt"]
+
+    def test_empty_selects_everything(self, two_files: Path, temp_dir: Path) -> None:
+        """Test that no names at all extracts every entry."""
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(two_files), str(out), ())
+
+        assert sorted(p.name for p in out.iterdir()) == ["a.txt", "b.txt"]
+
+    @pytest.mark.parametrize("files", [["a.txt", 1], [None]], ids=["int", "none"])
+    def test_non_str_name_is_refused(
+        self, two_files: Path, temp_dir: Path, files: list[object]
+    ) -> None:
+        """Test that a name that isn't a str raises rather than crashing."""
+        with pytest.raises(TypeError, match="files must contain only str"):
+            _core.extract_archive(str(two_files), str(temp_dir / "out"), files)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+
+    @pytest.mark.parametrize("files", ["a.txt", b"a.txt"], ids=["str", "bytes"])
+    def test_bare_string_is_refused(
+        self, two_files: Path, temp_dir: Path, files: object
+    ) -> None:
+        """Test that one name passed bare isn't read as a name per character."""
+        with pytest.raises(TypeError, match="files must be a sequence of str"):
+            _core.extract_archive(str(two_files), str(temp_dir / "out"), files)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+
+
 class TestRecognisedButUnsupportedArchive:
     """Test that a detected archive format without a backend names itself."""
 
