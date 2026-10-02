@@ -100,9 +100,10 @@ static void log_bridge(CoreContext *ctx, int level, const char *message) {
   PyErr_Fetch(&pending_type, &pending, &pending_tb);
 #endif
 
-  // surrogateescape keeps a path in the message that isn't valid UTF-8
+  // A byte that isn't UTF-8 is shown as \xNN; a lone surrogate would break any
+  // handler writing UTF-8
   PyObject *text =
-      PyUnicode_DecodeUTF8(message, strlen(message), "surrogateescape");
+      PyUnicode_DecodeUTF8(message, strlen(message), "backslashreplace");
   PyObject *logging = text ? PyImport_ImportModule("logging") : NULL;
   PyObject *logger =
       logging ? PyObject_CallMethod(logging, "getLogger", "s", "compresso")
@@ -603,7 +604,11 @@ static PyObject *py_list_archive_contents(PyObject *self UNUSED,
     return NULL; // Error already set
   }
 
-  PyObject *file_list = list_archive_contents(archive_path);
+  // No progress to report, but the bridge still logs and checks for signals
+  CoreContext ctx;
+  core_context_init(&ctx, NULL, NULL);
+
+  PyObject *file_list = list_archive_contents(archive_path, &ctx);
   Py_DECREF(archive_path_bytes);
   return file_list; // NULL propagates the already-set exception
 }

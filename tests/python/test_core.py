@@ -707,6 +707,69 @@ class TestDirectoryMetadata:
         assert int(existing.stat().st_mtime) != self.MTIME
 
 
+def _tar_with_non_utf8_pax_name(path: Path) -> None:
+    """Write a pax tar whose one entry name holds a byte that isn't UTF-8.
+
+    libarchive returns ARCHIVE_WARN for its header: still valid, but the name
+    can't be converted to the locale's charset.
+
+    Args:
+        path: Where to write the tar.
+    """
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tf:
+        # Too long for a ustar header, so the name goes in a pax "path" record
+        info = tarfile.TarInfo("dir/" + "n" * 120 + ".txt")
+        info.size = 1
+        tf.addfile(info, io.BytesIO(b"x"))
+
+    data = bytearray(buf.getvalue())
+    # Same length, so the record stays well-formed
+    data[data.index(b"path=dir/") + len(b"path=dir/")] = 0xFF
+    path.write_bytes(data)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="libarchive converts names to UTF-16 there"
+)
+class TestTarHeaderWarnings:
+    """Test that a header libarchive only warns about is still read."""
+
+    def test_listing_warns_and_keeps_the_entry(
+        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that the entry is listed, its name kept by surrogateescape."""
+        archive = temp_dir / "warn.tar"
+        _tar_with_non_utf8_pax_name(archive)
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            entries = _core.list_archive_contents(str(archive))
+
+        assert [e["path"] for e in entries] == ["dir/\udcff" + "n" * 119 + ".txt"]
+        assert len(caplog.records) == 1
+        # Shown as \xff, since a lone surrogate breaks handlers writing UTF-8
+        message = caplog.records[0].getMessage()
+        assert message.startswith("Archive entry dir/\\xffnnn")
+        assert "can't be converted" in message
+
+    # macOS refuses a file name that isn't UTF-8, so only Linux can write it
+    @pytest.mark.skipif(sys.platform != "linux", reason="needs non-UTF-8 names")
+    def test_extraction_warns_once_and_writes_the_entry(
+        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that extraction carries on, warning once despite two passes."""
+        archive = temp_dir / "warn.tar"
+        _tar_with_non_utf8_pax_name(archive)
+        out = temp_dir / "out"
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            _core.extract_archive(str(archive), str(out), [])
+
+        written = os.listdir(os.fsencode(out / "dir"))
+        assert written == [b"\xff" + b"n" * 119 + b".txt"]
+        assert len(caplog.records) == 1
+
+
 class TestLevelValidation:
     """Test that each backend, format and container checks its own level range."""
 

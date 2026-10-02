@@ -232,7 +232,8 @@ static int tar_get_entry_count(void *reader_ptr) {
   return -1;
 }
 
-static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
+static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
+                              CoreContext *ctx) {
   TarReader *reader = (TarReader *)reader_ptr;
 
   // Zero the caller's out-param, so unset fields are never freed
@@ -244,7 +245,13 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
     return 0; // No more entries
   }
 
-  if (r != ARCHIVE_OK) {
+  // WARN still delivers a valid header, e.g. a name libarchive couldn't
+  // convert to the locale's charset
+  if (r == ARCHIVE_WARN) {
+    const char *name = archive_entry_pathname(reader->current_entry);
+    ctx_log(ctx, CTX_LOG_WARNING, "Archive entry %s: %s", name ? name : "?",
+            archive_error_string(reader->archive));
+  } else if (r != ARCHIVE_OK) {
     set_tar_error(reader->archive, "Error reading archive", reader->input_path,
                   1);
     return -1; // Error
@@ -253,9 +260,10 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
   // Populate ArchiveEntry
   const char *pathname = archive_entry_pathname(reader->current_entry);
   if (pathname) {
-    entry->path = safe_malloc(strlen(pathname) + 1);
-    if (entry->path) {
-      strcpy(entry->path, pathname);
+    entry->path = strdup(pathname);
+    if (!entry->path) {
+      PyErr_NoMemory();
+      return -1;
     }
   }
 
@@ -274,9 +282,12 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
     entry->type = ENTRY_SYMLINK;
     const char *link = archive_entry_symlink(reader->current_entry);
     if (link) {
-      entry->symlink_target = safe_malloc(strlen(link) + 1);
-      if (entry->symlink_target) {
-        strcpy(entry->symlink_target, link);
+      entry->symlink_target = strdup(link);
+      if (!entry->symlink_target) {
+        free(entry->path);
+        entry->path = NULL;
+        PyErr_NoMemory();
+        return -1;
       }
     }
   } else {

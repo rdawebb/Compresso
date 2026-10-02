@@ -342,7 +342,9 @@ static int zip_get_entry_count(void *reader_ptr) {
   return (int)reader->num_entries;
 }
 
-static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
+static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
+                              CoreContext *ctx) {
+  (void)ctx; // libzip has no warnings to pass on
   ZipReader *reader = (ZipReader *)reader_ptr;
 
   if (reader->current_index >= reader->num_entries) {
@@ -365,6 +367,10 @@ static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
 
   if (st.valid & ZIP_STAT_NAME) {
     entry->path = strdup(st.name);
+    if (!entry->path) {
+      PyErr_NoMemory();
+      return -1;
+    }
 
     // Check if directory (ends with '/')
     size_t name_len = strlen(st.name);

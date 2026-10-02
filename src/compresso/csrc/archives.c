@@ -773,7 +773,8 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
   uint64_t declared_total = 0;
   int ret;
 
-  while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
+  // NULL: extract_entries reads the same headers again, and warns once there
+  while ((ret = archive->get_next_entry(reader, &entry, NULL)) == 1) {
     // Nothing is written in this pass, so this is a cancellation check with no
     // progress to report
     int cancelled = ctx_advance(ctx, 0);
@@ -992,7 +993,7 @@ static int extract_entries(const CArchive *archive, void *reader,
   size_t num_renames = 0, cap_renames = 0;
   DeferredDirs deferred = {0};
 
-  while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
+  while ((ret = archive->get_next_entry(reader, &entry, ctx)) == 1) {
     // Catches a cancel between entries; extract_entry_data catches one during
     // a single large entry
     int cancelled = ctx_advance(ctx, 0);
@@ -1349,14 +1350,33 @@ static const char *entry_type_name(EntryType type) {
 // `compressed_size`, `crc` and `method` are present only for a container that
 // compresses each entry separately; tar compresses the whole stream, so those
 // keys are absent rather than None
+//
+// Names are UTF-8 by convention only; surrogateescape keeps one that isn't
+// listable, as os.fsdecode does, and None stands for a missing name
+static PyObject *decode_entry_name(const char *name) {
+  if (!name)
+    Py_RETURN_NONE;
+  return PyUnicode_DecodeUTF8(name, (Py_ssize_t)strlen(name),
+                              "surrogateescape");
+}
+
 static PyObject *entry_to_dict(const ArchiveEntry *entry) {
-  // "z" converts a NULL target to None
+  PyObject *path = decode_entry_name(entry->path ? entry->path : "");
+  PyObject *target = path ? decode_entry_name(entry->type == ENTRY_SYMLINK
+                                                  ? entry->symlink_target
+                                                  : NULL)
+                          : NULL;
+  if (!target) {
+    Py_XDECREF(path);
+    return NULL;
+  }
+
+  // "N" hands both references to the dict
   PyObject *item = Py_BuildValue(
-      "{s:s, s:s, s:K, s:L, s:I, s:z}", "path", entry->path ? entry->path : "",
-      "type", entry_type_name(entry->type), "size",
-      (unsigned long long)entry->size, "mtime", (long long)entry->mtime, "mode",
-      (unsigned int)entry->mode, "link_target",
-      entry->type == ENTRY_SYMLINK ? entry->symlink_target : NULL);
+      "{s:N, s:s, s:K, s:L, s:I, s:N}", "path", path, "type",
+      entry_type_name(entry->type), "size", (unsigned long long)entry->size,
+      "mtime", (long long)entry->mtime, "mode", (unsigned int)entry->mode,
+      "link_target", target);
 
   if (!item || !entry->has_compression_detail)
     return item;
@@ -1383,7 +1403,8 @@ static PyObject *entry_to_dict(const ArchiveEntry *entry) {
 }
 
 // Collect one dict per entry from an already-open reader into a new Python list
-static PyObject *read_archive_entries(const CArchive *archive, void *reader) {
+static PyObject *read_archive_entries(const CArchive *archive, void *reader,
+                                      CoreContext *ctx) {
   PyObject *list = PyList_New(0);
   if (!list)
     return NULL;
@@ -1391,7 +1412,7 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader) {
   ArchiveEntry entry = {0};
   int ret;
 
-  while ((ret = archive->get_next_entry(reader, &entry)) == 1) {
+  while ((ret = archive->get_next_entry(reader, &entry, ctx)) == 1) {
     PyObject *item = entry_to_dict(&entry);
     entry_reset(&entry);
 
@@ -1416,7 +1437,7 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader) {
   return list;
 }
 
-PyObject *list_archive_contents(const char *archive_path) {
+PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
   if (check_source_readable(archive_path) != 0)
     return NULL;
 
@@ -1438,7 +1459,7 @@ PyObject *list_archive_contents(const char *archive_path) {
     tmp_path = make_temp_path(archive_path);
     if (!tmp_path)
       return NULL;
-    if (codec->decompress_file(archive_path, tmp_path, NULL) != 0) {
+    if (codec->decompress_file(archive_path, tmp_path, ctx) != 0) {
       fs_unlink(tmp_path);
       free(tmp_path);
       return NULL;
@@ -1455,7 +1476,7 @@ PyObject *list_archive_contents(const char *archive_path) {
     return NULL;
   }
 
-  PyObject *list = read_archive_entries(archive, reader);
+  PyObject *list = read_archive_entries(archive, reader, ctx);
   archive->close_reader(reader);
 
   if (tmp_path) {

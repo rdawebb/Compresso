@@ -66,7 +66,8 @@ typedef struct CArchive {
   // Reading (Extracting Archives)
   void *(*create_reader)(const char *input_path);
   int (*get_entry_count)(void *reader);
-  int (*get_next_entry)(void *reader, ArchiveEntry *entry);
+  // `ctx` (NULL-tolerant) only receives warnings about a still-usable entry
+  int (*get_next_entry)(void *reader, ArchiveEntry *entry, CoreContext *ctx);
 
   // Writes the current entry's data to `output`, refusing to write more than
   // `max_bytes` (UINT64_MAX for no limit) and reporting the byte count through
@@ -197,6 +198,8 @@ int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files,
                     const ExtractionPolicy *policy, CoreContext *ctx);
 
-PyObject *list_archive_contents(const char *archive_path);
+// `ctx` (NULL-tolerant) carries signal checks and warnings; there is no
+// progress to report
+PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx);
 
 #endif // ARCHIVE_H
