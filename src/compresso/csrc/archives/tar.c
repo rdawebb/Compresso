@@ -181,9 +181,7 @@ static int tar_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
 
   TarWriter *writer = (TarWriter *)writer_ptr;
 
-  // Marked fatal, so freeing it doesn't write the end-of-archive blocks
   if (discard) {
-    archive_write_fail(writer->archive);
     archive_write_free(writer->archive);
     free(writer);
     return 0;
