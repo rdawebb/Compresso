@@ -770,6 +770,91 @@ class TestTarHeaderWarnings:
         assert len(caplog.records) == 1
 
 
+def _tar_with_hardlink(path: Path, target: str, *, link: str = "d/b") -> None:
+    """Write a tar of file d/a then a hardlink entry `link` naming `target`.
+
+    Args:
+        path: Where to write the tar.
+        target: The archive path the hardlink names.
+        link: The hardlink entry's own name.
+    """
+    with tarfile.open(path, "w", format=tarfile.GNU_FORMAT) as tf:
+        info = tarfile.TarInfo("d/a")
+        info.size = 1
+        tf.addfile(info, io.BytesIO(b"x"))
+        hardlink = tarfile.TarInfo(link)
+        hardlink.type = tarfile.LNKTYPE
+        hardlink.linkname = target
+        tf.addfile(hardlink)
+
+
+class TestHardlinkExtraction:
+    """Test that a hardlink's target is held to the rules of an entry's path."""
+
+    @pytest.mark.parametrize("target", ["../outside", "/etc/passwd"])
+    def test_target_outside_the_root_is_refused(
+        self, temp_dir: Path, target: str
+    ) -> None:
+        """Test that the whole archive is refused before anything is written."""
+        archive = temp_dir / "evil.tar"
+        _tar_with_hardlink(archive, target)
+        out = temp_dir / "out"
+
+        with pytest.raises(ExtractionPolicyError):
+            _core.extract_archive(str(archive), str(out), [])
+
+        assert not (out / "d").exists()
+
+    def test_unselected_target_is_reported(self, temp_dir: Path) -> None:
+        """Test that a link whose target wasn't extracted names the missing file."""
+        archive = temp_dir / "links.tar"
+        _tar_with_hardlink(archive, "d/a")
+
+        with pytest.raises(FileNotFoundError):
+            _core.extract_archive(str(archive), str(temp_dir / "out"), ["d/b"])
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privilege")
+    def test_target_replaced_by_a_symlink_is_refused(self, temp_dir: Path) -> None:
+        """Test that a link is never made to whatever a planted symlink points at."""
+        archive = temp_dir / "links.tar"
+        _tar_with_hardlink(archive, "d/s")
+        out = temp_dir / "out"
+        (out / "d").mkdir(parents=True)
+        (temp_dir / "secret").write_text("secret")
+        (out / "d" / "s").symlink_to(temp_dir / "secret")
+
+        with pytest.raises(ExtractionPolicyError, match="not a regular file"):
+            _core.extract_archive(str(archive), str(out), [], overwrite=2)
+
+    def test_existing_link_path_follows_the_overwrite_mode(
+        self, temp_dir: Path
+    ) -> None:
+        """Test ERROR, SKIP, OVERWRITE and RENAME against an existing d/b."""
+        archive = temp_dir / "links.tar"
+        _tar_with_hardlink(archive, "d/a")
+
+        def extract(mode: int) -> Path:
+            out = temp_dir / f"out{mode}"
+            (out / "d").mkdir(parents=True)
+            (out / "d" / "b").write_text("existing")
+            _core.extract_archive(str(archive), str(out), [], overwrite=mode)
+            return out / "d"
+
+        with pytest.raises(FileExistsError):
+            extract(0)
+
+        skipped = extract(1)
+        assert (skipped / "b").read_text() == "existing"
+
+        replaced = extract(2)
+        assert os.path.samefile(replaced / "a", replaced / "b")
+
+        renamed = extract(3)
+        assert (renamed / "b").read_text() == "existing"
+        [extra] = [p for p in renamed.iterdir() if p.name not in ("a", "b")]
+        assert os.path.samefile(renamed / "a", extra)
+
+
 class TestLevelValidation:
     """Test that each backend, format and container checks its own level range."""
 

@@ -40,7 +40,7 @@ static ArchiveEntry *entry_alloc(void) {
   e->size = 0;
   e->mtime = 0;
   e->mode = 0;
-  e->symlink_target = NULL;
+  e->link_target = NULL;
   e->internal_data = NULL;
   return e;
 }
@@ -49,14 +49,14 @@ static void entry_free(ArchiveEntry *e) {
   if (!e)
     return;
   free(e->path);
-  free(e->symlink_target);
+  free(e->link_target);
   free(e);
 }
 
 // Release an entry's owned strings and clear it for the next iteration
 static void entry_reset(ArchiveEntry *e) {
   free(e->path);
-  free(e->symlink_target);
+  free(e->link_target);
   memset(e, 0, sizeof(*e));
 }
 
@@ -207,7 +207,7 @@ static ArchiveEntry *create_entry_from_path(const char *path, size_t prefix_len,
     entry->type = ENTRY_SYMLINK;
     char target[FS_PATH_MAX];
     if (fs_readlink(path, target, sizeof(target)) == 0) {
-      entry->symlink_target = strdup(target);
+      entry->link_target = strdup(target);
     }
   } else if (st.type == FS_TYPE_FILE) {
     entry->type = ENTRY_FILE;
@@ -449,6 +449,25 @@ static int validate_entry_path(const char *output_dir,
   }
 
   return 0;
+}
+
+// A hardlink's target names another entry, so it gets the same checks as an
+// entry's own path; anything else has no target to check
+static int validate_link_target(const char *output_dir,
+                                const char *resolved_root,
+                                const ArchiveEntry *entry, const char *target,
+                                const ExtractionPolicy *policy) {
+  if (entry->type != ENTRY_HARDLINK)
+    return 0;
+
+  if (!target || !*target) {
+    PyErr_Format(comp_ExtractionPolicyError, "Hardlink has no target: %s",
+                 entry->path);
+    return -1;
+  }
+
+  return validate_entry_path(output_dir, resolved_root, target,
+                             path_depth(target), policy);
 }
 
 static int check_entry_policy(const ArchiveEntry *entry,
@@ -791,14 +810,17 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
 
     if (validate_entry_path(output_dir, resolved_root, entry.path,
                             path_depth(entry.path), policy) != 0 ||
+        validate_link_target(output_dir, resolved_root, &entry,
+                             entry.link_target, policy) != 0 ||
         check_entry_policy(&entry, policy) != 0) {
       entry_reset(&entry);
       return -1;
     }
 
+    // A hardlink adds no data, but claims its path like a file
     if (entry_is_selected(&entry, files, num_files) &&
-        entry.type == ENTRY_FILE) {
-      declared_total += entry.size;
+        (entry.type == ENTRY_FILE || entry.type == ENTRY_HARDLINK)) {
+      declared_total += entry.type == ENTRY_FILE ? entry.size : 0;
       if (policy->max_total_size > 0 &&
           declared_total > policy->max_total_size) {
         PyErr_Format(comp_ExtractionPolicyError,
@@ -884,6 +906,28 @@ static int push_rename(PathRename **renames, size_t *num_renames,
 
   (*num_renames)++;
   return 0;
+}
+
+// Rewrites `path` through the longest renamed directory prefix it falls under,
+// so a doubly-renamed ancestor composes in one step; returns `path` itself,
+// `buf` holding the rewrite, or NULL with an exception set
+static const char *redirect_path(const char *path, const PathRename *renames,
+                                 size_t num_renames, char *buf, size_t size) {
+  const char *effective = path;
+  size_t best_len = 0;
+  for (size_t i = 0; i < num_renames; i++) {
+    if (renames[i].old_len > best_len &&
+        strncmp(path, renames[i].old_prefix, renames[i].old_len) == 0) {
+      if (fs_join(buf, size, renames[i].new_prefix,
+                  path + renames[i].old_len) != 0) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+        return NULL;
+      }
+      effective = buf;
+      best_len = renames[i].old_len;
+    }
+  }
+  return effective;
 }
 
 // Probes names until an exclusive mkdir succeeds, then records the rename so
@@ -979,6 +1023,95 @@ static int rename_conflicting_dir(const char *output_dir, const char *out_path,
   return -1;
 }
 
+// Links `out_path` to the already-extracted `target`, applying the overwrite
+// mode as for a file; returns 0, or -1 with an exception set
+static int extract_hardlink(const char *resolved_root, const char *output_dir,
+                            const char *out_path, const char *target,
+                            const char *entry_path, int overwrite_existing) {
+  char target_path[FS_PATH_MAX];
+  if (fs_join(target_path, sizeof(target_path), output_dir, target) != 0) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, target);
+    return -1;
+  }
+
+  // lstat, so something planted in the target's place is refused, not followed
+  fs_stat st;
+  if (fs_stat_path(target_path, &st) != 0) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, target_path);
+    return -1;
+  }
+  if (st.type != FS_TYPE_FILE) {
+    PyErr_Format(comp_ExtractionPolicyError,
+                 "Hardlink %s names %s, which is not a regular file",
+                 entry_path, target);
+    return -1;
+  }
+
+  // Catches a symlinked directory
+  char *target_sep = fs_last_sep(target_path);
+  if (target_sep) {
+    char saved = *target_sep;
+    *target_sep = '\0';
+    int contained = dir_is_contained(resolved_root, target_path);
+    *target_sep = saved;
+    if (contained != 1) {
+      PyErr_Format(comp_ExtractionPolicyError,
+                   "Path traversal detected in hardlink target: %s", target);
+      return -1;
+    }
+  }
+
+  char link_parent[FS_PATH_MAX];
+  memcpy(link_parent, out_path, strlen(out_path) + 1);
+  char *link_sep = fs_last_sep(link_parent);
+  if (link_sep) {
+    *link_sep = '\0';
+    if (prepare_output_dir(resolved_root, link_parent, DIR_CREATE_MODE,
+                           entry_path) != 0)
+      return -1;
+  }
+
+  if (fs_link(target_path, out_path) == 0)
+    return 0;
+  if (errno != EEXIST) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+    return -1;
+  }
+
+  switch (overwrite_existing) {
+  case 1: // SKIP
+    return 0;
+  case 2: // OVERWRITE
+    if (fs_unlink(out_path) != 0 || fs_link(target_path, out_path) != 0) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+      return -1;
+    }
+    return 0;
+  case 3: { // RENAME: each attempt is its own atomic link, as for a file
+    char candidate[FS_PATH_MAX];
+    for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
+      if (fs_conflict_path(out_path, n, candidate, sizeof(candidate)) != 0) {
+        PyErr_Format(PyExc_ValueError,
+                     "Archive entry path too long to rename: %s", entry_path);
+        return -1;
+      }
+      if (fs_link(target_path, candidate) == 0)
+        return 0;
+      if (errno != EEXIST) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, candidate);
+        return -1;
+      }
+    }
+    PyErr_Format(PyExc_OSError, "Too many conflicting names for entry: %s",
+                 entry_path);
+    return -1;
+  }
+  default: // ERROR
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+    return -1;
+  }
+}
+
 // Read and write each entry from an already-open reader
 static int extract_entries(const CArchive *archive, void *reader,
                            const char *output_dir, const char *resolved_root,
@@ -1009,29 +1142,28 @@ static int extract_entries(const CArchive *archive, void *reader,
       continue;
     }
 
-    // Redirect through any directory renamed earlier in this pass; longest
-    // match wins so a doubly-renamed ancestor composes in one step
-    char rewritten[FS_PATH_MAX];
-    const char *effective_path = entry.path;
-    size_t best_len = 0;
-    for (size_t i = 0; i < num_renames; i++) {
-      if (renames[i].old_len > best_len &&
-          strncmp(entry.path, renames[i].old_prefix, renames[i].old_len) == 0) {
-        if (fs_join(rewritten, sizeof(rewritten), renames[i].new_prefix,
-                    entry.path + renames[i].old_len) != 0) {
-          PyErr_SetFromErrnoWithFilename(PyExc_OSError, entry.path);
-          entry_reset(&entry);
-          result = -1;
-          goto cleanup;
-        }
-        effective_path = rewritten;
-        best_len = renames[i].old_len;
-      }
+    // Redirect through any directory renamed earlier in this pass; a hardlink's
+    // target names an entry, so it follows the same renames
+    char rewritten[FS_PATH_MAX], target_rewritten[FS_PATH_MAX];
+    const char *effective_path = redirect_path(entry.path, renames, num_renames,
+                                               rewritten, sizeof(rewritten));
+    const char *effective_target =
+        entry.type == ENTRY_HARDLINK && entry.link_target
+            ? redirect_path(entry.link_target, renames, num_renames,
+                            target_rewritten, sizeof(target_rewritten))
+            : entry.link_target;
+    if (!effective_path || (entry.type == ENTRY_HARDLINK && entry.link_target &&
+                            !effective_target)) {
+      entry_reset(&entry);
+      result = -1;
+      goto cleanup;
     }
 
     // Re-checked rather than trusted from the first pass
     if (validate_entry_path(output_dir, resolved_root, effective_path,
                             path_depth(effective_path), policy) != 0 ||
+        validate_link_target(output_dir, resolved_root, &entry,
+                             effective_target, policy) != 0 ||
         check_entry_policy(&entry, policy) != 0) {
       entry_reset(&entry);
       result = -1;
@@ -1229,6 +1361,16 @@ static int extract_entries(const CArchive *archive, void *reader,
         fs_chmod(out_path, entry.mode);
       if (policy->preserve_timestamps && entry.mtime > 0)
         fs_set_mtime(out_path, (int64_t)entry.mtime);
+    } else if (entry.type == ENTRY_HARDLINK) {
+      // Shares the target's inode, and so its metadata too
+      if (extract_hardlink(resolved_root, output_dir, out_path,
+                           effective_target, entry.path,
+                           policy->overwrite_existing) != 0) {
+        entry_reset(&entry);
+        result = -1;
+        goto cleanup;
+      }
+      archive->skip_entry_data(reader);
     }
 
     entry_reset(&entry);
@@ -1341,6 +1483,8 @@ static const char *entry_type_name(EntryType type) {
     return "symlink";
   case ENTRY_SPECIAL:
     return "special";
+  case ENTRY_HARDLINK:
+    return "hardlink";
   case ENTRY_FILE:
   default:
     return "file";
@@ -1362,10 +1506,9 @@ static PyObject *decode_entry_name(const char *name) {
 
 static PyObject *entry_to_dict(const ArchiveEntry *entry) {
   PyObject *path = decode_entry_name(entry->path ? entry->path : "");
-  PyObject *target = path ? decode_entry_name(entry->type == ENTRY_SYMLINK
-                                                  ? entry->symlink_target
-                                                  : NULL)
-                          : NULL;
+  int is_link = entry->type == ENTRY_SYMLINK || entry->type == ENTRY_HARDLINK;
+  PyObject *target =
+      path ? decode_entry_name(is_link ? entry->link_target : NULL) : NULL;
   if (!target) {
     Py_XDECREF(path);
     return NULL;

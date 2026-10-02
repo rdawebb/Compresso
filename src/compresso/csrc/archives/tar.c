@@ -104,12 +104,20 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
     break;
   case ENTRY_SYMLINK:
     archive_entry_set_filetype(ae, AE_IFLNK);
-    if (entry->symlink_target) {
-      archive_entry_set_symlink(ae, entry->symlink_target);
+    if (entry->link_target) {
+      archive_entry_set_symlink(ae, entry->link_target);
     }
     break;
   case ENTRY_SPECIAL:
     archive_entry_set_filetype(ae, AE_IFCHR);
+    break;
+  case ENTRY_HARDLINK:
+    // A link entry carries no data of its own
+    archive_entry_set_filetype(ae, AE_IFREG);
+    archive_entry_set_size(ae, 0);
+    if (entry->link_target) {
+      archive_entry_set_hardlink(ae, entry->link_target);
+    }
     break;
   }
 
@@ -271,10 +279,21 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
   entry->mtime = archive_entry_mtime(reader->current_entry);
   entry->mode = archive_entry_perm(reader->current_entry);
 
-  // Determine entry type
+  // Determine entry type; a hardlink's own filetype varies by tar format, so
+  // identified by its target
+  const char *hardlink = archive_entry_hardlink(reader->current_entry);
   unsigned int filetype =
       (unsigned int)archive_entry_filetype(reader->current_entry);
-  if (filetype == AE_IFREG) {
+  if (hardlink) {
+    entry->type = ENTRY_HARDLINK;
+    entry->link_target = strdup(hardlink);
+    if (!entry->link_target) {
+      free(entry->path);
+      entry->path = NULL;
+      PyErr_NoMemory();
+      return -1;
+    }
+  } else if (filetype == AE_IFREG) {
     entry->type = ENTRY_FILE;
   } else if (filetype == AE_IFDIR) {
     entry->type = ENTRY_DIR;
@@ -282,8 +301,8 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
     entry->type = ENTRY_SYMLINK;
     const char *link = archive_entry_symlink(reader->current_entry);
     if (link) {
-      entry->symlink_target = strdup(link);
-      if (!entry->symlink_target) {
+      entry->link_target = strdup(link);
+      if (!entry->link_target) {
         free(entry->path);
         entry->path = NULL;
         PyErr_NoMemory();

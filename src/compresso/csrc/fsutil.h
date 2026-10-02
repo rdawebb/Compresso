@@ -123,6 +123,11 @@ int fs_chmod(const char *path, uint32_t mode);
 
 int fs_unlink(const char *path);
 
+// Hardlink `new_path` to `existing`, which is never followed if it is a
+// symlink; -1 with errno set (EEXIST if `new_path` exists, EXDEV across
+// filesystems)
+int fs_link(const char *existing, const char *new_path);
+
 // Current read/write offset in an open stream, as a 64-bit value on every
 // platform (plain ftell() is 32-bit on Windows); returns -1 on failure
 int64_t fs_ftell(FILE *stream);

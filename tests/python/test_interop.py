@@ -4,13 +4,14 @@ The fixtures come from scripts/interop_fixtures.sh.
 """
 
 import logging
+import os
 import stat
 import sys
 from pathlib import Path
 
 import pytest
 
-from compresso import CorruptDataError, TrailingDataWarning, _core
+from compresso import CorruptDataError, TrailingDataWarning, _core, plan_extraction
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 INTEROP = FIXTURES / "interop"
@@ -197,13 +198,30 @@ class TestStandaloneDecoding:
 class TestTarExtraction:
     """Test extracting tars made by GNU tar."""
 
-    @pytest.mark.xfail(reason="hardlinks are refused as special files")
-    def test_hardlink_gets_its_target_contents(self, temp_dir: Path) -> None:
-        """Test that a hardlink entry extracts with the contents of its target."""
+    def test_hardlink_is_listed_with_its_target(self) -> None:
+        """Test that GNU tar's link entry is reported as a hardlink, not special."""
+        entries = _core.list_archive_contents(str(INTEROP / "tar_hardlink.tar"))
+
+        link = next(e for e in entries if e["path"] == "hardlink/b.txt")
+        assert link["type"] == "hardlink"
+        assert link["link_target"] == "hardlink/a.txt"
+
+    def test_hardlink_is_planned_as_a_hardlink(self, temp_dir: Path) -> None:
+        """Test that the frontend's entries mark the link and keep its target."""
+        plan = plan_extraction(INTEROP / "tar_hardlink.tar", temp_dir)
+
+        links = [e for e in plan.entries if e.is_hardlink]
+        assert [(e.path, e.link_target) for e in links] == [
+            ("hardlink/b.txt", "hardlink/a.txt")
+        ]
+
+    def test_hardlink_extracts_as_a_link(self, temp_dir: Path) -> None:
+        """Test that a hardlink entry becomes a second name for its target."""
         _core.extract_archive(str(INTEROP / "tar_hardlink.tar"), str(temp_dir), [])
 
-        assert (temp_dir / "hardlink" / "a.txt").read_bytes() == PART1
-        assert (temp_dir / "hardlink" / "b.txt").read_bytes() == PART1
+        a, b = temp_dir / "hardlink" / "a.txt", temp_dir / "hardlink" / "b.txt"
+        assert b.read_bytes() == PART1
+        assert os.path.samefile(a, b)
 
     def test_read_only_directory_is_filled_before_its_mode_is_set(
         self, temp_dir: Path

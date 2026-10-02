@@ -201,14 +201,14 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
 
   if (entry->type == ENTRY_SYMLINK) {
     // Store as a regular file containing the symlink target
-    if (!entry->symlink_target) {
-      PyErr_SetString(PyExc_ValueError, "Symlink requires symlink_target");
+    if (!entry->link_target) {
+      PyErr_SetString(PyExc_ValueError, "Symlink requires a target");
       return -1;
     }
 
-    size_t target_len = strlen(entry->symlink_target);
+    size_t target_len = strlen(entry->link_target);
     zip_source_t *source = zip_source_buffer(
-        writer->archive, strdup(entry->symlink_target), target_len, 1);
+        writer->archive, strdup(entry->link_target), target_len, 1);
     if (!source) {
       set_zip_error(zip_get_error(writer->archive),
                     "Failed to create symlink source", writer->output_path, 0,
@@ -363,7 +363,7 @@ static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
 
   // Set entry metadata
   entry->path = NULL;
-  entry->symlink_target = NULL;
+  entry->link_target = NULL;
 
   if (st.valid & ZIP_STAT_NAME) {
     entry->path = strdup(st.name);

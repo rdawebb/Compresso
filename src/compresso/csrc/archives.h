@@ -16,19 +16,21 @@ typedef enum {
   ENTRY_FILE = 0,
   ENTRY_DIR = 1,
   ENTRY_SYMLINK = 2,
-  ENTRY_SPECIAL = 3
+  ENTRY_SPECIAL = 3,
+  ENTRY_HARDLINK = 4 // Shares the data of an earlier entry; no data of its own
 } EntryType;
 
 // ---- Archive Entry Metadata ----
 
 typedef struct {
-  char *path;           // Relative path within the archive
-  EntryType type;       // Type of the entry (file, dir, symlink)
-  uint64_t size;        // Uncompressed size (0 for directories)
-  time_t mtime;         // Modified time
-  uint32_t mode;        // Unix permissions
-  char *symlink_target; // Target of the symlink (if applicable)
-  void *internal_data;  // Backend-specific data
+  char *path;          // Relative path within the archive
+  EntryType type;      // Type of the entry (file, dir, symlink)
+  uint64_t size;       // Uncompressed size (0 for directories)
+  time_t mtime;        // Modified time
+  uint32_t mode;       // Unix permissions
+  char *link_target;   // A symlink's target, or for a hardlink the archive
+                       // path of the entry it shares data with
+  void *internal_data; // Backend-specific data
 
   // Per-entry compression detail, which only a container that compresses each
   // entry separately has; zero means "not recorded"

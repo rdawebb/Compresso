@@ -601,6 +601,37 @@ int fs_unlink(const char *path) {
   return _wremove(wpath);
 }
 
+int fs_link(const char *existing, const char *new_path) {
+  wchar_t wexisting[FS_PATH_MAX], wnew[FS_PATH_MAX];
+  if (fs_widen(existing, wexisting, FS_PATH_MAX) != 0 ||
+      fs_widen(new_path, wnew, FS_PATH_MAX) != 0)
+    return -1;
+
+  if (CreateHardLinkW(wnew, wexisting, NULL))
+    return 0;
+
+  switch (GetLastError()) {
+  case ERROR_ALREADY_EXISTS:
+  case ERROR_FILE_EXISTS:
+    errno = EEXIST;
+    break;
+  case ERROR_FILE_NOT_FOUND:
+  case ERROR_PATH_NOT_FOUND:
+    errno = ENOENT;
+    break;
+  case ERROR_NOT_SAME_DEVICE:
+    errno = EXDEV;
+    break;
+  case ERROR_ACCESS_DENIED:
+    errno = EACCES;
+    break;
+  default: // e.g. a FAT volume, which has no hardlinks
+    errno = EPERM;
+    break;
+  }
+  return -1;
+}
+
 #else
 
 // ---- POSIX implementation ----
@@ -740,5 +771,10 @@ int fs_chmod(const char *path, uint32_t mode) {
 }
 
 int fs_unlink(const char *path) { return unlink(path); }
+
+// linkat without AT_SYMLINK_FOLLOW, since link(2) follows a symlink on macOS
+int fs_link(const char *existing, const char *new_path) {
+  return linkat(AT_FDCWD, existing, AT_FDCWD, new_path, 0);
+}
 
 #endif

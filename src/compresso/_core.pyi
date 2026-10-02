@@ -175,7 +175,7 @@ def detect_format(file_path: str) -> str:
 def format_is_archive(format: str) -> bool:
     """Return whether a format's container can hold more than one entry."""
 
-EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "special"]
+EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "hardlink", "special"]
 
 class ArchiveEntryDict(TypedDict):
     """One archive entry, as `list_archive_contents` reports it.
@@ -192,7 +192,8 @@ class ArchiveEntryDict(TypedDict):
     size: int
     mtime: int
     mode: int
-    # The stored target of a symlink, and None for every other type
+    # A symlink's stored target, or the archive path a hardlink shares data
+    # with; None for every other type
     link_target: str | None
     compressed_size: NotRequired[int]
     crc: NotRequired[int]

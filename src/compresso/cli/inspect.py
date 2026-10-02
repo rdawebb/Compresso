@@ -42,10 +42,14 @@ def _entry_detail_line(entry: ArchiveEntry) -> str:
 
     mode = stat.filemode(type_bit | entry.mode)
     mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry.mtime))
-    size = (
-        "" if entry.is_dir or entry.is_symlink else format_size(size_bytes=entry.size)
-    )
-    target = f" -> {entry.link_target}" if entry.is_symlink else ""
+    has_no_data = entry.is_dir or entry.is_symlink or entry.is_hardlink
+    size = "" if has_no_data else format_size(size_bytes=entry.size)
+    if entry.is_symlink:
+        target = f" -> {entry.link_target}"
+    elif entry.is_hardlink:
+        target = f" link to {entry.link_target}"
+    else:
+        target = ""
 
     detail = ""
     if entry.compressed_size is not None:
@@ -92,6 +96,7 @@ def _inspect_archive(file: Path, output_json: bool, show_entries: bool) -> None:
                     "size": entry.size,
                     "is_dir": entry.is_dir,
                     "is_symlink": entry.is_symlink,
+                    "is_hardlink": entry.is_hardlink,
                     "mtime": entry.mtime,
                     "mode": entry.mode,
                     "link_target": entry.link_target,
