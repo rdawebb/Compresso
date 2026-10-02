@@ -62,8 +62,10 @@ typedef struct CArchive {
   int (*add_entry)(void *writer, const ArchiveEntry *entry, FILE *data,
                    const char *source_path, CoreContext *ctx);
 
-  // Some backends defer the real work to here, so this takes a context too
-  int (*close_writer)(void *writer, CoreContext *ctx);
+  // Some backends defer the real work to here, so this takes a context too;
+  // `discard` abandons a failed archive without finishing it, and raises
+  // nothing, so the failure that caused it stays the one reported
+  int (*close_writer)(void *writer, CoreContext *ctx, int discard);
 
   // Reading (Extracting Archives)
   void *(*create_reader)(const char *input_path);

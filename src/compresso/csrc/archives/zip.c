@@ -260,8 +260,15 @@ static int zip_on_cancel(zip_t *za, void *userdata) {
 
 #endif
 
-static int zip_close_writer(void *writer_ptr, CoreContext *ctx) {
+static int zip_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
   ZipWriter *writer = (ZipWriter *)writer_ptr;
+
+  // Prevents redundant compression when the archive is discarded
+  if (discard) {
+    zip_discard(writer->archive);
+    free(writer);
+    return 0;
+  }
 
   writer->ctx = ctx;
 

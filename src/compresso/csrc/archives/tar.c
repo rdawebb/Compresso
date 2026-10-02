@@ -174,12 +174,20 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   return 0;
 }
 
-static int tar_close_writer(void *writer_ptr, CoreContext *ctx) {
+static int tar_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
   // libarchive streams as it goes, so everything has already been written and
   // reported by the time this runs
   (void)ctx;
 
   TarWriter *writer = (TarWriter *)writer_ptr;
+
+  // Marked fatal, so freeing it doesn't write the end-of-archive blocks
+  if (discard) {
+    archive_write_fail(writer->archive);
+    archive_write_free(writer->archive);
+    free(writer);
+    return 0;
+  }
 
   int r = archive_write_close(writer->archive);
   if (r != ARCHIVE_OK) {

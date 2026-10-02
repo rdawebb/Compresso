@@ -494,6 +494,22 @@ class TestArchiveErrorTypes:
 
         assert not output.exists()
 
+    @pytest.mark.parametrize("fmt", ["tar", "zip", "tar.gz"])
+    def test_failed_walk_reports_its_own_error(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str
+    ) -> None:
+        """Test that abandoning the half-built archive doesn't replace the error."""
+        missing = temp_dir / "missing"
+        output = temp_dir / f"out.{fmt}"
+
+        with pytest.raises(FileNotFoundError) as info:
+            _core.create_archive(
+                str(output), fmt, [str(sample_text_file), str(missing)]
+            )
+
+        assert info.value.filename == str(missing)
+        assert sorted(p.name for p in temp_dir.iterdir()) == [sample_text_file.name]
+
     @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_unwritable_destination_is_an_os_error(
         self, sample_text_file: Path, temp_dir: Path, fmt: str

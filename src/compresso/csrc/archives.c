@@ -746,8 +746,8 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
       add_paths_to_writer(archive, writer, input_paths, num_paths, &own, ctx);
 
   // libzip does all its compression inside zip_close, so that is where its
-  // progress comes from; a run that already failed has nothing left to report
-  int close_ret = archive->close_writer(writer, ret == 0 ? ctx : NULL);
+  // progress comes from; a run that already failed is discarded instead
+  int close_ret = archive->close_writer(writer, ctx, ret != 0);
   if (ret == 0 && close_ret != 0)
     ret = close_ret;
 
