@@ -1,10 +1,12 @@
 #define PY_SSIZE_T_CLEAN
 #include "codec.h"
 #include <lz4frame.h>
+#include <stdio.h>
 #include <string.h>
 
-// LZ4F_compressUpdate consumes a whole chunk in one call, so the output buffer
-// has to hold that chunk's worst case rather than a chunk's worth
+// LZ4F_compressUpdate needs room for every block a call completes: with the
+// default 64 KB blocks, at most one per 64 KB of input, each with a 4-byte
+// header, which this covers
 #define LZ4_OUT_CHUNK (CODEC_CHUNK + CODEC_CHUNK / 255 + 16)
 
 typedef struct {
@@ -12,9 +14,13 @@ typedef struct {
   LZ4F_decompressionContext_t dctx;
   LZ4F_preferences_t prefs;
   int header_written;
+  size_t code; // The failing call's result; 0 when begin() failed
+  char message[128];
 } LZ4State;
 
-static int lz4_begin(void *state, const CodecParams *params, int decompress) {
+static int lz4_begin(void *state, const CodecParams *params, int decompress,
+                     CoreContext *ctx) {
+  (void)ctx;
   LZ4State *s = (LZ4State *)state;
 
   if (decompress) {
@@ -48,6 +54,7 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
     size_t r = LZ4F_decompress(s->dctx, buf->next_out, &produced, buf->next_in,
                                &consumed, NULL);
     if (LZ4F_isError(r)) {
+      s->code = r;
       return CODEC_ERR;
     }
 
@@ -56,8 +63,8 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
     buf->next_out += produced;
     buf->avail_out -= produced;
 
-    // Anything past the first frame is ignored
-    return r == 0 ? CODEC_DONE : CODEC_MORE;
+    // A skippable frame decodes to nothing and ends like any other
+    return r == 0 ? CODEC_STREAM_END : CODEC_MORE;
   }
 
   // The header goes out on its own, leaving a full buffer for the chunk that
@@ -66,6 +73,7 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
     size_t n =
         LZ4F_compressBegin(s->cctx, buf->next_out, buf->avail_out, &s->prefs);
     if (LZ4F_isError(n)) {
+      s->code = n;
       return CODEC_ERR;
     }
 
@@ -79,6 +87,7 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
     size_t n = LZ4F_compressUpdate(s->cctx, buf->next_out, buf->avail_out,
                                    buf->next_in, buf->avail_in, NULL);
     if (LZ4F_isError(n)) {
+      s->code = n;
       return CODEC_ERR;
     }
 
@@ -92,6 +101,7 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
   if (finish) {
     size_t n = LZ4F_compressEnd(s->cctx, buf->next_out, buf->avail_out, NULL);
     if (LZ4F_isError(n)) {
+      s->code = n;
       return CODEC_ERR;
     }
 
@@ -101,6 +111,12 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
   }
 
   return CODEC_MORE;
+}
+
+static int lz4_reset(void *state) {
+  LZ4State *s = (LZ4State *)state;
+  LZ4F_resetDecompressionContext(s->dctx);
+  return 0;
 }
 
 static void lz4_end(void *state) {
@@ -113,13 +129,33 @@ static void lz4_end(void *state) {
   }
 }
 
+static const char *lz4_describe(void *state, const char *label, int decompress,
+                                int *corrupt) {
+  LZ4State *s = (LZ4State *)state;
+  const char *op = decompress ? "decompression" : "compression";
+
+  if (!s->code) {
+    *corrupt = 0;
+    snprintf(s->message, sizeof(s->message), "%s %s failed", label, op);
+    return s->message;
+  }
+
+  // Error codes are only public under LZ4F_STATIC_LINKING_ONLY
+  const char *name = LZ4F_getErrorName(s->code);
+  *corrupt = decompress && strcmp(name, "ERROR_allocation_failed") != 0;
+  snprintf(s->message, sizeof(s->message), "%s %s failed: %s", label, op, name);
+  return s->message;
+}
+
 static const CodecOps lz4_ops = {
     .name = "lz4",
     .state_size = sizeof(LZ4State),
     .out_chunk = LZ4_OUT_CHUNK,
     .begin = lz4_begin,
     .process = lz4_process,
+    .reset = lz4_reset,
     .end = lz4_end,
+    .describe = lz4_describe,
 };
 
 const CodecOps *codec_lz4_ops(void) { return &lz4_ops; }

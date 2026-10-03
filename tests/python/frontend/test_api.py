@@ -84,6 +84,7 @@ class TestPlanCompressionLevels:
             # No algo: the backend the strategy picks is the one checked
             (CompressionOptions(strategy="fast", level=13), "lz4 compression level"),
             (CompressionOptions(format="gz", level=10), "gzip compression level 10"),
+            (CompressionOptions(strategy="fsat"), "Unknown strategy: fsat"),
         ],
     )
     def test_out_of_range_level_is_unrunnable(

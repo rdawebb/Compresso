@@ -9,6 +9,9 @@ typedef struct {
   lzma_stream strm;
   lzma_ret code;
   int started; // strm holds an encoder or decoder, so end() must release it
+  int decompress;
+  CoreContext *ctx;
+  const char *label;
   char message[128];
 } LzmaState;
 
@@ -23,16 +26,24 @@ static uint32_t codec_lzma_preset(int level, int extreme) {
 }
 
 static int codec_lzma_begin(void *state, const CodecParams *params,
-                            int decompress) {
+                            int decompress, CoreContext *ctx) {
   LzmaState *s = (LzmaState *)state;
+  s->decompress = decompress;
+  s->ctx = ctx;
+  s->label = params->label ? params->label : "lzma";
+
+  // liblzma decodes every stream itself, and skips the Stream Padding the .xz
+  // format allows between and after them, so it only ends once input does
+  uint32_t flags = params->concatenated ? LZMA_CONCATENATED : 0;
+  flags |= LZMA_TELL_UNSUPPORTED_CHECK;
 
   // The driver zeroes the state, which is what LZMA_STREAM_INIT amounts to
   s->code =
       decompress
-          ? lzma_stream_decoder(&s->strm, LZMA_DECOMPRESS_MEMLIMIT, 0)
-          : lzma_easy_encoder(
-                &s->strm, codec_lzma_preset(params->level, params->extreme),
-                LZMA_CHECK_CRC64);
+          ? lzma_stream_decoder(&s->strm, LZMA_DECOMPRESS_MEMLIMIT, flags)
+          : lzma_easy_encoder(&s->strm,
+                              codec_lzma_preset(params->level, params->extreme),
+                              LZMA_CHECK_CRC64);
 
   if (s->code != LZMA_OK) {
     return -1;
@@ -59,7 +70,16 @@ static int codec_lzma_process(void *state, CodecBuf *buf, int finish) {
   buf->avail_out = s->strm.avail_out;
 
   if (r == LZMA_STREAM_END) {
-    return CODEC_DONE;
+    return s->decompress ? CODEC_STREAM_END : CODEC_DONE;
+  }
+
+  // Reported once per stream, after its header; decoding carries on unchecked
+  if (r == LZMA_UNSUPPORTED_CHECK) {
+    ctx_log(s->ctx, CTX_LOG_WARNING,
+            "%s stream has an unsupported integrity check type; not "
+            "verifying its integrity",
+            s->label);
+    return CODEC_MORE;
   }
   if (r != LZMA_OK) {
     s->code = r;
@@ -77,8 +97,13 @@ static void codec_lzma_end(void *state) {
 }
 
 static const char *codec_lzma_describe(void *state, const char *label,
-                                       int decompress) {
+                                       int decompress, int *corrupt) {
   LzmaState *s = (LzmaState *)state;
+
+  // Exceeding the memory limit is the input's demand, not proof of corruption
+  *corrupt = decompress &&
+             (s->code == LZMA_FORMAT_ERROR || s->code == LZMA_OPTIONS_ERROR ||
+              s->code == LZMA_DATA_ERROR || s->code == LZMA_BUF_ERROR);
 
   if (!decompress) {
     snprintf(s->message, sizeof(s->message), "%s compression failed", label);

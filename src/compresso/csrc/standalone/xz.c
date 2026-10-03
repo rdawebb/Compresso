@@ -15,7 +15,7 @@ static int xz_compress_file(const char *input_path, const char *output_path,
 
 static int xz_decompress_file(const char *input_path, const char *output_path,
                               CoreContext *ctx) {
-  CodecParams params = {.label = "xz"};
+  CodecParams params = {.concatenated = 1, .label = "xz"};
   return codec_run_file(codec_lzma_ops(), &params, 1, input_path, output_path,
                         ctx, "xz decompression failed");
 }

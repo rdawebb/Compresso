@@ -1,6 +1,6 @@
 """Type stubs for the _core C extension module."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 class Error(Exception):
@@ -12,8 +12,25 @@ class HeaderError(Error):
 class BackendError(Error):
     """Error in compression backend."""
 
+class ExtractionPolicyError(Error):
+    """An archive entry was refused by the extraction policy.
+
+    For example a path escaping the output directory, a symlink the policy
+    denies, or the size cap.
+    """
+
+class CorruptDataError(Error):
+    """The input is corrupt, truncated, or not the format it claims to be."""
+
 class Cancelled(Error):
     """Raised when an operation stopped because its CancelToken was set."""
+
+class TrailingDataWarning(UserWarning):
+    """Warned when data after the end of a compressed stream was ignored.
+
+    Only gzip and bzip2 tolerate it; the output holds everything before the
+    trailing data, which may be worth checking.
+    """
 
 class CancelToken:
     """Cancellation flag shared with a running compression.
@@ -128,7 +145,7 @@ def create_archive(
 def extract_archive(
     archive_path: str,
     output_dir: str,
-    files: list[str],
+    files: Sequence[str],
     *,
     overwrite: int = ...,
     max_total_size: int = ...,
@@ -136,6 +153,7 @@ def extract_archive(
     preserve_permissions: bool = ...,
     preserve_timestamps: bool = ...,
     allow_symlinks: int = ...,
+    overwrite_dir_metadata: bool = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
 ) -> None:
@@ -146,7 +164,9 @@ def extract_archive(
 
     `overwrite` is 0 = error, 1 = skip, 2 = overwrite, 3 = rename;
     `allow_symlinks` is 0 = deny, 1 = allow, 2 = rewrite to regular files;
-    `max_total_size` and `max_depth` treat 0 as unlimited.
+    `max_total_size` and `max_depth` treat 0 as unlimited;
+    `overwrite_dir_metadata` also restores the mode and mtime of a directory
+    that already exists, as GNU tar does, except when `overwrite` is 1 (skip).
     """
 
 def detect_format(file_path: str) -> str:
@@ -155,7 +175,7 @@ def detect_format(file_path: str) -> str:
 def format_is_archive(format: str) -> bool:
     """Return whether a format's container can hold more than one entry."""
 
-EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "special"]
+EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "hardlink", "special"]
 
 class ArchiveEntryDict(TypedDict):
     """One archive entry, as `list_archive_contents` reports it.
@@ -172,7 +192,8 @@ class ArchiveEntryDict(TypedDict):
     size: int
     mtime: int
     mode: int
-    # The stored target of a symlink, and None for every other type
+    # A symlink's stored target, or the archive path a hardlink shares data
+    # with; None for every other type
     link_target: str | None
     compressed_size: NotRequired[int]
     crc: NotRequired[int]

@@ -48,10 +48,10 @@ def list_entries(entries: list[ArchiveEntry]) -> None:
         if entry.is_dir:
             listed_dirs.add("/".join(parts))
 
-        # A symlink's stored size is the length of its target, not file data
+        # A symlink's stored size is the length of its target; hardlink's have no data
         size = (
             ""
-            if entry.is_dir or entry.is_symlink
+            if entry.is_dir or entry.is_symlink or entry.is_hardlink
             else format_size(size_bytes=entry.size)
         )
         target = f" -> {entry.link_target}" if entry.is_symlink else ""

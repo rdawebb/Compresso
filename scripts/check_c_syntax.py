@@ -6,11 +6,15 @@ Meson build records in `compile_commands.json`.
 
 from __future__ import annotations
 
-import json
+import math
+import os
 import shlex
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import orjson
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -56,7 +60,7 @@ def load_commands(database: Path) -> dict[Path, tuple[Path, list[str]]]:
         with its outputs and source removed.
     """
     commands: dict[Path, tuple[Path, list[str]]] = {}
-    for entry in json.loads(database.read_text()):
+    for entry in orjson.loads(database.read_bytes()):
         directory = Path(entry["directory"])
         argv = entry.get("arguments") or shlex.split(entry["command"])
 
@@ -104,11 +108,38 @@ def check(paths: list[Path], commands: dict[Path, tuple[Path, list[str]]]) -> in
             directory, argv = commands.get(resolved, fallback)
         groups.setdefault((directory, tuple(argv)), []).append(str(path.resolve()))
 
+    # A group's files are split across the cores, but only that far, since
+    # every compiler process pays its startup again
+    workers = os.cpu_count() or 1
+    size = max(1, math.ceil(sum(map(len, groups.values())) / workers))
+    jobs = [
+        (directory, [*argv, "-fsyntax-only", *files[i : i + size]])
+        for (directory, argv), files in groups.items()
+        for i in range(0, len(files), size)
+    ]
+
+    def compile_job(job: tuple[Path, list[str]]) -> subprocess.CompletedProcess[str]:
+        """Run one syntax-only compile, capturing its output.
+
+        Args:
+            job: The working dir and command to run.
+
+        Returns:
+            The completed process.
+        """
+        directory, cmd = job
+        return subprocess.run(
+            cmd, cwd=directory, capture_output=True, text=True, check=False
+        )
+
+    # Captured and replayed in job order, so concurrent compiles' diagnostics
+    # don't interleave
     returncode = 0
-    for (directory, argv), files in groups.items():
-        cmd = [*argv, "-fsyntax-only", *files]
-        result = subprocess.run(cmd, cwd=directory, check=False)
-        returncode = returncode or result.returncode
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for result in pool.map(compile_job, jobs):
+            sys.stdout.write(result.stdout)
+            sys.stderr.write(result.stderr)
+            returncode = returncode or result.returncode
 
     return returncode
 

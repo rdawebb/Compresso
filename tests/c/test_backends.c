@@ -4,6 +4,7 @@
 #define UNITY_SUPPORT_TEST_CASES
 
 #include "backend_io.h"
+#include "codec/codec.h"
 #include "unity.h"
 #include <lz4hc.h>
 #include <stdlib.h>
@@ -170,4 +171,43 @@ void test_empty_input_round_trips(int index) {
   BackendCase c = backend_case(index);
 
   assert_stream_round_trip(c.backend, (const unsigned char *)"", 0, -1);
+}
+
+// ---- lz4 engine ----
+
+// The driver's fread only comes up short at end of input
+void test_lz4_engine_takes_uneven_input(void) {
+  const CodecOps *ops = codec_lz4_ops();
+  CodecParams params = {.level = -1, .checksum = 1};
+  void *state = calloc(1, ops->state_size);
+  TEST_ASSERT_NOT_NULL(state);
+  TEST_ASSERT_EQUAL_INT(0, ops->begin(state, &params, 0, NULL));
+
+  size_t out_size = ops->out_chunk;
+  unsigned char *out = malloc(out_size);
+  TEST_ASSERT_NOT_NULL(out);
+
+  // A short piece leaves a partial block buffered, so the full chunk after it
+  // completes that block and starts another
+  const size_t pieces[] = {1000, CODEC_CHUNK, 1, CODEC_CHUNK};
+  const unsigned char *next = incompressible(3 * CODEC_CHUNK);
+  const unsigned char *input = next;
+  for (size_t i = 0; i < sizeof(pieces) / sizeof(pieces[0]); i++) {
+    CodecBuf buf = {next, pieces[i], out, out_size};
+    while (buf.avail_in > 0) {
+      buf.next_out = out;
+      buf.avail_out = out_size;
+      TEST_ASSERT_NOT_EQUAL_INT_MESSAGE(CODEC_ERR, ops->process(state, &buf, 0),
+                                        "piece rejected");
+    }
+    next += pieces[i];
+  }
+
+  CodecBuf buf = {next, 0, out, out_size};
+  TEST_ASSERT_EQUAL_INT(CODEC_DONE, ops->process(state, &buf, 1));
+
+  ops->end(state);
+  free(state);
+  free(out);
+  free((void *)input);
 }

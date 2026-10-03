@@ -30,7 +30,15 @@ typedef struct {
   int64_t mtime; // Seconds since the Unix epoch
   uint32_t mode; // POSIX permission bits (0777), best-effort on Windows
   fs_file_type type;
+
+  // Identity, for fs_same_file; on Windows only filled for regular files (the
+  // volume serial and file index), and 0 wherever it is unknown
+  uint64_t dev, ino;
 } fs_stat;
+
+// True if both name the same file, e.g. through a hardlink; false whenever
+// either identity is unknown
+int fs_same_file(const fs_stat *a, const fs_stat *b);
 
 // True if `path` is anything other than a plain relative path: a leading
 // separator, or a drive qualifier; Windows forms are rejected on POSIX too,
@@ -45,11 +53,16 @@ int fs_is_stream_path(const char *path);
 // Locate the last path separator in `path`, or NULL if it has none
 char *fs_last_sep(const char *path);
 
+// Write `dir` + "/" + `name` into `out`, leaving out the "/" when `dir` is
+// empty or already ends in a separator; -1/ENAMETOOLONG if it would not fit
+int fs_join(char *out, size_t out_size, const char *dir, const char *name);
+
 // Stat `path` itself, without following symlinks (lstat(2)), so a symlink or
 // Windows reparse point reports FS_TYPE_SYMLINK rather than its target's type
 int fs_stat_path(const char *path, fs_stat *out);
 
-// Read a symlink's target into `buf` (NUL-terminated)
+// Read a symlink's target into `buf` (NUL-terminated); -1/ENAMETOOLONG if it
+// doesn't fit, rather than truncating it
 // On Windows this is the resolved absolute target, not the literal link text
 int fs_readlink(const char *path, char *buf, size_t buf_size);
 
@@ -82,7 +95,7 @@ int fs_realpath(const char *path, char *resolved);
 int fs_mkstemp(char *template_path);
 
 // Create `path` and any missing parents, applying `mode` to the final
-// component only
+// component only; splits on either separator on Windows
 int fs_mkdir_p(const char *path, uint32_t mode);
 
 // Create `path` (parent must already exist), failing with errno EEXIST if
@@ -110,6 +123,11 @@ int fs_resolve_conflict(const char *path, int overwrite_existing,
 int fs_chmod(const char *path, uint32_t mode);
 
 int fs_unlink(const char *path);
+
+// Hardlink `new_path` to `existing`, which is never followed if it is a
+// symlink; -1 with errno set (EEXIST if `new_path` exists, EXDEV across
+// filesystems)
+int fs_link(const char *existing, const char *new_path);
 
 // Current read/write offset in an open stream, as a 64-bit value on every
 // platform (plain ftell() is 32-bit on Windows); returns -1 on failure

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
+import orjson
 
 _DEFAULT_COMP_MB_S = {
     "zlib": 200.0,
@@ -56,9 +57,9 @@ def _load_raw() -> dict[str, AlgoSpeeds]:
         return {}
 
     try:
-        data = json.loads(s=_SPEEDS_FILE.read_text(encoding="utf-8"))
+        data = orjson.loads(_SPEEDS_FILE.read_bytes())
 
-    except (OSError, json.JSONDecodeError):
+    except (OSError, orjson.JSONDecodeError):
         return {}
 
     result: dict[str, AlgoSpeeds] = {}
@@ -95,7 +96,7 @@ def _save_raw(entries: dict[str, AlgoSpeeds]) -> None:
         for algo, entry in entries.items()
     }
 
-    _SPEEDS_FILE.write_text(data=json.dumps(obj=data, indent=4), encoding="utf-8")
+    _SPEEDS_FILE.write_bytes(orjson.dumps(data, option=orjson.OPT_INDENT_2))
 
 
 def update_from_benchmarks(results: Iterable[object]) -> None:

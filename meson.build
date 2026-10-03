@@ -4,7 +4,7 @@ project('compresso', 'c',
     # gnu11 on GCC/Clang, c11 on MSVC; strict ISO defines __STRICT_ANSI__,
     # which hides the POSIX declarations the sources rely on
     'c_std=gnu11,c11',
-    'warning_level=1',
+    'warning_level=2',
   ],
 )
 

@@ -14,7 +14,7 @@ static int lz4_compress_file(const char *input_path, const char *output_path,
 
 static int lz4_decompress_file(const char *input_path, const char *output_path,
                                CoreContext *ctx) {
-  CodecParams params = {0};
+  CodecParams params = {.concatenated = 1};
   return codec_run_file(codec_lz4_ops(), &params, 1, input_path, output_path,
                         ctx, "lz4 decompression failed: corrupted or invalid "
                              "data");

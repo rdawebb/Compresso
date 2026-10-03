@@ -92,24 +92,38 @@ Format detect_format_from_path(const char *path) {
   return detect_format_from_extension(path);
 }
 
+// The dot starting the final extension of `path`'s last component, or NULL;
+// a leading dot names a hidden file rather than an extension
+static const char *final_extension(const char *path, const char **base) {
+  const char *sep = fs_last_sep(path);
+  *base = sep ? sep + 1 : path;
+
+  const char *dot = strrchr(*base, '.');
+  return (dot && dot > *base) ? dot : NULL;
+}
+
+// Lowercases `ext` into `out`, truncating to fit; the cast keeps a UTF-8 byte,
+// negative as a char, within what tolower accepts
+static void lowercase_into(char *out, size_t size, const char *ext) {
+  size_t i;
+  for (i = 0; i < size - 1 && ext[i]; i++)
+    out[i] = (char)tolower((unsigned char)ext[i]);
+  out[i] = '\0';
+}
+
 Format detect_format_from_extension(const char *path) {
   if (!path) {
     return FORMAT_UNKNOWN;
   }
 
-  const char *ext = strrchr(path, '.');
+  const char *base;
+  const char *ext = final_extension(path, &base);
   if (!ext) {
     return FORMAT_UNKNOWN;
   }
-  ext++; // Skip the dot
 
-  // Convert to lowercase
   char lower_ext[32];
-  size_t i;
-  for (i = 0; i < sizeof(lower_ext) - 1 && ext[i]; i++) {
-    lower_ext[i] = tolower(ext[i]);
-  }
-  lower_ext[i] = '\0';
+  lowercase_into(lower_ext, sizeof(lower_ext), ext + 1);
 
   // Single-file formats
   if (strcmp(lower_ext, "gz") == 0)
@@ -211,15 +225,13 @@ static const char *archive_token(ArchiveID archive) {
 // Return ARCHIVE_TAR if the path's extension indicates a tar container wrapping
 // a codec, otherwise ARCHIVE_NONE
 static ArchiveID tar_archive_from_extension(const char *path) {
-  const char *ext = strrchr(path, '.');
+  const char *base;
+  const char *ext = final_extension(path, &base);
   if (!ext)
     return ARCHIVE_NONE;
 
   char last[16];
-  size_t i;
-  for (i = 0; i < sizeof(last) - 1 && ext[i + 1]; i++)
-    last[i] = tolower(ext[i + 1]);
-  last[i] = '\0';
+  lowercase_into(last, sizeof(last), ext + 1);
 
   // Combined shorthands
   if (strcmp(last, "tgz") == 0 || strcmp(last, "tbz2") == 0 ||
@@ -229,9 +241,9 @@ static ArchiveID tar_archive_from_extension(const char *path) {
 
   // Dotted form: the component before the final extension is "tar"
   const char *prev = ext - 1;
-  while (prev > path && *prev != '.')
+  while (prev > base && *prev != '.')
     prev--;
-  if (prev > path && strncmp(prev, ".tar", 4) == 0 &&
+  if (prev > base && strncmp(prev, ".tar", 4) == 0 &&
       (prev[4] == '.' || prev[4] == '\0'))
     return ARCHIVE_TAR;
 

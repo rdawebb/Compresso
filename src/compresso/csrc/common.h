@@ -79,7 +79,8 @@ static inline uint64_t read_le64(const uint8_t *buf) {
 
 // Closes both streams, and on failure or cancellation unlinks the half-written
 // output; sets `failure_message` unless cancelled or pending exception; pass
-// NULL when every failing path sets its own; returns `err` unchanged
+// NULL when every failing path sets its own; returns `err`, or -1 with an
+// OSError when it was 0 but the output couldn't be flushed or closed
 int codec_finish_file(int err, FILE *input, FILE *output,
                       const char *output_path, const char *failure_message);
 
@@ -152,6 +153,7 @@ typedef struct CBackend {
 // ---- Strategy ----
 
 typedef enum {
+  STRAT_UNKNOWN = -1, // A name strategy_from_string doesn't recognise
   STRAT_BALANCED = 0,
   STRAT_FAST = 1,
   STRAT_MAX_RATIO = 2,
@@ -176,10 +178,14 @@ const CBackend *get_snappy_backend(void);
 extern PyObject *comp_Error;
 extern PyObject *comp_HeaderError;
 extern PyObject *comp_BackendError;
+extern PyObject *comp_CorruptDataError;
+extern PyObject *comp_ExtractionPolicyError;
 extern PyObject *comp_Cancelled;
+extern PyObject *comp_TrailingDataWarning;
 
 // ---- Helpers ----
 
+// NULL and "" mean balanced; anything unrecognised is STRAT_UNKNOWN
 Strategy strategy_from_string(const char *str);
 AlgoID algo_from_string(const char *str);
 
@@ -195,8 +201,7 @@ int validate_size(uint64_t size, uint64_t max_size, const char *name);
 
 void *safe_malloc(size_t size);
 
-// Raises the errno-mapped OSError (FileNotFoundError, PermissionError, ...) if
-// `path` cannot be opened and read
+// Raises the errno-mapped OSError if `path` cannot be opened and read
 int check_source_readable(const char *path);
 
 // ---- Backend Error Helper ----

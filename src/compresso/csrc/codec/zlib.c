@@ -18,7 +18,9 @@ static int zlib_window_bits(int wrap) {
   return wrap == CODEC_WRAP_GZIP ? (16 | MAX_WBITS) : MAX_WBITS;
 }
 
-static int zlib_begin(void *state, const CodecParams *params, int decompress) {
+static int zlib_begin(void *state, const CodecParams *params, int decompress,
+                      CoreContext *ctx) {
+  (void)ctx;
   ZlibState *s = (ZlibState *)state;
   s->decompress = decompress;
 
@@ -74,7 +76,7 @@ static int zlib_process(void *state, CodecBuf *buf, int finish) {
   buf->avail_out = s->strm.avail_out;
 
   if (r == Z_STREAM_END) {
-    return CODEC_DONE;
+    return s->decompress ? CODEC_STREAM_END : CODEC_DONE;
   }
 
   // Z_BUF_ERROR only reports that no progress was possible on this call, which
@@ -85,6 +87,13 @@ static int zlib_process(void *state, CodecBuf *buf, int finish) {
   }
 
   return CODEC_MORE;
+}
+
+// Keeps the window bits, so the next gzip member is parsed the same way
+static int zlib_reset(void *state) {
+  ZlibState *s = (ZlibState *)state;
+  s->code = inflateReset(&s->strm);
+  return s->code == Z_OK ? 0 : -1;
 }
 
 static void zlib_end(void *state) {
@@ -100,9 +109,10 @@ static void zlib_end(void *state) {
   }
 }
 
-static const char *zlib_describe(void *state, const char *label,
-                                 int decompress) {
+static const char *zlib_describe(void *state, const char *label, int decompress,
+                                 int *corrupt) {
   ZlibState *s = (ZlibState *)state;
+  *corrupt = decompress && (s->code == Z_DATA_ERROR || s->code == Z_NEED_DICT);
   const char *op = decompress ? "decompression" : "compression";
 
   if (s->strm.msg) {
@@ -120,6 +130,7 @@ static const CodecOps zlib_ops = {
     .state_size = sizeof(ZlibState),
     .begin = zlib_begin,
     .process = zlib_process,
+    .reset = zlib_reset,
     .end = zlib_end,
     .describe = zlib_describe,
 };

@@ -25,16 +25,19 @@ _NON_ARCHIVE_FORMATS = {"gz", "gzip", "bz2", "bzip2", "xz", "zst", "zstd", "lz4"
 
 @dataclass(frozen=True)
 class ArchiveEntry:
-    """One file, directory or symlink recorded in an archive.
+    """One file, directory or link recorded in an archive.
 
     Attributes:
         path: The entry's path within the archive.
         size: Uncompressed size in bytes; 0 for a directory.
         is_dir: Whether the entry is a directory.
         is_symlink: Whether the entry is a symbolic link.
+        is_hardlink: Whether the entry is a hardlink, sharing the data of the
+            earlier entry `link_target` names rather than holding its own.
         mtime: Modification time, in seconds since the epoch.
         mode: Unix permission bits.
-        link_target: A symlink's stored target, None for anything else.
+        link_target: A symlink's stored target, or the archive path a
+            hardlink shares data with; None for anything else.
         compressed_size: Stored size of this entry's data, or None for a
             container that compresses the whole stream at once.
         crc: CRC-32 of the uncompressed data, or None as above.
@@ -45,6 +48,7 @@ class ArchiveEntry:
     size: int = 0
     is_dir: bool = False
     is_symlink: bool = False
+    is_hardlink: bool = False
     mtime: float = 0.0
     mode: int = 0
     link_target: str | None = None
@@ -131,6 +135,9 @@ class ExtractOptions:
         max_depth: Maximum nesting depth of an entry path; 0 means unlimited.
         preserve_permissions: Whether to restore each entry's mode bits.
         preserve_timestamps: Whether to restore each entry's modification time.
+        overwrite_dir_metadata: Whether a directory that already exists also
+            gets the archive's mode and modification time; by default only directories
+            the extraction creates get them; never applies with `OverwriteMode.SKIP`.
     """
 
     overwrite: OverwriteMode = OverwriteMode.RENAME
@@ -138,6 +145,7 @@ class ExtractOptions:
     max_depth: int = 32
     preserve_permissions: bool = True
     preserve_timestamps: bool = True
+    overwrite_dir_metadata: bool = False
 
 
 @dataclass(frozen=True)
@@ -355,6 +363,7 @@ def plan_extraction(
                 size=raw["size"],
                 is_dir=raw["type"] == "dir",
                 is_symlink=raw["type"] == "symlink",
+                is_hardlink=raw["type"] == "hardlink",
                 mtime=raw["mtime"],
                 mode=raw["mode"],
                 link_target=raw["link_target"],
@@ -554,6 +563,7 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
                 max_depth=options.max_depth,
                 preserve_permissions=options.preserve_permissions,
                 preserve_timestamps=options.preserve_timestamps,
+                overwrite_dir_metadata=options.overwrite_dir_metadata,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )
