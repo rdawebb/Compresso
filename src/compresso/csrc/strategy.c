@@ -6,13 +6,13 @@
 // ---- Backend Strategy ----
 
 Strategy strategy_from_string(const char *str) {
-  if (!str)
+  if (!str || str[0] == '\0' || strcmp(str, "balanced") == 0)
     return STRAT_BALANCED;
   if (strcmp(str, "fast") == 0)
     return STRAT_FAST;
   if (strcmp(str, "max_ratio") == 0)
     return STRAT_MAX_RATIO;
-  return STRAT_BALANCED;
+  return STRAT_UNKNOWN;
 }
 
 AlgoID algo_from_string(const char *str) {

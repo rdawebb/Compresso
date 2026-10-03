@@ -152,6 +152,7 @@ typedef struct CBackend {
 // ---- Strategy ----
 
 typedef enum {
+  STRAT_UNKNOWN = -1, // A name strategy_from_string doesn't recognise
   STRAT_BALANCED = 0,
   STRAT_FAST = 1,
   STRAT_MAX_RATIO = 2,
@@ -183,6 +184,7 @@ extern PyObject *comp_TrailingDataWarning;
 
 // ---- Helpers ----
 
+// NULL and "" mean balanced; anything unrecognised is STRAT_UNKNOWN
 Strategy strategy_from_string(const char *str);
 AlgoID algo_from_string(const char *str);
 

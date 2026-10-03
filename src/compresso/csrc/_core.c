@@ -220,6 +220,20 @@ static PyObject *encode_fs_path_list(PyObject *list, const char ***out_paths,
   return keepalive;
 }
 
+// ---- Argument Parsing ----
+
+// Raises ValueError for an unknown strategy name
+static int parse_strategy(const char *name, Strategy *out) {
+  *out = strategy_from_string(name);
+  if (*out == STRAT_UNKNOWN) {
+    PyErr_Format(PyExc_ValueError,
+                 "Unknown strategy: %s (expected fast, balanced or max_ratio)",
+                 name);
+    return -1;
+  }
+  return 0;
+}
+
 // ---- Module Methods ----
 
 static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
@@ -265,11 +279,17 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
   const char *dst_path = PyBytes_AsString(dst_path_bytes);
 
   AlgoID algo = algo_from_string(algo_name);
-  Strategy strat = strategy_from_string(strategy_name);
+  Strategy strat;
 
   if (algo_name && algo_name[0] != '\0' && algo == ALGO_NONE) {
     PyErr_Format(PyExc_ValueError, "Unknown compression algorithm: %s",
                  algo_name);
+    Py_DECREF(src_path_bytes);
+    Py_DECREF(dst_path_bytes);
+    return NULL;
+  }
+
+  if (parse_strategy(strategy_name, &strat) != 0) {
     Py_DECREF(src_path_bytes);
     Py_DECREF(dst_path_bytes);
     return NULL;
@@ -834,7 +854,10 @@ static PyObject *py_get_default_backend_for_strategy(PyObject *self UNUSED,
     return NULL; // Error already set
   }
 
-  Strategy strat = strategy_from_string(strategy_name);
+  Strategy strat;
+  if (parse_strategy(strategy_name, &strat) != 0) {
+    return NULL;
+  }
   const char *name = get_default_backend_for_strategy(strat);
 
   if (!name) {
@@ -880,8 +903,9 @@ static PyObject *py_check_level(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  if (validate_compression_request(algo, strategy_from_string(strategy_name),
-                                   level, NULL) != 0) {
+  Strategy strat;
+  if (parse_strategy(strategy_name, &strat) != 0 ||
+      validate_compression_request(algo, strat, level, NULL) != 0) {
     return NULL;
   }
   Py_RETURN_NONE;

@@ -227,7 +227,20 @@ def plan_compression(
         backend_name = options.algo.lower()
 
     else:
-        backend_name = default_backend(options.strategy or "balanced")
+        try:
+            backend_name = default_backend(options.strategy or "balanced")
+
+        except ValueError as e:
+            return CompressionPlan(
+                src=src_path,
+                dest=dest_path,
+                options=options,
+                input_size=input_size,
+                backend_name=None,
+                estimated_seconds=None,
+                can_compress=False,
+                reason_if_unavailable=str(e),
+            )
 
     if backend_name is None:
         return CompressionPlan(

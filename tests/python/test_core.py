@@ -125,6 +125,17 @@ class TestCompressFile:
         assert decompress_file(str(compressed), str(restored), "") == 0
         assert restored.read_bytes() == sample_binary_file.read_bytes()
 
+    def test_unknown_strategy_is_refused(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that a misspelt strategy raises rather than meaning balanced."""
+        compressed = temp_dir / "typo.comp"
+
+        with pytest.raises(ValueError, match="Unknown strategy: fsat"):
+            compress_file(str(sample_text_file), str(compressed), "", "fsat", -1)
+
+        assert not compressed.exists()
+
     @pytest.mark.parametrize("strategy", ["fast", "balanced", "max_ratio"])
     def test_round_trip_every_strategy(
         self, sample_text_file: Path, temp_dir: Path, strategy: str
@@ -894,6 +905,30 @@ class TestHardlinkExtraction:
         assert (renamed / "b").read_text() == "existing"
         [extra] = [p for p in renamed.iterdir() if p.name not in ("a", "b")]
         assert os.path.samefile(renamed / "a", extra)
+
+
+class TestStrategyNames:
+    """Test the strategy names the other entry points accept."""
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda: _core.get_default_backend_for_strategy("fsat"),
+            lambda: _core.check_level(5, strategy="fsat"),
+            # An explicit algorithm overrides the strategy, but a typo is still one
+            lambda: _core.check_level(5, algo="zstd", strategy="fsat"),
+        ],
+        ids=["default_backend", "check_level", "check_level_with_algo"],
+    )
+    def test_unknown_name_is_refused(self, call: Callable[[], object]) -> None:
+        """Test that a misspelt strategy raises ValueError naming the choices."""
+        with pytest.raises(ValueError, match="expected fast, balanced or max_ratio"):
+            call()
+
+    @pytest.mark.parametrize("name", ["", "balanced"])
+    def test_empty_name_means_balanced(self, name: str) -> None:
+        """Test that no strategy picks the same backend as balanced."""
+        assert _core.get_default_backend_for_strategy(name) == "zstd"
 
 
 class TestLevelValidation:
