@@ -1461,7 +1461,8 @@ int extract_archive(const char *archive_path, const char *output_dir,
               : extract_entries(archive, reader, output_dir, resolved_root,
                                 files, num_files, policy, ctx);
 
-    if (archive->close_reader(reader) != 0 && ret == 0)
+    // A failed pass keeps its own error
+    if (archive->close_reader(reader, ret != 0) != 0 && ret == 0)
       ret = -1;
 
     if (ret != 0)
@@ -1621,7 +1622,11 @@ PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
   }
 
   PyObject *list = read_archive_entries(archive, reader, ctx);
-  archive->close_reader(reader);
+  // A close failure after a full listing would otherwise return the list
+  if (archive->close_reader(reader, list == NULL) != 0) {
+    Py_XDECREF(list);
+    list = NULL;
+  }
 
   if (tmp_path) {
     fs_unlink(tmp_path);

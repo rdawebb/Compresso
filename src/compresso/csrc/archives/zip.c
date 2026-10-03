@@ -495,8 +495,15 @@ static int zip_reset_reader(void *reader_ptr) {
   return 0;
 }
 
-static int zip_close_reader(void *reader_ptr) {
+static int zip_close_reader(void *reader_ptr, int discard) {
   ZipReader *reader = (ZipReader *)reader_ptr;
+
+  // Opened read-only, so there is nothing to lose
+  if (discard) {
+    zip_discard(reader->archive);
+    free(reader);
+    return 0;
+  }
 
   int ret = zip_close(reader->archive);
   if (ret < 0) {

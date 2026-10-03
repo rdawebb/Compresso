@@ -398,8 +398,14 @@ static int tar_reset_reader(void *reader_ptr) {
   return -1;
 }
 
-static int tar_close_reader(void *reader_ptr) {
+static int tar_close_reader(void *reader_ptr, int discard) {
   TarReader *reader = (TarReader *)reader_ptr;
+
+  if (discard) {
+    archive_read_free(reader->archive);
+    free(reader);
+    return 0;
+  }
 
   int r = archive_read_close(reader->archive);
   if (r != ARCHIVE_OK) {

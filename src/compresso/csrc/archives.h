@@ -80,7 +80,8 @@ typedef struct CArchive {
                             uint64_t *bytes_written, CoreContext *ctx);
   int (*skip_entry_data)(void *reader);
   int (*reset_reader)(void *reader);
-  int (*close_reader)(void *reader);
+  // `discard` releases a reader whose pass already failed, raising nothing
+  int (*close_reader)(void *reader, int discard);
 } CArchive;
 
 // ---- Extraction Policy ----
