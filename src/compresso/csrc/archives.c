@@ -32,16 +32,10 @@ ExtractionPolicy extraction_policy_default(void) {
 // ---- ArchiveEntry Helpers ----
 
 static ArchiveEntry *entry_alloc(void) {
-  ArchiveEntry *e = safe_malloc(sizeof(ArchiveEntry));
+  // Zeroed, so unset fields are still defined; ENTRY_FILE is 0
+  ArchiveEntry *e = calloc(1, sizeof(ArchiveEntry));
   if (!e)
-    return NULL;
-  e->path = NULL;
-  e->type = ENTRY_FILE;
-  e->size = 0;
-  e->mtime = 0;
-  e->mode = 0;
-  e->link_target = NULL;
-  e->internal_data = NULL;
+    PyErr_NoMemory();
   return e;
 }
 
@@ -1427,11 +1421,18 @@ int extract_archive(const char *archive_path, const char *output_dir,
     read_path = tmp_path;
   }
 
-  fs_mkdir_p(output_dir, 0755);
-
-  // Canonicalised once rather than per entry, and after the directory exists
+  // Canonicalised once rather than per entry, and after the directory exists;
+  // fs_mkdir_p accepts an existing file, so the resolved root is checked too
   char resolved_root[FS_PATH_MAX];
-  if (fs_realpath(output_dir, resolved_root) != 0) {
+  fs_stat root_st;
+  int root_ok = fs_mkdir_p(output_dir, 0755) == 0 &&
+                fs_realpath(output_dir, resolved_root) == 0 &&
+                fs_stat_path(resolved_root, &root_st) == 0;
+  if (root_ok && root_st.type != FS_TYPE_DIR) {
+    errno = ENOTDIR;
+    root_ok = 0;
+  }
+  if (!root_ok) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_dir);
     if (tmp_path) {
       fs_unlink(tmp_path);

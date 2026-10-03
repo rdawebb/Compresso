@@ -494,6 +494,31 @@ class TestArchiveErrorTypes:
 
         assert not output.exists()
 
+    def test_output_dir_that_is_a_file_is_not_a_directory(self, temp_dir: Path) -> None:
+        """Test that the output path itself is named, before any entry is tried."""
+        archive = temp_dir / "x.tar"
+        _tar_of(archive, [("f", 0o644, 0)])
+        not_a_dir = temp_dir / "afile"
+        not_a_dir.write_text("x")
+
+        with pytest.raises(NotADirectoryError) as info:
+            _core.extract_archive(str(archive), str(not_a_dir), [])
+
+        assert info.value.filename == str(not_a_dir)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
+    def test_output_dir_that_cannot_be_created_says_why(self, temp_dir: Path) -> None:
+        """Test that a read-only parent is a permission error, not a missing path."""
+        archive = temp_dir / "x.tar"
+        _tar_of(archive, [("f", 0o644, 0)])
+        read_only = temp_dir / "ro"
+        read_only.mkdir(mode=0o555)
+
+        with pytest.raises(PermissionError) as info:
+            _core.extract_archive(str(archive), str(read_only / "out"), [])
+
+        assert info.value.filename == str(read_only / "out")
+
     @pytest.mark.parametrize("fmt", ["tar", "zip", "tar.gz"])
     def test_failed_walk_reports_its_own_error(
         self, sample_text_file: Path, temp_dir: Path, fmt: str
