@@ -61,7 +61,8 @@ int fs_join(char *out, size_t out_size, const char *dir, const char *name);
 // Windows reparse point reports FS_TYPE_SYMLINK rather than its target's type
 int fs_stat_path(const char *path, fs_stat *out);
 
-// Read a symlink's target into `buf` (NUL-terminated)
+// Read a symlink's target into `buf` (NUL-terminated); -1/ENAMETOOLONG if it
+// doesn't fit, rather than truncating it
 // On Windows this is the resolved absolute target, not the literal link text
 int fs_readlink(const char *path, char *buf, size_t buf_size);
 
@@ -94,7 +95,7 @@ int fs_realpath(const char *path, char *resolved);
 int fs_mkstemp(char *template_path);
 
 // Create `path` and any missing parents, applying `mode` to the final
-// component only
+// component only; splits on either separator on Windows
 int fs_mkdir_p(const char *path, uint32_t mode);
 
 // Create `path` (parent must already exist), failing with errno EEXIST if

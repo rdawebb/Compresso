@@ -506,6 +506,19 @@ class TestArchiveErrorTypes:
 
         assert not output.exists()
 
+    def test_missing_output_dir_parents_are_created(self, temp_dir: Path) -> None:
+        """Test that every missing parent is made, whichever separator the path uses.
+
+        Also includes str() of a Windows path, which uses backslashes.
+        """
+        archive = temp_dir / "x.tar"
+        _tar_of(archive, [("f", 0o644, 0)])
+        out = temp_dir / "a" / "b" / "c"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert (out / "f").read_bytes() == b"x"
+
     def test_output_dir_that_is_a_file_is_not_a_directory(self, temp_dir: Path) -> None:
         """Test that the output path itself is named, before any entry is tried."""
         archive = temp_dir / "x.tar"

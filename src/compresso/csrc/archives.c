@@ -200,8 +200,16 @@ static ArchiveEntry *create_entry_from_path(const char *path, size_t prefix_len,
   } else if (st.type == FS_TYPE_SYMLINK) {
     entry->type = ENTRY_SYMLINK;
     char target[FS_PATH_MAX];
-    if (fs_readlink(path, target, sizeof(target)) == 0) {
-      entry->link_target = strdup(target);
+    if (fs_readlink(path, target, sizeof(target)) != 0) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+      entry_free(entry);
+      return NULL;
+    }
+    entry->link_target = strdup(target);
+    if (!entry->link_target) {
+      PyErr_NoMemory();
+      entry_free(entry);
+      return NULL;
     }
   } else if (st.type == FS_TYPE_FILE) {
     entry->type = ENTRY_FILE;

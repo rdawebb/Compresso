@@ -11,6 +11,10 @@ void tearDown(void) {
   remove("tmp_fsutil_a");
   remove("tmp_fsutil_b");
   remove("tmp_fsutil_link");
+  remove("tmp_fsutil_dirs/a/b/c");
+  remove("tmp_fsutil_dirs/a/b");
+  remove("tmp_fsutil_dirs/a");
+  remove("tmp_fsutil_dirs");
 }
 
 // ---- fs_join ----
@@ -103,4 +107,50 @@ void test_same_file_never_matches_an_unknown_identity(void) {
   memset(&unknown, 0, sizeof(unknown));
 
   TEST_ASSERT_FALSE(fs_same_file(&unknown, &unknown));
+}
+
+// ---- fs_readlink ----
+
+void test_readlink_fills_a_buffer_with_room_for_the_terminator(void) {
+  TEST_ASSERT_EQUAL_INT(0, symlink("1234567", "tmp_fsutil_link"));
+
+  char buf[8];
+  TEST_ASSERT_EQUAL_INT(0, fs_readlink("tmp_fsutil_link", buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("1234567", buf);
+}
+
+void test_readlink_refuses_a_target_that_doesnt_fit(void) {
+  TEST_ASSERT_EQUAL_INT(0, symlink("12345678", "tmp_fsutil_link"));
+
+  char buf[8];
+  errno = 0;
+  TEST_ASSERT_EQUAL_INT(-1, fs_readlink("tmp_fsutil_link", buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_INT(ENAMETOOLONG, errno);
+}
+
+// ---- fs_mkdir_p ----
+
+static int is_dir(const char *path) {
+  fs_stat st;
+  return fs_stat_path(path, &st) == 0 && st.type == FS_TYPE_DIR;
+}
+
+void test_mkdir_p_creates_every_missing_parent(void) {
+  TEST_ASSERT_EQUAL_INT(0, fs_mkdir_p("tmp_fsutil_dirs/a/b/c", 0755));
+  TEST_ASSERT_TRUE(is_dir("tmp_fsutil_dirs/a/b/c"));
+}
+
+void test_mkdir_p_accepts_a_trailing_separator(void) {
+  TEST_ASSERT_EQUAL_INT(0, fs_mkdir_p("tmp_fsutil_dirs/a/", 0755));
+  TEST_ASSERT_TRUE(is_dir("tmp_fsutil_dirs/a"));
+}
+
+void test_mkdir_p_starts_below_an_absolute_root(void) {
+  char cwd[FS_PATH_MAX], path[FS_PATH_MAX];
+  TEST_ASSERT_NOT_NULL(getcwd(cwd, sizeof(cwd)));
+  TEST_ASSERT_EQUAL_INT(
+      0, fs_join(path, sizeof(path), cwd, "tmp_fsutil_dirs/a/b"));
+
+  TEST_ASSERT_EQUAL_INT(0, fs_mkdir_p(path, 0755));
+  TEST_ASSERT_TRUE(is_dir("tmp_fsutil_dirs/a/b"));
 }

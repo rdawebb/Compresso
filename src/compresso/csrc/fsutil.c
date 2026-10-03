@@ -181,6 +181,31 @@ int fs_resolve_conflict(const char *path, int overwrite_existing,
   return -1;
 }
 
+// Length of `path`'s root, which exists and can't itself be created: leading
+// separators, and on Windows a drive (C:) or a UNC share (\\host\share, which
+// also covers the \\?\C: form)
+static size_t fs_root_len(const char *path) {
+  size_t i = 0;
+#if defined(_WIN32) || defined(_WIN64)
+  if (FS_IS_SEP(path[0]) && FS_IS_SEP(path[1])) {
+    i = 2;
+    for (int part = 0; part < 2; part++) {
+      while (path[i] && !FS_IS_SEP(path[i]))
+        i++;
+      while (FS_IS_SEP(path[i]))
+        i++;
+    }
+    return i;
+  }
+  char drive = (char)(path[0] | 0x20);
+  if (drive >= 'a' && drive <= 'z' && path[1] == ':')
+    i = 2;
+#endif
+  while (FS_IS_SEP(path[i]))
+    i++;
+  return i;
+}
+
 int fs_mkdir_p(const char *path, uint32_t mode) {
   char tmp[FS_PATH_MAX];
   size_t len = strlen(path);
@@ -191,12 +216,13 @@ int fs_mkdir_p(const char *path, uint32_t mode) {
 
   memcpy(tmp, path, len + 1);
 
-  for (char *p = tmp + 1; *p; p++) {
-    if (*p == '/') {
+  for (char *p = tmp + fs_root_len(tmp); *p; p++) {
+    if (FS_IS_SEP(*p)) {
+      char sep = *p;
       *p = '\0';
       if (fs_mkdir_one(tmp, 0755) != 0)
         return -1;
-      *p = '/';
+      *p = sep;
     }
   }
 
@@ -667,9 +693,15 @@ int fs_stat_path(const char *path, fs_stat *out) {
 }
 
 int fs_readlink(const char *path, char *buf, size_t buf_size) {
-  ssize_t len = readlink(path, buf, buf_size - 1);
+  // readlink doesn't terminate and silently truncates, so a result that fills
+  // the whole buffer may have been cut short
+  ssize_t len = readlink(path, buf, buf_size);
   if (len < 0)
     return -1;
+  if ((size_t)len >= buf_size) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
   buf[len] = '\0';
   return 0;
 }
