@@ -1,5 +1,6 @@
 """Tests for the core compression/decompression functionality."""
 
+import errno
 import io
 import logging
 import os
@@ -906,6 +907,33 @@ class TestHardlinkExtraction:
         assert (renamed / "b").read_text() == "existing"
         [extra] = [p for p in renamed.iterdir() if p.name not in ("a", "b")]
         assert os.path.samefile(renamed / "a", extra)
+
+
+# Every write fails with ENOSPC, but only once the stream's buffer is flushed
+@pytest.mark.skipif(not Path("/dev/full").exists(), reason="needs /dev/full")
+class TestFullDisk:
+    """Test that output that never reached the disk isn't reported as written."""
+
+    @pytest.mark.parametrize("fmt", ["comp", "gz"])
+    def test_small_output_to_a_full_disk_fails(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str
+    ) -> None:
+        """Test that the error at close, not just at write, is reported."""
+        # A link, so removing the failed output can't remove /dev/full itself
+        dest = temp_dir / f"full.{fmt}"
+        dest.symlink_to("/dev/full")
+
+        with pytest.raises(OSError) as info:
+            if fmt == "comp":
+                compress_file(
+                    str(sample_text_file), str(dest), "zlib", "", -1, overwrite=2
+                )
+            else:
+                _core.compress_standalone(
+                    str(sample_text_file), str(dest), "gzip", overwrite=2
+                )
+
+        assert info.value.errno == errno.ENOSPC
 
 
 class TestStrategyNames:

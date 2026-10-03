@@ -186,8 +186,25 @@ int codec_finish_file(int err, FILE *input, FILE *output,
   if (input) {
     fclose(input);
   }
+
+  // Flush and close the output file, preserving its errno if it fails
+  int close_errno = 0;
   if (output) {
-    fclose(output);
+    if (fflush(output) != 0) {
+      close_errno = errno;
+    } else if (ferror(output)) {
+      close_errno = EIO;
+    }
+    if (fclose(output) != 0 && !close_errno) {
+      close_errno = errno;
+    }
+  }
+
+  // An earlier failure is the one worth reporting
+  if (err == 0 && close_errno) {
+    errno = close_errno;
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_path);
+    err = -1;
   }
 
   if (err == 0) {

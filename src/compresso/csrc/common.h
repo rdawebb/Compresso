@@ -79,7 +79,8 @@ static inline uint64_t read_le64(const uint8_t *buf) {
 
 // Closes both streams, and on failure or cancellation unlinks the half-written
 // output; sets `failure_message` unless cancelled or pending exception; pass
-// NULL when every failing path sets its own; returns `err` unchanged
+// NULL when every failing path sets its own; returns `err`, or -1 with an
+// OSError when it was 0 but the output couldn't be flushed or closed
 int codec_finish_file(int err, FILE *input, FILE *output,
                       const char *output_path, const char *failure_message);
 

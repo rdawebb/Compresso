@@ -1,11 +1,15 @@
 // Driven by a stub engine rather than a real library, so the driver's own
 // behaviour is tested, not zlib's or zstd's
 
+// For fopencookie
+#define _GNU_SOURCE
+
 #include "codec/codec.h"
 #include "common.h"
 #include "files.h"
 #include "test_stubs.h"
 #include "unity.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -130,8 +134,8 @@ static void stub_end(void *state) {
   stub_end_calls++;
 }
 
-static const char *stub_describe(void *state, const char *label,
-                                 int decompress, int *corrupt) {
+static const char *stub_describe(void *state, const char *label, int decompress,
+                                 int *corrupt) {
   (void)state;
   // Blames the input when decoding, as a real engine's data errors would
   *corrupt = decompress;
@@ -498,4 +502,56 @@ void test_driver_tolerates_a_null_context(void) {
   TEST_ASSERT_EQUAL_INT(0, codec_run_file(&stub_ops, &params, 0, TEST_INPUT,
                                           TMP_OUT, NULL, "stub run failed"));
   TEST_ASSERT_TRUE(files_equal(TEST_INPUT, TMP_OUT));
+}
+
+// ---- Closing the output ----
+
+#if defined(__APPLE__)
+static int refuse_write(void *cookie, const char *buf, int size) {
+  (void)cookie;
+  (void)buf;
+  (void)size;
+  errno = ENOSPC;
+  return -1;
+}
+#else
+static ssize_t refuse_write(void *cookie, const char *buf, size_t size) {
+  (void)cookie;
+  (void)buf;
+  (void)size;
+  errno = ENOSPC;
+  return -1;
+}
+#endif
+
+// Simulates a full disk stream that fails to flush at close
+static FILE *full_disk_stream(void) {
+#if defined(__APPLE__)
+  return funopen(NULL, NULL, refuse_write, NULL, NULL);
+#else
+  cookie_io_functions_t io = {.write = refuse_write};
+  return fopencookie(NULL, "w", io);
+#endif
+}
+
+void test_finish_reports_an_output_that_fails_to_flush(void) {
+  FILE *out = full_disk_stream();
+  TEST_ASSERT_NOT_NULL(out);
+  fputs("buffered", out);
+  write_file(TMP_OUT, "partial"); // Stands in for the half-written file
+
+  TEST_ASSERT_EQUAL_INT(-1, codec_finish_file(0, NULL, out, TMP_OUT, NULL));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_OSError));
+  TEST_ASSERT_TRUE(error_says("No space left on device"));
+  TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+void test_finish_keeps_an_earlier_failure_over_a_close_failure(void) {
+  FILE *out = full_disk_stream();
+  TEST_ASSERT_NOT_NULL(out);
+  fputs("buffered", out);
+  PyErr_SetString(comp_BackendError, "the real failure");
+
+  TEST_ASSERT_EQUAL_INT(-1, codec_finish_file(-1, NULL, out, TMP_OUT, NULL));
+  TEST_ASSERT_TRUE(error_says("the real failure"));
 }
