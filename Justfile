@@ -37,6 +37,10 @@ test-c:
     [ -d build/c-tests ] || uv run meson setup build/c-tests tests/c
     uv run meson test -C build/c-tests --print-errorlogs
 
+# Run every local check a change needs; see scripts/verify.py for the options
+verify *args:
+    uv run python scripts/verify.py {{args}}
+
 # Run all pre-commit hooks
 pre:
     uv run prek run --all-files

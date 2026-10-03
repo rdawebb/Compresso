@@ -1,8 +1,8 @@
 """Tests for the speeds module."""
 
-import json
 from pathlib import Path
 
+import orjson
 import pytest
 
 from compresso.introspect import speeds
@@ -21,7 +21,7 @@ def write_speeds(path: Path, data: object) -> None:
         data: The JSON document to store.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data), encoding="utf-8")
+    path.write_bytes(orjson.dumps(data))
 
 
 def timed_result(algo: str, compress_time: float, decompress_time: float) -> object:
@@ -119,7 +119,7 @@ class TestUpdateFromBenchmarks:
             [timed_result("zlib", 1.0, 0.5), timed_result("zlib", 0.5, 0.25)]
         )
 
-        assert json.loads(speeds_file.read_text(encoding="utf-8")) == {
+        assert orjson.loads(speeds_file.read_bytes()) == {
             "zlib": {"comp_mb_s": 1.5, "decomp_mb_s": 3.0, "samples": 2}
         }
 
@@ -132,6 +132,6 @@ class TestUpdateFromBenchmarks:
 
         update_from_benchmarks([timed_result("zlib", 1.0, 0.5)])
 
-        assert json.loads(speeds_file.read_text(encoding="utf-8")) == {
+        assert orjson.loads(speeds_file.read_bytes()) == {
             "zlib": {"comp_mb_s": 2.0, "decomp_mb_s": 3.0, "samples": 2}
         }

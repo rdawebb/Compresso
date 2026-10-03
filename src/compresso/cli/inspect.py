@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import stat
 import time
 from pathlib import Path
 from typing import Annotated
+
+import orjson
 
 from .._core import detect_format
 from ..frontend.archive_api import ArchiveEntry
@@ -106,7 +107,7 @@ def _inspect_archive(file: Path, output_json: bool, show_entries: bool) -> None:
                 }
                 for entry in plan.entries
             ]
-        print(json.dumps(obj=data, indent=2))
+        print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
         return
 
     lines: list[str] = [
@@ -177,7 +178,7 @@ def inspect(
                 "estimated_decomp_s": result.estimated_decomp_s,
                 "reason": result.reason,
             }
-            print(json.dumps(obj=data, indent=2))
+            print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
             return
 
         print(f"File: {result.path}\n")

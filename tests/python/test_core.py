@@ -1,7 +1,6 @@
 """Tests for the core compression/decompression functionality."""
 
 import io
-import json
 import logging
 import os
 import stat
@@ -12,6 +11,7 @@ import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
+import orjson
 import pytest
 
 from compresso import (
@@ -562,12 +562,13 @@ class TestArchiveErrorTypes:
 # Runs in a child process: a FIFO opened for reading blocks with the GIL held,
 # so a regression would hang the test worker rather than fail
 _ARCHIVE_AND_LIST = """
-import json, logging, sys
+import logging, sys
+import orjson
 logging.basicConfig(format="%(levelname)s %(message)s")
 from compresso import _core
 output, fmt, *inputs = sys.argv[1:]
 _core.create_archive(output, fmt, inputs)
-print(json.dumps([e["path"] for e in _core.list_archive_contents(output)]))
+sys.stdout.buffer.write(orjson.dumps([e["path"] for e in _core.list_archive_contents(output)]))
 """
 
 
@@ -595,7 +596,7 @@ class TestArchiveSkipsSpecialFiles:
         )
 
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout) == ["tree/", "tree/a.txt"]
+        assert orjson.loads(result.stdout) == ["tree/", "tree/a.txt"]
         for skipped in (tree / "pipe", temp_dir / "named_pipe"):
             assert f"WARNING Skipped {skipped}:" in result.stderr
 

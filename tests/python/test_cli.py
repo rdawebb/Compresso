@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gzip
-import json
 import os
 import subprocess
 import sys
@@ -13,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import orjson
 import pytest
 from typer.testing import CliRunner, Result
 
@@ -609,7 +609,7 @@ class TestInspectAndList:
 
         result = invoke("inspect", archive, "--json")
 
-        assert json.loads(result.output)["is_compresso"] is True
+        assert orjson.loads(result.output)["is_compresso"] is True
 
     def test_runs_as_a_module(self) -> None:
         """Test that `python -m compresso.cli` works, which a package needs __main__ for."""
@@ -648,7 +648,7 @@ class TestInspectAndList:
         """Test that --json without --entries has no entries key."""
         result = invoke("inspect", make_archive("zip"), "--json")
 
-        data = json.loads(result.output)
+        data = orjson.loads(result.output)
         assert data["is_archive"] is True
         assert data["entry_count"] == 4
         assert "entries" not in data
@@ -667,7 +667,7 @@ class TestInspectAndList:
         """Test that --entries --json includes a populated entries list."""
         result = invoke("inspect", make_archive("zip"), "--entries", "--json")
 
-        data = json.loads(result.output)
+        data = orjson.loads(result.output)
         assert len(data["entries"]) == 4
         assert any("f0.bin" in entry["path"] for entry in data["entries"])
 
