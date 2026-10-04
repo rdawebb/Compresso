@@ -1,8 +1,8 @@
 #define PY_SSIZE_T_CLEAN
 #include "../codec/codec.h"
-#include "../magics.h"
 #include "../common.h"
 #include "../fsutil.h"
+#include "../magics.h"
 #include "../standalone.h"
 #include <Python.h>
 #include <stdio.h>
@@ -50,15 +50,15 @@ static int gzip_check_header(const char *path) {
   return 0;
 }
 
-static int gzip_compress_file(const char *input_path, const char *output_path,
+static int gzip_compress_file(const char *input_path, const OutputTarget *out,
                               int level, CoreContext *ctx) {
   CodecParams params = {
       .level = level, .wrap = CODEC_WRAP_GZIP, .label = "gzip"};
-  return codec_run_file(codec_zlib_ops(), &params, 0, input_path, output_path,
-                        ctx, "gzip compression failed");
+  return codec_run_file(codec_zlib_ops(), &params, 0, input_path, out, ctx,
+                        "gzip compression failed");
 }
 
-static int gzip_decompress_file(const char *input_path, const char *output_path,
+static int gzip_decompress_file(const char *input_path, const OutputTarget *out,
                                 CoreContext *ctx) {
   if (gzip_check_header(input_path) != 0) {
     return -1;
@@ -70,8 +70,8 @@ static int gzip_decompress_file(const char *input_path, const char *output_path,
                         .concatenated = 1,
                         .ignore_trailing = 1,
                         .label = "gzip"};
-  return codec_run_file(codec_zlib_ops(), &params, 1, input_path, output_path,
-                        ctx, "gzip decompression failed");
+  return codec_run_file(codec_zlib_ops(), &params, 1, input_path, out, ctx,
+                        "gzip decompression failed");
 }
 
 static char *gzip_get_original_name(const char *compressed_path) {

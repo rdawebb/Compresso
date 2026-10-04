@@ -130,9 +130,10 @@ void test_round_trip(int index) {
   snprintf(out, sizeof(out), "tmp_%s_rt.out", fmt->name);
 
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      0, fmt->compress_file(TEST_INPUT, comp, 6, NULL), fmt->name);
-  TEST_ASSERT_EQUAL_INT_MESSAGE(0, fmt->decompress_file(comp, out, NULL),
-                                fmt->name);
+      0, fmt->compress_file(TEST_INPUT, OVERWRITE_TO(comp), 6, NULL),
+      fmt->name);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(
+      0, fmt->decompress_file(comp, OVERWRITE_TO(out), NULL), fmt->name);
   TEST_ASSERT_TRUE_MESSAGE(files_equal(TEST_INPUT, out), fmt->name);
 
   remove(comp);
@@ -162,13 +163,14 @@ void test_decodes_concatenated_streams(int index) {
   snprintf(out, sizeof(out), "tmp_%s_cat.out", fmt->name);
 
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      0, fmt->compress_file(TEST_INPUT, comp, 6, NULL), fmt->name);
+      0, fmt->compress_file(TEST_INPUT, OVERWRITE_TO(comp), 6, NULL),
+      fmt->name);
   remove(both);
   append_file(both, comp);
   append_file(both, comp);
 
-  TEST_ASSERT_EQUAL_INT_MESSAGE(0, fmt->decompress_file(both, out, NULL),
-                                fmt->name);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(
+      0, fmt->decompress_file(both, OVERWRITE_TO(out), NULL), fmt->name);
   TEST_ASSERT_EQUAL_INT_MESSAGE(2 * file_size(TEST_INPUT), file_size(out),
                                 fmt->name);
 
@@ -185,7 +187,8 @@ void test_detects_corruption(int index) {
   snprintf(out, sizeof(out), "tmp_%s_cx.out", fmt->name);
 
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      0, fmt->compress_file(TEST_INPUT, comp, 6, NULL), fmt->name);
+      0, fmt->compress_file(TEST_INPUT, OVERWRITE_TO(comp), 6, NULL),
+      fmt->name);
 
   // Flip a byte in the middle of the compressed payload
   FILE *f = fopen(comp, "rb+");
@@ -199,8 +202,8 @@ void test_detects_corruption(int index) {
   fclose(f);
 
   // Decompression must fail (CRC/checksum or structural error)
-  TEST_ASSERT_EQUAL_INT_MESSAGE(-1, fmt->decompress_file(comp, out, NULL),
-                                fmt->name);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(
+      -1, fmt->decompress_file(comp, OVERWRITE_TO(out), NULL), fmt->name);
   TEST_ASSERT_TRUE_MESSAGE(PyErr_ExceptionMatches(comp_CorruptDataError),
                            fmt->name);
 

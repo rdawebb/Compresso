@@ -5,6 +5,7 @@
 // the `.comp` header, `standalone/*.c` in each real-world container
 
 #include "../context.h"
+#include "../fsutil.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -85,11 +86,11 @@ typedef struct CodecOps {
 int codec_run_stream(const CodecOps *ops, const CodecParams *params,
                      int decompress, FILE *src, FILE *dst, CoreContext *ctx);
 
-// codec_run_stream against two paths, closing and (on failure) unlinking
-// through codec_finish_file, to which `failure_message` is passed
+// codec_run_stream from a path into `out`, through output_check, output_open
+// and output_finish, to which `failure_message` is passed
 int codec_run_file(const CodecOps *ops, const CodecParams *params,
                    int decompress, const char *input_path,
-                   const char *output_path, CoreContext *ctx,
+                   const OutputTarget *out, CoreContext *ctx,
                    const char *failure_message);
 
 // ---- Engines ----

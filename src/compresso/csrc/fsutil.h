@@ -127,6 +127,15 @@ int fs_resolve_conflict(const char *path, int overwrite_existing,
 int fs_commit_temp(const char *temp, const char *dst, int overwrite_existing,
                    char *actual, size_t actual_size);
 
+// A file output, written to a temp beside `path` and committed on success
+typedef struct {
+  const char *path;
+  int overwrite; // The 0-3 scheme above
+  char *actual;  // Optional; receives the path written, or skipped
+  size_t actual_size;
+  int owner_only; // 0600, for an intermediate that holds a whole archive
+} OutputTarget;
+
 // Apply POSIX permission bits to an existing path; on Windows only the
 // read-only bit is honoured
 int fs_chmod(const char *path, uint32_t mode);

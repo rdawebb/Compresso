@@ -4,6 +4,7 @@
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
 #include "context.h"
+#include "fsutil.h"
 #include "levels.h"
 #include <Python.h>
 #include <stddef.h>
@@ -83,6 +84,24 @@ static inline uint64_t read_le64(const uint8_t *buf) {
 // OSError when it was 0 but the output couldn't be flushed or closed
 int codec_finish_file(int err, FILE *input, FILE *output,
                       const char *output_path, const char *failure_message);
+
+// ---- Outputs ----
+// Every file output is written to a temp beside its path and committed only on
+// success, so a failure never touches an existing file
+
+// Applies `out`'s scheme before any work: an early ERROR or SKIP, and refuses
+// to OVERWRITE `src_path` itself; returns 0 to proceed, 1 to skip (`actual`
+// filled), or -1 with an exception set
+int output_check(const char *src_path, const OutputTarget *out);
+
+// Opens the temp file for `out` into `temp` (at least FS_PATH_MAX bytes);
+// NULL with an exception set
+FILE *output_open(const OutputTarget *out, char *temp);
+
+// codec_finish_file on the temp, then commits it under `out`'s scheme, filling
+// `actual`; the temp never survives; `output` may be NULL if never opened
+int output_finish(int err, FILE *input, FILE *output, const char *temp,
+                  const OutputTarget *out, const char *failure_message);
 
 // ---- Header ----
 

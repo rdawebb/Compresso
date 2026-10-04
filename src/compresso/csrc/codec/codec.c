@@ -238,8 +238,13 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
 
 int codec_run_file(const CodecOps *ops, const CodecParams *params,
                    int decompress, const char *input_path,
-                   const char *output_path, CoreContext *ctx,
+                   const OutputTarget *out, CoreContext *ctx,
                    const char *failure_message) {
+  int checked = output_check(input_path, out);
+  if (checked != 0) {
+    return checked < 0 ? -1 : 0;
+  }
+
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
@@ -248,14 +253,14 @@ int codec_run_file(const CodecOps *ops, const CodecParams *params,
 
   ctx_begin_stage_stream(ctx, input);
 
-  FILE *output = fs_fopen(output_path, "wb");
+  char temp[FS_PATH_MAX];
+  FILE *output = output_open(out, temp);
   if (!output) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_path);
     fclose(input);
     return -1;
   }
 
   int err = codec_run_stream(ops, params, decompress, input, output, ctx);
 
-  return codec_finish_file(err, input, output, output_path, failure_message);
+  return output_finish(err, input, output, temp, out, failure_message);
 }

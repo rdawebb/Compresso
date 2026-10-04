@@ -209,8 +209,8 @@ void tearDown(void) {
 // Runs the driver over `input_path` with `level` selecting the stub's mode
 static int run_stub(int level, const char *input_path) {
   CodecParams params = {.level = level};
-  return codec_run_file(&stub_ops, &params, 0, input_path, TMP_OUT, &ctx,
-                        "stub run failed");
+  return codec_run_file(&stub_ops, &params, 0, input_path,
+                        OVERWRITE_TO(TMP_OUT), &ctx, "stub run failed");
 }
 
 // As run_stub, but against the stream entry point with a reporting interval
@@ -311,7 +311,8 @@ void test_driver_blames_the_input_when_the_engine_does(void) {
   CodecParams params = {.level = STUB_FAIL_PROCESS};
 
   TEST_ASSERT_EQUAL_INT(-1, codec_run_file(&stub_ops, &params, 1, TEST_INPUT,
-                                           TMP_OUT, &ctx, "stub run failed"));
+                                           OVERWRITE_TO(TMP_OUT), &ctx,
+                                           "stub run failed"));
   TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
 }
 
@@ -330,7 +331,8 @@ void test_driver_prefers_the_label_over_the_codec_name(void) {
   CodecParams params = {.level = STUB_FAIL_PROCESS, .label = "container"};
 
   TEST_ASSERT_EQUAL_INT(-1, codec_run_file(&stub_ops, &params, 0, TEST_INPUT,
-                                           TMP_OUT, &ctx, "stub run failed"));
+                                           OVERWRITE_TO(TMP_OUT), &ctx,
+                                           "stub run failed"));
   TEST_ASSERT_EQUAL_STRING("container", stub_last_label);
 }
 
@@ -355,8 +357,8 @@ void test_driver_reports_a_missing_input(void) {
 static int run_members(const char *input, int concatenated) {
   write_file(TMP_IN, input);
   CodecParams params = {.level = STUB_MEMBERS, .concatenated = concatenated};
-  return codec_run_file(&stub_ops, &params, 1, TMP_IN, TMP_OUT, &ctx,
-                        "stub run failed");
+  return codec_run_file(&stub_ops, &params, 1, TMP_IN, OVERWRITE_TO(TMP_OUT),
+                        &ctx, "stub run failed");
 }
 
 // Whether the pending exception's message contains `needle`; leaves it set
@@ -450,8 +452,8 @@ static int run_members_ignoring(const char *input, int concatenated) {
   CodecParams params = {.level = STUB_MEMBERS,
                         .concatenated = concatenated,
                         .ignore_trailing = 1};
-  return codec_run_file(&stub_ops, &params, 1, TMP_IN, TMP_OUT, &ctx,
-                        "stub run failed");
+  return codec_run_file(&stub_ops, &params, 1, TMP_IN, OVERWRITE_TO(TMP_OUT),
+                        &ctx, "stub run failed");
 }
 
 // `action` is a warnings.simplefilter action, e.g. "error" to catch a warning
@@ -500,7 +502,8 @@ void test_driver_tolerates_a_null_context(void) {
   CodecParams params = {.level = STUB_COPY};
 
   TEST_ASSERT_EQUAL_INT(0, codec_run_file(&stub_ops, &params, 0, TEST_INPUT,
-                                          TMP_OUT, NULL, "stub run failed"));
+                                          OVERWRITE_TO(TMP_OUT), NULL,
+                                          "stub run failed"));
   TEST_ASSERT_TRUE(files_equal(TEST_INPUT, TMP_OUT));
 }
 

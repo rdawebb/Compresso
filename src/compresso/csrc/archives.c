@@ -550,26 +550,13 @@ static const CArchive *archive_for_pipeline(const CompressionPipeline *p) {
 
 // Create a temp file in final_path's directory, which is known writable
 static char *make_temp_path(const char *final_path) {
-  static const char SUFFIX[] = ".compresso-XXXXXX";
-  const char *slash = fs_last_sep(final_path);
-  size_t dir_len = slash ? (size_t)(slash - final_path + 1) : 0;
-  size_t len = dir_len + sizeof(SUFFIX); // sizeof includes the NUL
-
-  char *tmpl = safe_malloc(len);
+  char *tmpl = safe_malloc(FS_PATH_MAX);
   if (!tmpl)
     return NULL;
-  if (dir_len)
-    memcpy(tmpl, final_path, dir_len);
-  memcpy(tmpl + dir_len, SUFFIX, sizeof(SUFFIX));
 
-  FILE *f = fs_mkstemp(tmpl);
-  // Owner-only while it is empty, as it holds a whole intermediate archive
-  if (!f || fs_chmod(tmpl, 0600) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, tmpl);
-    if (f) {
-      fclose(f);
-      fs_unlink(tmpl);
-    }
+  OutputTarget out = {.path = final_path, .owner_only = 1};
+  FILE *f = output_open(&out, tmpl);
+  if (!f) {
     free(tmpl);
     return NULL;
   }
@@ -756,7 +743,8 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
 
   if (ret == 0 && pipeline->codec != FORMAT_UNKNOWN) {
     const StandaloneFormat *codec = find_standalone_format(pipeline->codec);
-    ret = codec->compress_file(tmp_path, output_path, level, ctx);
+    OutputTarget out = {.path = output_path, .overwrite = 2};
+    ret = codec->compress_file(tmp_path, &out, level, ctx);
   }
 
   if (tmp_path) {
@@ -1417,7 +1405,8 @@ int extract_archive(const char *archive_path, const char *output_dir,
     fs_stat st;
     ctx_begin_job(ctx, fs_stat_path(archive_path, &st) == 0 ? st.size : 0);
 
-    int codec_ret = codec->decompress_file(archive_path, tmp_path, ctx);
+    OutputTarget out = {.path = tmp_path, .overwrite = 2, .owner_only = 1};
+    int codec_ret = codec->decompress_file(archive_path, &out, ctx);
     if (codec_ret != 0) {
       fs_unlink(tmp_path);
       free(tmp_path);
@@ -1609,7 +1598,8 @@ PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
     tmp_path = make_temp_path(archive_path);
     if (!tmp_path)
       return NULL;
-    if (codec->decompress_file(archive_path, tmp_path, ctx) != 0) {
+    OutputTarget out = {.path = tmp_path, .overwrite = 2, .owner_only = 1};
+    if (codec->decompress_file(archive_path, &out, ctx) != 0) {
       fs_unlink(tmp_path);
       free(tmp_path);
       return NULL;

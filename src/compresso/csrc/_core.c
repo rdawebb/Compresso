@@ -694,9 +694,11 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
   }
 
   char actual_path[FS_PATH_MAX];
-  int rc = compress_standalone_file(fmt, input_path, output_path,
-                                    compression_level, overwrite_existing,
-                                    actual_path, sizeof(actual_path), &ctx);
+  OutputTarget out = {.path = output_path,
+                      .overwrite = overwrite_existing,
+                      .actual = actual_path,
+                      .actual_size = sizeof(actual_path)};
+  int rc = fmt->compress_file(input_path, &out, compression_level, &ctx);
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
   if (rc != 0) {
@@ -774,7 +776,9 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
     goto fail;
   }
 
-  int rc = fmt->decompress_file(input_path, output_path, &ctx);
+  // OVERWRITE, as decompression has no conflict scheme of its own yet
+  OutputTarget out = {.path = output_path, .overwrite = 2};
+  int rc = fmt->decompress_file(input_path, &out, &ctx);
   if (rc != 0) {
     set_cancelled_error(rc);
     goto fail; // Error already set

@@ -1,6 +1,5 @@
 """Tests for the core compression/decompression functionality."""
 
-import errno
 import io
 import logging
 import os
@@ -922,31 +921,49 @@ class TestHardlinkExtraction:
         assert os.path.samefile(renamed / "a", extra)
 
 
-# Every write fails with ENOSPC, but only once the stream's buffer is flushed
-@pytest.mark.skipif(not Path("/dev/full").exists(), reason="needs /dev/full")
-class TestFullDisk:
-    """Test that output that never reached the disk isn't reported as written."""
+def _compress_to(fmt: str, src: Path, dst: Path, overwrite: int = 0) -> None:
+    """Compress `src` to `dst` as a .comp or a standalone gzip file."""
+    if fmt == "comp":
+        compress_file(str(src), str(dst), "zlib", "", -1, overwrite=overwrite)
+    else:
+        _core.compress_standalone(str(src), str(dst), "gzip", overwrite=overwrite)
+
+
+class TestOutputsCommitOnlyOnSuccess:
+    """Test that outputs go through a temp file, so a failure leaves no trace."""
 
     @pytest.mark.parametrize("fmt", ["comp", "gz"])
-    def test_small_output_to_a_full_disk_fails(
-        self, sample_text_file: Path, temp_dir: Path, fmt: str
+    def test_failed_decompression_keeps_the_existing_file(
+        self, temp_dir: Path, fmt: str
     ) -> None:
-        """Test that the error at close, not just at write, is reported."""
-        # A link, so removing the failed output can't remove /dev/full itself
-        dest = temp_dir / f"full.{fmt}"
-        dest.symlink_to("/dev/full")
+        """Test that corrupt input onto an existing file neither truncates nor removes it."""
+        source = temp_dir / "source.bin"
+        source.write_bytes(os.urandom(64 * 1024))
+        compressed = temp_dir / f"source.{fmt}"
+        _compress_to(fmt, source, compressed)
+        data = compressed.read_bytes()
+        compressed.write_bytes(data[: len(data) // 2])
 
-        with pytest.raises(OSError) as info:
-            if fmt == "comp":
-                compress_file(
-                    str(sample_text_file), str(dest), "zlib", "", -1, overwrite=2
-                )
-            else:
-                _core.compress_standalone(
-                    str(sample_text_file), str(dest), "gzip", overwrite=2
-                )
+        existing = temp_dir / "existing.bin"
+        existing.write_bytes(b"keep me")
 
-        assert info.value.errno == errno.ENOSPC
+        with pytest.raises(CorruptDataError):
+            decompress_file(str(compressed), str(existing), "")
+
+        assert existing.read_bytes() == b"keep me"
+        assert not list(temp_dir.glob(".compresso-*"))
+
+    @pytest.mark.parametrize("fmt", ["comp", "gz"])
+    def test_overwriting_the_input_itself_is_refused(
+        self, sample_text_file: Path, fmt: str
+    ) -> None:
+        """Test that an output that is the input file is refused before any work."""
+        original = sample_text_file.read_bytes()
+
+        with pytest.raises(ValueError, match="same file"):
+            _compress_to(fmt, sample_text_file, sample_text_file, overwrite=2)
+
+        assert sample_text_file.read_bytes() == original
 
 
 class TestStrategyNames:

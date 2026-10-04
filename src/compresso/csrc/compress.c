@@ -4,11 +4,11 @@
 #include "fsutil.h"
 #include "standalone.h"
 #include <Python.h>
-#include <errno.h>
 #include <string.h>
 
-static int decompress_compresso_file(const char *src_path, const char *dst_path,
-                                     AlgoID algo, CoreContext *ctx);
+static int decompress_compresso_file(const char *src_path,
+                                     const OutputTarget *out, AlgoID algo,
+                                     CoreContext *ctx);
 
 // ---- Public API ----
 
@@ -18,62 +18,39 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
                   CoreContext *ctx) {
   init_backends();
 
+  OutputTarget out = {.path = dst_path,
+                      .overwrite = overwrite_existing,
+                      .actual = out_actual_path,
+                      .actual_size = out_actual_path_size};
+  int checked = output_check(src_path, &out);
+  if (checked != 0) {
+    return checked < 0 ? -1 : 0;
+  }
+
   const CBackend *backend = NULL;
-
-  int return_code = 0;
-  FILE *src = NULL;
-  FILE *dst = NULL;
-
-  // Resolved before anything is opened, so ERROR/SKIP never touch the
-  // existing destination; must `return` directly rather than `goto done`,
-  // since codec_finish_file() below unconditionally unlinks dst_path on
-  // failure, which would delete the file these modes are protecting
-  char resolved_dst[FS_PATH_MAX];
-  int resolve_rc = fs_resolve_conflict(dst_path, overwrite_existing,
-                                       resolved_dst, sizeof(resolved_dst));
-  if (resolve_rc < 0) {
-    if (errno == ENAMETOOLONG) {
-      PyErr_Format(PyExc_ValueError, "Output path too long: %s", dst_path);
-    } else {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, dst_path);
-    }
-    return -1;
-  }
-  if (resolve_rc > 0 && out_actual_path) { // SKIP: leave dst_path untouched
-    snprintf(out_actual_path, out_actual_path_size, "%s", dst_path);
-    return 0;
-  }
-  dst_path = resolved_dst;
-
   if (algo != ALGO_NONE) {
     backend = find_backend_by_id(algo);
     if (!backend) {
       PyErr_SetString(PyExc_ValueError,
                       "Specified compression algorithm not available");
-      return_code = -1;
-      goto done;
+      return -1;
     }
   } else {
     backend = choose_backend(strategy);
     if (!backend) {
       PyErr_SetString(comp_Error, "No available compression backend found");
-      return_code = -1;
-      goto done;
+      return -1;
     }
   }
 
-  src = fs_fopen(src_path, "rb");
+  int return_code = 0;
+  FILE *dst = NULL;
+  char temp[FS_PATH_MAX] = "";
+
+  FILE *src = fs_fopen(src_path, "rb");
   if (!src) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-    return_code = -1;
-    goto done;
-  }
-
-  dst = fs_fopen(dst_path, "wb");
-  if (!dst) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, dst_path);
-    return_code = -1;
-    goto done;
+    return -1;
   }
 
   int64_t len = fs_stream_size(src);
@@ -84,6 +61,12 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   }
 
   if (validate_size((uint64_t)len, MAX_FILE_SIZE, "Input file size") != 0) {
+    return_code = -1;
+    goto done;
+  }
+
+  dst = output_open(&out, temp);
+  if (!dst) {
     return_code = -1;
     goto done;
   }
@@ -117,11 +100,7 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   }
 
 done:
-  return_code = codec_finish_file(return_code, src, dst, dst_path, NULL);
-  if (return_code == 0 && out_actual_path) {
-    snprintf(out_actual_path, out_actual_path_size, "%s", dst_path);
-  }
-  return return_code;
+  return output_finish(return_code, src, dst, temp, &out, NULL);
 }
 
 int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
@@ -138,10 +117,13 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
     return -1;
   }
 
+  // OVERWRITE, as decompression has no conflict scheme of its own yet
+  OutputTarget out = {.path = dst_path, .overwrite = 2};
+
   // The standalone formats each open and size their own input
   const StandaloneFormat *standalone = find_standalone_format(format);
   if (standalone) {
-    return standalone->decompress_file(src_path, dst_path, ctx);
+    return standalone->decompress_file(src_path, &out, ctx);
   }
 
   if (format_is_archive(format)) {
@@ -151,7 +133,7 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
   }
 
   if (format == FORMAT_COMPRESSO) {
-    return decompress_compresso_file(src_path, dst_path, algo, ctx);
+    return decompress_compresso_file(src_path, &out, algo, ctx);
   }
 
   PyErr_Format(comp_Error, "Unknown or unsupported format: %s",
@@ -159,26 +141,24 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
   return -1;
 }
 
-static int decompress_compresso_file(const char *src_path, const char *dst_path,
-                                     AlgoID algo, CoreContext *ctx) {
+static int decompress_compresso_file(const char *src_path,
+                                     const OutputTarget *out, AlgoID algo,
+                                     CoreContext *ctx) {
   init_backends();
 
-  int return_code = 0;
-  FILE *src = NULL;
-  FILE *dst = NULL;
-
-  src = fs_fopen(src_path, "rb");
-  if (!src) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-    return_code = -1;
-    goto done;
+  int checked = output_check(src_path, out);
+  if (checked != 0) {
+    return checked < 0 ? -1 : 0;
   }
 
-  dst = fs_fopen(dst_path, "wb");
-  if (!dst) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, dst_path);
-    return_code = -1;
-    goto done;
+  int return_code = 0;
+  FILE *dst = NULL;
+  char temp[FS_PATH_MAX] = "";
+
+  FILE *src = fs_fopen(src_path, "rb");
+  if (!src) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
+    return -1;
   }
 
   uint8_t header_buf[C_HEADER_SIZE];
@@ -226,6 +206,13 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
     goto done;
   }
 
+  // Only once the header is known good, so a bad one creates nothing
+  dst = output_open(out, temp);
+  if (!dst) {
+    return_code = -1;
+    goto done;
+  }
+
   // Progress counts input bytes consumed
   ctx_begin_stage_stream(ctx, src);
 
@@ -237,5 +224,5 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
   }
 
 done:
-  return codec_finish_file(return_code, src, dst, dst_path, NULL);
+  return output_finish(return_code, src, dst, temp, out, NULL);
 }

@@ -3,6 +3,7 @@
 
 #include "archives.h" // Format
 #include "context.h"  // CoreContext
+#include "fsutil.h"   // OutputTarget
 #include "levels.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -13,12 +14,14 @@ typedef struct {
   const char *extension; // Primary extension
   LevelRange levels;
 
-  // Compress a file to standalone format; `ctx` is NULL-tolerant
-  int (*compress_file)(const char *input_path, const char *output_path,
+  // Compress a file to standalone format through `out`; `ctx` is
+  // NULL-tolerant; returns 0 (including a SKIP), -1 with an exception set, or
+  // COMP_CANCELLED
+  int (*compress_file)(const char *input_path, const OutputTarget *out,
                        int level, CoreContext *ctx);
 
-  // Decompress a standalone format file
-  int (*decompress_file)(const char *input_path, const char *output_path,
+  // Decompress a standalone format file through `out`
+  int (*decompress_file)(const char *input_path, const OutputTarget *out,
                          CoreContext *ctx);
 
   // Get original filename from compressed file, or NULL if not stored
@@ -28,16 +31,6 @@ typedef struct {
   int (*is_format)(const unsigned char *magic, size_t size);
 
 } StandaloneFormat;
-
-// Compress `input_path` into `output_path` via `fmt`, applying
-// `overwrite_existing` to the destination; on success (including SKIP), copies
-// the path actually written (which RENAME may have changed) into
-// `out_actual_path`; returns 0 on success, -1 on error (PyErr set)
-int compress_standalone_file(const StandaloneFormat *fmt,
-                             const char *input_path, const char *output_path,
-                             int level, int overwrite_existing,
-                             char *out_actual_path, size_t out_actual_path_size,
-                             CoreContext *ctx);
 
 // Get standalone format handlers
 const StandaloneFormat *get_gzip_format(void);

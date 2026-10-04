@@ -225,6 +225,98 @@ int codec_finish_file(int err, FILE *input, FILE *output,
   return err;
 }
 
+static void set_output_error(const char *path) {
+  if (errno == ENAMETOOLONG) {
+    PyErr_Format(PyExc_ValueError, "Output path too long: %s", path);
+  } else {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+  }
+}
+
+static void report_actual(const OutputTarget *out, const char *path) {
+  if (out->actual) {
+    snprintf(out->actual, out->actual_size, "%s", path);
+  }
+}
+
+int output_check(const char *src_path, const OutputTarget *out) {
+  char resolved[FS_PATH_MAX];
+  int rc = fs_resolve_conflict(out->path, out->overwrite, resolved,
+                               sizeof(resolved));
+  if (rc < 0) {
+    set_output_error(out->path);
+    return -1;
+  }
+  if (rc > 0) {
+    report_actual(out, out->path);
+    return 1;
+  }
+
+  // The commit would replace the input with its own output
+  fs_stat src, dst;
+  if (out->overwrite == 2 && fs_stat_path(src_path, &src) == 0 &&
+      fs_stat_path(out->path, &dst) == 0 && fs_same_file(&src, &dst)) {
+    PyErr_Format(PyExc_ValueError, "Input and output are the same file: %s",
+                 out->path);
+    return -1;
+  }
+  return 0;
+}
+
+FILE *output_open(const OutputTarget *out, char *temp) {
+  static const char SUFFIX[] = ".compresso-XXXXXX";
+  const char *slash = fs_last_sep(out->path);
+  size_t dir_len = slash ? (size_t)(slash - out->path + 1) : 0;
+  if (dir_len + sizeof(SUFFIX) > FS_PATH_MAX) {
+    errno = ENAMETOOLONG;
+    set_output_error(out->path);
+    return NULL;
+  }
+  memcpy(temp, out->path, dir_len);
+  memcpy(temp + dir_len, SUFFIX, sizeof(SUFFIX));
+
+  // Made owner-only while still empty
+  FILE *f = fs_mkstemp(temp);
+  if (f && out->owner_only && fs_chmod(temp, 0600) != 0) {
+    int saved = errno;
+    fclose(f);
+    fs_unlink(temp);
+    errno = saved;
+    f = NULL;
+  }
+  if (!f) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, temp);
+  }
+  return f;
+}
+
+int output_finish(int err, FILE *input, FILE *output, const char *temp,
+                  const OutputTarget *out, const char *failure_message) {
+  err = codec_finish_file(err, input, output, output ? temp : NULL,
+                          failure_message);
+  if (err != 0 || !output) {
+    return err;
+  }
+
+  char actual[FS_PATH_MAX];
+  int rc =
+      fs_commit_temp(temp, out->path, out->overwrite, actual, sizeof(actual));
+  if (rc == 0) {
+    report_actual(out, actual);
+    return 0;
+  }
+
+  int saved = errno;
+  fs_unlink(temp);
+  if (rc > 0) { // SKIP, with the destination created since output_check
+    report_actual(out, out->path);
+    return 0;
+  }
+  errno = saved;
+  set_output_error(out->path);
+  return -1;
+}
+
 int ctx_finish(CoreContext *ctx) {
   if (!ctx || !ctx->on_progress) {
     return 0;

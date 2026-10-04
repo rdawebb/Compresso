@@ -3,6 +3,9 @@
 #ifndef FILES_H
 #define FILES_H
 
+// An OVERWRITE target, as the tests write over their own scratch files
+#define OVERWRITE_TO(p) (&(OutputTarget){.path = (p), .overwrite = 2})
+
 // Non-zero if both files open and hold the same bytes
 int files_equal(const char *a, const char *b);
 
