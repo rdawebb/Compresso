@@ -4,7 +4,6 @@
 #include "../standalone.h"
 #include <Python.h>
 #include <errno.h>
-#include <string.h>
 
 const StandaloneFormat *find_standalone_format(Format format) {
   switch (format) {
@@ -39,14 +38,8 @@ int compress_standalone_file(const StandaloneFormat *fmt,
     }
     return -1;
   }
-  if (rc > 0) { // SKIP: leave output_path untouched
-    if (out_actual_path) {
-      size_t len = strlen(output_path);
-      if (len >= out_actual_path_size)
-        len = out_actual_path_size - 1;
-      memcpy(out_actual_path, output_path, len);
-      out_actual_path[len] = '\0';
-    }
+  if (rc > 0 && out_actual_path) { // SKIP: leave output_path untouched
+    snprintf(out_actual_path, out_actual_path_size, "%s", output_path);
     return 0;
   }
 
@@ -54,11 +47,7 @@ int compress_standalone_file(const StandaloneFormat *fmt,
     return -1;
 
   if (out_actual_path) {
-    size_t len = strlen(resolved);
-    if (len >= out_actual_path_size)
-      len = out_actual_path_size - 1;
-    memcpy(out_actual_path, resolved, len);
-    out_actual_path[len] = '\0';
+    snprintf(out_actual_path, out_actual_path_size, "%s", resolved);
   }
   return 0;
 }

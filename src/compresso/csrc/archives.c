@@ -692,14 +692,8 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   int resolve_ret = fs_resolve_conflict(output_path, overwrite_existing,
                                         resolved_path, sizeof(resolved_path));
   if (resolve_ret != 0) {
-    if (resolve_ret > 0) { // SKIP is a successful no-op
-      if (out_actual_path) {
-        size_t len = strlen(resolved_path);
-        if (len >= out_actual_path_size)
-          len = out_actual_path_size - 1;
-        memcpy(out_actual_path, resolved_path, len);
-        out_actual_path[len] = '\0';
-      }
+    if (resolve_ret > 0 && out_actual_path) { // SKIP is a successful no-op
+      snprintf(out_actual_path, out_actual_path_size, "%s", resolved_path);
       return 0;
     }
     if (errno == ENAMETOOLONG) {
@@ -770,11 +764,7 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   }
 
   if (ret == 0 && out_actual_path) {
-    size_t len = strlen(output_path);
-    if (len >= out_actual_path_size)
-      len = out_actual_path_size - 1;
-    memcpy(out_actual_path, output_path, len);
-    out_actual_path[len] = '\0';
+    snprintf(out_actual_path, out_actual_path_size, "%s", output_path);
   }
 
   return ret;

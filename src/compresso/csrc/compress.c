@@ -39,14 +39,8 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
     }
     return -1;
   }
-  if (resolve_rc > 0) { // SKIP: leave dst_path untouched
-    if (out_actual_path) {
-      size_t len = strlen(dst_path);
-      if (len >= out_actual_path_size)
-        len = out_actual_path_size - 1;
-      memcpy(out_actual_path, dst_path, len);
-      out_actual_path[len] = '\0';
-    }
+  if (resolve_rc > 0 && out_actual_path) { // SKIP: leave dst_path untouched
+    snprintf(out_actual_path, out_actual_path_size, "%s", dst_path);
     return 0;
   }
   dst_path = resolved_dst;
@@ -82,15 +76,7 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
     goto done;
   }
 
-#if defined(_WIN32) || defined(_WIN64)
-
-  if (_fseeki64(src, 0, SEEK_END) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-    return_code = -1;
-    goto done;
-  }
-
-  __int64 len = _ftelli64(src);
+  int64_t len = fs_stream_size(src);
   if (len < 0) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
     return_code = -1;
@@ -101,40 +87,6 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
     return_code = -1;
     goto done;
   }
-
-  if (_fseeki64(src, 0, SEEK_SET) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-    return_code = -1;
-    goto done;
-  }
-
-#else
-
-  if (fseeko(src, 0, SEEK_END) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-    return_code = -1;
-    goto done;
-  }
-
-  off_t len = ftello(src);
-  if (len < 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-    return_code = -1;
-    goto done;
-  }
-
-  if (validate_size((uint64_t)len, MAX_FILE_SIZE, "Input file size") != 0) {
-    return_code = -1;
-    goto done;
-  }
-
-  if (fseeko(src, 0, SEEK_SET) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-    return_code = -1;
-    goto done;
-  }
-
-#endif
 
   CHeader header;
   memcpy(header.magic, C_MAGIC, C_MAGIC_LEN);
@@ -154,7 +106,7 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
     goto done;
   }
 
-  // src is rewound to the start, so the stage covers the whole input
+  // fs_stream_size left src at the start, so the stage covers the whole input
   ctx_begin_stage_stream(ctx, src);
 
   return_code = backend->compress_stream(src, dst, level, ctx);
@@ -167,11 +119,7 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
 done:
   return_code = codec_finish_file(return_code, src, dst, dst_path, NULL);
   if (return_code == 0 && out_actual_path) {
-    size_t path_len = strlen(dst_path);
-    if (path_len >= out_actual_path_size)
-      path_len = out_actual_path_size - 1;
-    memcpy(out_actual_path, dst_path, path_len);
-    out_actual_path[path_len] = '\0';
+    snprintf(out_actual_path, out_actual_path_size, "%s", dst_path);
   }
   return return_code;
 }
