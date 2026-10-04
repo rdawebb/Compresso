@@ -226,6 +226,32 @@ void test_decompress_rejects_an_unsupported_version(void) {
   remove("tmp_cmp_v2.comp");
 }
 
+void test_decompress_decodes_with_the_header_algo(void) {
+  const char *comp = "tmp_cmp_algo_ok.comp";
+  const char *out = "tmp_cmp_algo_ok.out";
+  TEST_ASSERT_EQUAL_INT(0, compress(TEST_INPUT, comp, ALGO_ZSTD, -1,
+                                    OW_OVERWRITE, NULL, 0));
+
+  // Naming the right algorithm is allowed, as a check
+  TEST_ASSERT_EQUAL_INT(0, decompress_file(comp, out, ALGO_ZSTD, NULL));
+  TEST_ASSERT_TRUE(files_equal(TEST_INPUT, out));
+
+  remove(comp);
+  remove(out);
+}
+
+void test_decompress_refuses_an_algo_the_header_contradicts(void) {
+  const char *comp = "tmp_cmp_algo_bad.comp";
+  const char *out = "tmp_cmp_algo_bad.out";
+  TEST_ASSERT_EQUAL_INT(0, compress(TEST_INPUT, comp, ALGO_ZSTD, -1,
+                                    OW_OVERWRITE, NULL, 0));
+
+  assert_error(decompress_file(comp, out, ALGO_LZ4, NULL), PyExc_ValueError);
+  TEST_ASSERT_EQUAL_INT(-1, file_size(out));
+
+  remove(comp);
+}
+
 void test_decompress_rejects_an_unknown_header_algo(void) {
   CHeader header = valid_header();
   header.algo = 99;

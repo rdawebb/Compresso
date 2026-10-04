@@ -255,25 +255,22 @@ static int decompress_compresso_file(const char *src_path, const char *dst_path,
     goto done;
   }
 
-  const CBackend *backend = NULL;
-
-  if (algo != ALGO_NONE) {
-    backend = find_backend_by_id(algo);
-    if (!backend) {
-      PyErr_SetString(comp_BackendError,
-                      "Specified compression algorithm not available");
-      return_code = -1;
-      goto done;
-    }
-  } else {
-    backend = find_backend_by_id(header.algo);
-    if (!backend) {
-      PyErr_SetString(comp_HeaderError,
-                      "Compression algorithm from file not available");
-      return_code = -1;
-      goto done;
-    }
+  const CBackend *backend = find_backend_by_id(header.algo);
+  if (!backend) {
+    PyErr_SetString(comp_HeaderError,
+                    "Compression algorithm from file not available");
+    return_code = -1;
+    goto done;
   }
+  if (algo != ALGO_NONE && algo != header.algo) {
+    const CBackend *requested = find_backend_by_id(algo);
+    PyErr_Format(PyExc_ValueError,
+                 "File was compressed with %s, not the requested %s",
+                 backend->name, requested ? requested->name : "algorithm");
+    return_code = -1;
+    goto done;
+  }
+
   uint64_t orig_size = header.orig_size;
   if (validate_size(orig_size, MAX_DECOMPRESSED_SIZE,
                     "Original file size in header") != 0) {
