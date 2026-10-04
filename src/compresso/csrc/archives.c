@@ -562,11 +562,18 @@ static char *make_temp_path(const char *final_path) {
     memcpy(tmpl, final_path, dir_len);
   memcpy(tmpl + dir_len, SUFFIX, sizeof(SUFFIX));
 
-  if (fs_mkstemp(tmpl) != 0) {
+  FILE *f = fs_mkstemp(tmpl);
+  // Owner-only while it is empty, as it holds a whole intermediate archive
+  if (!f || fs_chmod(tmpl, 0600) != 0) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, tmpl);
+    if (f) {
+      fclose(f);
+      fs_unlink(tmpl);
+    }
     free(tmpl);
     return NULL;
   }
+  fclose(f);
   return tmpl;
 }
 

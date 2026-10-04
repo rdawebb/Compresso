@@ -91,8 +91,10 @@ int fs_set_mtime(const char *path, int64_t mtime);
 // symlinks and Windows reparse points; fails if `path` does not exist
 int fs_realpath(const char *path, char *resolved);
 
-// Create a unique temp file from a mkstemp-style template ending in "XXXXXX"
-int fs_mkstemp(char *template_path);
+// Create a unique temp file from a mkstemp-style template ending in "XXXXXX",
+// returning it open for writing; its mode is the one fopen(path, "wb") would
+// give, so it can become the output as is; NULL with errno set on failure
+FILE *fs_mkstemp(char *template_path);
 
 // Create `path` and any missing parents, applying `mode` to the final
 // component only; splits on either separator on Windows
@@ -112,11 +114,18 @@ int fs_conflict_path(const char *path, int n, char *out, size_t out_size);
 
 // Applies an overwrite scheme (0=error, 1=skip, 2=overwrite, 3=rename) to
 // `path`, writing the safe path into `resolved` (at least FS_PATH_MAX bytes);
-// only stat(2)s, never touches the dest; not race-free as a codec pipeline has
-// no atomic point to open against until its output is fully produced; returns 0
-// to proceed with `resolved`, 1 to skip, or -1/errno
+// only stat(2)s, never touches the dest, so it is an early check rather than a
+// guarantee; fs_commit_temp enforces the scheme; returns 0 to proceed with
+// `resolved`, 1 to skip, or -1/errno
 int fs_resolve_conflict(const char *path, int overwrite_existing,
                         char *resolved, size_t resolved_size);
+
+// Move closed `temp` to `dst` under the same scheme with no race window: only
+// OVERWRITE replaces, RENAME retries conflict names with a no-replace move;
+// `actual` (at least FS_PATH_MAX bytes) gets the path used; returns 0 if moved,
+// 1 if skipped, or -1/errno (EEXIST for ERROR); `temp` stays unless moved
+int fs_commit_temp(const char *temp, const char *dst, int overwrite_existing,
+                   char *actual, size_t actual_size);
 
 // Apply POSIX permission bits to an existing path; on Windows only the
 // read-only bit is honoured
