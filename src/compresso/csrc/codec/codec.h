@@ -43,6 +43,7 @@ typedef struct {
   int wrap;            // deflate: a CodecWrap
   int concatenated;    // The container allows members back to back
   int ignore_trailing; // Trailing data ends decoding with a TrailingDataWarning
+  int exact_size;      // Decoding must produce exactly orig_size bytes
   uint64_t orig_size;
 
   // Codec's name in an error message; NULL uses CodecOps.name

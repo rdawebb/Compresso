@@ -42,7 +42,7 @@ static int snappy_compress_stream(FILE *src, FILE *dst, int level,
 
   Py_BEGIN_ALLOW_THREADS
 
-      for (;;) {
+  for (;;) {
     size_t nread = fread(input_buffer, 1, SNAPPY_CHUNK, src);
     if (ferror(src)) {
       return_code = -1; // read error
@@ -94,15 +94,13 @@ static int snappy_compress_stream(FILE *src, FILE *dst, int level,
 
   Py_END_ALLOW_THREADS
 
-      free(input_buffer);
+  free(input_buffer);
   free(comp_buffer);
   return return_code;
 }
 
 static int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
                                     CoreContext *ctx) {
-  (void)orig_size; // unused parameter
-
   size_t max_comp_len = snappy_max_compressed_length(SNAPPY_CHUNK);
 
   char *comp_buffer = (char *)safe_malloc(max_comp_len);
@@ -114,10 +112,12 @@ static int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
   }
 
   int return_code = 0;
+  uint64_t total_out = 0;
+  int too_long = 0;
 
   Py_BEGIN_ALLOW_THREADS
 
-      for (;;) {
+  for (;;) {
     unsigned char header[8];
     size_t got = fread(header, 1, 8, src);
 
@@ -168,6 +168,14 @@ static int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
       break;
     }
 
+    // Caught before the write, so a bomb stops at its claimed size
+    if (output_len > orig_size - total_out) {
+      too_long = 1;
+      return_code = -1;
+      break;
+    }
+    total_out += output_len;
+
     if (fwrite(output_buffer, 1, output_len, dst) != output_len ||
         ferror(dst)) {
       return_code = -1; // write error
@@ -177,7 +185,19 @@ static int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
 
   Py_END_ALLOW_THREADS
 
-      free(comp_buffer);
+  if (too_long) {
+    PyErr_Format(comp_CorruptDataError,
+                 "Decoded snappy data exceeds its recorded size of %llu bytes",
+                 (unsigned long long)orig_size);
+  } else if (return_code == 0 && total_out != orig_size) {
+    PyErr_Format(comp_CorruptDataError,
+                 "Decoded snappy data is shorter than its recorded size of "
+                 "%llu bytes",
+                 (unsigned long long)orig_size);
+    return_code = -1;
+  }
+
+  free(comp_buffer);
   free(output_buffer);
   return return_code;
 }

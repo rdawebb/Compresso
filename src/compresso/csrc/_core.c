@@ -19,8 +19,8 @@ PyObject *comp_TrailingDataWarning;
 // A cancellation flag the C loops can poll without holding the GIL
 typedef struct {
   PyObject_HEAD
-      // One-way and a single machine word
-      volatile int flag;
+  // One-way and a single machine word
+  volatile int flag;
 } CancelTokenObject;
 
 static PyObject *cancel_token_cancel(PyObject *self, PyObject *ignored UNUSED) {

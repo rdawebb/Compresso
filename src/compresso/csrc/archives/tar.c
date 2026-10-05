@@ -139,12 +139,13 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
 
     Py_BEGIN_ALLOW_THREADS
 
-        while ((bytes_read = fread(buffer, 1, sizeof(buffer), data)) > 0) {
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), data)) > 0) {
       la_ssize_t bytes_written =
           archive_write_data(writer->archive, buffer, bytes_read);
       if (bytes_written < 0) {
-        Py_BLOCK_THREADS set_tar_error(writer->archive, "Failed to write data",
-                                       writer->output_path, 0);
+        Py_BLOCK_THREADS
+        set_tar_error(writer->archive, "Failed to write data",
+                      writer->output_path, 0);
         archive_entry_free(ae);
         return -1;
       }
@@ -157,7 +158,7 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
 
     Py_END_ALLOW_THREADS
 
-        if (advance != 0) {
+    if (advance != 0) {
       archive_entry_free(ae);
       return advance;
     }
@@ -342,8 +343,8 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
 
   Py_BEGIN_ALLOW_THREADS
 
-      while ((bytes_read = archive_read_data(reader->archive, buffer,
-                                             sizeof(buffer))) > 0) {
+  while ((bytes_read =
+              archive_read_data(reader->archive, buffer, sizeof(buffer))) > 0) {
     // Cap is applied to the bytes produced rather than to the declared size
     if ((uint64_t)bytes_read > max_bytes - total) {
       over_limit = 1;
@@ -352,7 +353,8 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
 
     size_t written = fwrite(buffer, 1, bytes_read, output);
     if (written != (size_t)bytes_read || ferror(output)) {
-      Py_BLOCK_THREADS PyErr_SetFromErrno(PyExc_OSError);
+      Py_BLOCK_THREADS
+      PyErr_SetFromErrno(PyExc_OSError);
       return -1;
     }
     total += (uint64_t)bytes_read;
@@ -365,7 +367,8 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
 
   Py_END_ALLOW_THREADS
 
-      if (bytes_written) *bytes_written = total;
+  if (bytes_written)
+    *bytes_written = total;
 
   if (advance != 0) {
     return advance;

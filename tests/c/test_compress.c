@@ -321,3 +321,47 @@ void test_decompress_rejects_data_after_the_payload(void) {
 
   remove(comp);
 }
+
+// ---- Recorded size ----
+
+// TEST_INPUT compressed with `algo`, its header's size then moved by `delta`
+static void compress_with_recorded_size(const char *comp, AlgoID algo,
+                                        int delta) {
+  TEST_ASSERT_EQUAL_INT(
+      0, compress(TEST_INPUT, comp, algo, -1, OW_OVERWRITE, NULL, 0));
+  CHeader header = read_header(comp);
+  header.orig_size = (uint64_t)((int64_t)header.orig_size + delta);
+
+  uint8_t buf[C_HEADER_SIZE];
+  c_header_pack(&header, buf);
+  FILE *f = fopen(comp, "rb+");
+  TEST_ASSERT_NOT_NULL(f);
+  fwrite(buf, 1, sizeof(buf), f);
+  fclose(f);
+}
+
+static void assert_size_refused(int index, int delta) {
+  AlgoID algo = ALGOS[index];
+  char comp[64], out[64];
+  snprintf(comp, sizeof(comp), "tmp_cmp_size_%d.comp", (int)algo);
+  snprintf(out, sizeof(out), "tmp_cmp_size_%d.out", (int)algo);
+  compress_with_recorded_size(comp, algo, delta);
+
+  assert_error(decompress_file(comp, out, ALGO_NONE, OW_OVERWRITE, NULL, 0,
+                               NULL),
+               comp_CorruptDataError);
+  TEST_ASSERT_EQUAL_INT(-1, file_size(out));
+
+  remove(comp);
+  remove(out);
+}
+
+TEST_RANGE([ 0, 5, 1 ])
+void test_decompress_stops_past_an_understated_size(int index) {
+  assert_size_refused(index, -1);
+}
+
+TEST_RANGE([ 0, 5, 1 ])
+void test_decompress_rejects_an_overstated_size(int index) {
+  assert_size_refused(index, 1);
+}

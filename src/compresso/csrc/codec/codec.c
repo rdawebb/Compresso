@@ -13,6 +13,8 @@ typedef enum {
   FAIL_CODEC,
   FAIL_TRUNCATED,
   FAIL_TRAILING,
+  FAIL_TOO_LONG,
+  FAIL_TOO_SHORT,
 } FailKind;
 
 static const char *codec_label(const CodecOps *ops, const CodecParams *params) {
@@ -40,6 +42,19 @@ static void set_failure(const CodecOps *ops, const CodecParams *params,
     PyErr_Format(comp_CorruptDataError,
                  "Invalid data after the end of a %s stream",
                  codec_label(ops, params));
+    return;
+  case FAIL_TOO_LONG:
+    PyErr_Format(comp_CorruptDataError,
+                 "Decoded %s data exceeds its recorded size of %llu bytes",
+                 codec_label(ops, params),
+                 (unsigned long long)params->orig_size);
+    return;
+  case FAIL_TOO_SHORT:
+    PyErr_Format(comp_CorruptDataError,
+                 "Decoded %s data is shorter than its recorded size of %llu "
+                 "bytes",
+                 codec_label(ops, params),
+                 (unsigned long long)params->orig_size);
     return;
   case FAIL_CODEC: {
     int corrupt = 0;
@@ -99,13 +114,14 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
   int at_boundary = 0;
   int members = 0;
   size_t member_out = 0;
+  uint64_t total_out = 0;
   uint64_t read_total = 0;
   uint64_t member_start = 0; // Input offset of the member being decoded
   int trailing_ignored = 0;
 
   Py_BEGIN_ALLOW_THREADS
 
-      while (!done) {
+  while (!done) {
     if (buf.avail_in == 0 && !finish) {
       size_t nread = fread(in_buf, 1, CODEC_CHUNK, src);
       if (ferror(src)) {
@@ -177,6 +193,14 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
       produced_pass += produced;
       member_out += produced;
 
+      // Caught before the write, so a bomb stops at its claimed size
+      if (params->exact_size && produced > params->orig_size - total_out) {
+        err = -1;
+        fail = FAIL_TOO_LONG;
+        break;
+      }
+      total_out += produced;
+
       if (produced > 0 &&
           (fwrite(out_buf, 1, produced, dst) != produced || ferror(dst))) {
         err = -1;
@@ -210,15 +234,20 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
     }
   }
 
+  if (err == 0 && params->exact_size && total_out != params->orig_size) {
+    err = -1;
+    fail = FAIL_TOO_SHORT;
+  }
+
   Py_END_ALLOW_THREADS
 
-      // Fails the run instead when warnings are errors
-      if (err == 0 && trailing_ignored &&
-          PyErr_WarnFormat(comp_TrailingDataWarning, 1,
-                           "Ignored trailing data from byte %llu, after the "
-                           "end of the %s stream",
-                           (unsigned long long)member_start,
-                           codec_label(ops, params)) < 0) {
+  // Fails the run instead when warnings are errors
+  if (err == 0 && trailing_ignored &&
+      PyErr_WarnFormat(comp_TrailingDataWarning, 1,
+                       "Ignored trailing data from byte %llu, after the "
+                       "end of the %s stream",
+                       (unsigned long long)member_start,
+                       codec_label(ops, params)) < 0) {
     err = -1;
   }
 

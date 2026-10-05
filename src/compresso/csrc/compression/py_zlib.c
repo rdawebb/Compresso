@@ -17,7 +17,8 @@ static int zlib_compress_stream(FILE *src, FILE *dst, int level,
 
 static int zlib_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
                                   CoreContext *ctx) {
-  CodecParams params = {.orig_size = orig_size, .wrap = CODEC_WRAP_ZLIB};
+  CodecParams params = {
+      .exact_size = 1, .orig_size = orig_size, .wrap = CODEC_WRAP_ZLIB};
   return codec_run_stream(codec_zlib_ops(), &params, 1, src, dst, ctx);
 }
 
