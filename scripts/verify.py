@@ -73,6 +73,18 @@ FIX_DEPENDENCIES = {
     "pytest": {"format", "lint"},
 }
 
+if not os.environ.get("NO_COLOR") and (
+    sys.stdout.isatty() or os.environ.get("FORCE_COLOR")
+):
+    # ANSI color codes for pass/fail indicators
+    PASS = "\033[92m" + "✔" + "\033[0m"
+    FAIL = "\033[91m" + "✘" + "\033[0m"
+    SKIP = "\033[93m" + "➜" + "\033[0m"
+else:
+    PASS = "PASS"
+    FAIL = "FAIL"
+    SKIP = "SKIP"
+
 
 @dataclass
 class Result:
@@ -162,16 +174,16 @@ def compile_result(code: int, output: str, label: str) -> Result:
     diagnostics = matching(output, COMPILER_DIAGNOSTIC)
     warnings = sum("warning:" in line for line in diagnostics)
     if code:
-        return Result("FAIL", f"{label}: build failed", output, diagnostics)
+        return Result(FAIL, f"{label}: build failed", output, diagnostics)
 
     if warnings:
-        return Result("FAIL", f"{label}: {warnings} warnings", output, diagnostics)
+        return Result(FAIL, f"{label}: {warnings} warnings", output, diagnostics)
 
     # Warnings in files ninja didn't recompile won't show; the syntax stage
     # recompiles everything
     suffix = ", up to date" if "no work to do" in output else ""
 
-    return Result("PASS", label + suffix, output)
+    return Result(PASS, label + suffix, output)
 
 
 def build() -> Result:
@@ -182,7 +194,7 @@ def build() -> Result:
     """
     database = find_database()
     if database is None:
-        return Result("SKIP", "no build/cp* dir; run `just install`")
+        return Result(SKIP, "no build/cp* dir; run `just install`")
 
     build_dir = database.parent.relative_to(ROOT)
 
@@ -206,10 +218,10 @@ def meson_suite(
     if not (ROOT / build_dir).is_dir():
         code, output = run(tool("meson"), "setup", build_dir, "tests/c", *setup_args)
         if code:
-            return Result("FAIL", "meson setup failed", output, [])
+            return Result(FAIL, "meson setup failed", output, [])
 
     compiled = compile_result(*run(tool("ninja"), "-C", build_dir), build_dir)
-    if compiled.status == "FAIL":
+    if compiled.status == FAIL:
         return compiled
 
     code, tests = run(
@@ -221,9 +233,9 @@ def meson_suite(
     )
     if code:
         failures = matching(tests, re.compile(r"FAIL|ERROR|runtime error"))
-        return Result("FAIL", detail or "meson test failed", output + tests, failures)
+        return Result(FAIL, detail or "meson test failed", output + tests, failures)
 
-    return Result("PASS", detail, output + tests)
+    return Result(PASS, detail, output + tests)
 
 
 def c_tests() -> Result:
@@ -256,7 +268,7 @@ def syntax() -> Result:
     """
     database = find_database()
     if database is None:
-        return Result("SKIP", "no build/cp* dir; run `just install`")
+        return Result(SKIP, "no build/cp* dir; run `just install`")
 
     # Passing every file, rather than none, also covers the C tests and their
     # support code
@@ -269,9 +281,9 @@ def syntax() -> Result:
     code, output = run(sys.executable, "scripts/check_c_syntax.py", *paths)
     diagnostics = matching(output, COMPILER_DIAGNOSTIC)
     if code or diagnostics:
-        return Result("FAIL", f"{len(diagnostics)} diagnostics", output, diagnostics)
+        return Result(FAIL, f"{len(diagnostics)} diagnostics", output, diagnostics)
 
-    return Result("PASS", f"{len(paths)} files", output)
+    return Result(PASS, f"{len(paths)} files", output)
 
 
 def codec(record: bool) -> Result:
@@ -288,9 +300,9 @@ def codec(record: bool) -> Result:
     )
     if code:
         changes = re.compile(r"^(CHANGED|ADDED|MISSING|MISMATCH)")
-        return Result("FAIL", last_line(output), output, matching(output, changes))
+        return Result(FAIL, last_line(output), output, matching(output, changes))
 
-    return Result("PASS", last_line(output), output)
+    return Result(PASS, last_line(output), output)
 
 
 def ruff_format(fix: bool) -> Result:
@@ -305,7 +317,7 @@ def ruff_format(fix: bool) -> Result:
     code, output = run(tool("ruff"), "format", *([] if fix else ["--check"]))
     reformat = matching(output, re.compile(r"^Would reformat"))
 
-    return Result("FAIL" if code else "PASS", last_line(output), output, reformat)
+    return Result(FAIL if code else PASS, last_line(output), output, reformat)
 
 
 def lint(fix: bool) -> Result:
@@ -321,7 +333,7 @@ def lint(fix: bool) -> Result:
         tool("ruff"), "check", "--output-format", "concise", *(["--fix"] if fix else [])
     )
 
-    return Result("FAIL" if code else "PASS", last_line(output), output)
+    return Result(FAIL if code else PASS, last_line(output), output)
 
 
 def type_check() -> Result:
@@ -332,7 +344,7 @@ def type_check() -> Result:
     """
     code, output = run(tool("ty"), "check", "--output-format", "concise")
 
-    return Result("FAIL" if code else "PASS", last_line(output), output)
+    return Result(FAIL if code else PASS, last_line(output), output)
 
 
 def pytest() -> Result:
@@ -348,9 +360,9 @@ def pytest() -> Result:
     detail = summaries[-1] if summaries else last_line(output)
     if code:
         failures = matching(output, re.compile(r"^(FAILED|ERROR) "))
-        return Result("FAIL", detail, output, failures)
+        return Result(FAIL, detail, output, failures)
 
-    return Result("PASS", detail, output)
+    return Result(PASS, detail, output)
 
 
 def timed(
@@ -463,7 +475,7 @@ def main() -> int:
 
     for name in stages:
         if name not in selected:
-            print(f"{name:<{width}}SKIP  not selected", flush=True)
+            print(f"{name:<{width}}{SKIP}  not selected", flush=True)
 
     dependencies = {
         name: (
@@ -496,9 +508,9 @@ def main() -> int:
     untracked_after = untracked()
     stray = sorted(untracked_after - untracked_before)
     if stray:
-        print(f"{'clean':<{width}}FAIL  the run left {len(stray)} untracked files")
+        print(f"{'clean':<{width}}{FAIL}  the run left {len(stray)} untracked files")
     else:
-        print(f"{'clean':<{width}}PASS  {len(untracked_after)} untracked files")
+        print(f"{'clean':<{width}}{PASS}  {len(untracked_after)} untracked files")
     for path in stray or sorted(untracked_after):
         print(f"  {path}")
 
@@ -506,7 +518,7 @@ def main() -> int:
     failed = {
         name: results[name]
         for name in stages
-        if name in results and results[name].status == "FAIL"
+        if name in results and results[name].status == FAIL
     }
     for name, result in failed.items():
         lines = result.diagnostics or result.output.splitlines()[-TAIL_LINES:]
