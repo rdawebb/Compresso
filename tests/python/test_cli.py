@@ -590,6 +590,39 @@ class TestCompressConflicts:
         assert t.dest.read_bytes() == original_bytes
 
 
+class TestDecompressConflicts:
+    """Test what decompressing one file does when its output already exists."""
+
+    def test_renames_clashing_output_by_default(
+        self, payload: Path, temp_dir: Path
+    ) -> None:
+        """Test that an existing output is kept and the new one renamed."""
+        archive = temp_dir / "out.comp"
+        restored = temp_dir / "restored.bin"
+        invoke("compress", payload, "-o", archive, "-q")
+        restored.write_bytes(b"stale")
+
+        result = invoke("decompress", archive, "-o", restored)
+
+        sibling = temp_dir / renamed(restored.name)
+        assert f"Renamed to:        {sibling}" in result.output
+        assert restored.read_bytes() == b"stale"
+        assert sibling.read_bytes() == payload.read_bytes()
+
+    def test_overwrite_replaces_the_existing_output(
+        self, payload: Path, temp_dir: Path
+    ) -> None:
+        """Test that --overwrite replaces the existing output."""
+        archive = temp_dir / "out.comp"
+        restored = temp_dir / "restored.bin"
+        invoke("compress", payload, "-o", archive, "-q")
+        restored.write_bytes(b"stale")
+
+        invoke("decompress", archive, "-o", restored, "--overwrite", "-q")
+
+        assert restored.read_bytes() == payload.read_bytes()
+
+
 class TestInspectAndList:
     """Test the read-only commands."""
 

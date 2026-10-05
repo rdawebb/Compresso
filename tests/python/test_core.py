@@ -122,7 +122,7 @@ class TestCompressFile:
         )
         assert written == str(compressed)
 
-        assert decompress_file(str(compressed), str(restored), "") == 0
+        assert decompress_file(str(compressed), str(restored), "") == str(restored)
         assert restored.read_bytes() == sample_binary_file.read_bytes()
 
     def test_unknown_strategy_is_refused(
@@ -965,7 +965,7 @@ class TestOutputsCommitOnlyOnSuccess:
         existing.write_bytes(b"keep me")
 
         with pytest.raises(CorruptDataError):
-            decompress_file(str(compressed), str(existing), "")
+            decompress_file(str(compressed), str(existing), "", overwrite=2)
 
         assert existing.read_bytes() == b"keep me"
         assert not list(temp_dir.glob(".compresso-*"))

@@ -324,19 +324,24 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
 
 static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
                                     PyObject *kwargs) {
-  static char *kwlist[] = {"src_path", "dst_path", "algo",
+  static char *kwlist[] = {"src_path", "dst_path", "algo", "overwrite",
                            "progress", "cancel",   NULL};
 
   PyObject *src_path_obj;
   PyObject *dst_path_obj;
   const char *algo_name = NULL;
+  int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|s$OO", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|s$iOO", kwlist,
                                    &src_path_obj, &dst_path_obj, &algo_name,
-                                   &progress, &cancel)) {
+                                   &overwrite_existing, &progress, &cancel)) {
     return NULL; // Error already set
+  }
+
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    return NULL;
   }
 
   CoreContext ctx;
@@ -365,7 +370,10 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  int return_code = decompress_file(src_path, dst_path, algo, &ctx);
+  char actual_path[FS_PATH_MAX];
+  int return_code =
+      decompress_file(src_path, dst_path, algo, overwrite_existing, actual_path,
+                      sizeof(actual_path), &ctx);
 
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
@@ -379,7 +387,8 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  return PyLong_FromLong(0);
+  // The path actually written, which RENAME may have changed vs asked for
+  return PyUnicode_DecodeFSDefault(actual_path);
 }
 
 // ---- Archive Operations ----
@@ -717,21 +726,26 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
 
 static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
                                           PyObject *kwargs) {
-  static char *kwlist[] = {"input_path", "output_path", "format",
+  static char *kwlist[] = {"input_path", "output_path", "format", "overwrite",
                            "progress",   "cancel",      NULL};
 
   PyObject *input_path_obj = NULL;
   PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
+  int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
   Format format = FORMAT_UNKNOWN;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|s$OO", kwlist,
-                                   &input_path_obj, &output_path_obj,
-                                   &format_name, &progress, &cancel)) {
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "OO|s$iOO", kwlist, &input_path_obj, &output_path_obj,
+          &format_name, &overwrite_existing, &progress, &cancel)) {
     return NULL; // Error already set
+  }
+
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    return NULL;
   }
 
   CoreContext ctx;
@@ -776,8 +790,11 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
     goto fail;
   }
 
-  // OVERWRITE, as decompression has no conflict scheme of its own yet
-  OutputTarget out = {.path = output_path, .overwrite = 2};
+  char actual_path[FS_PATH_MAX];
+  OutputTarget out = {.path = output_path,
+                      .overwrite = overwrite_existing,
+                      .actual = actual_path,
+                      .actual_size = sizeof(actual_path)};
   int rc = fmt->decompress_file(input_path, &out, &ctx);
   if (rc != 0) {
     set_cancelled_error(rc);
@@ -791,7 +808,8 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  Py_RETURN_NONE;
+  // The path actually written, which RENAME may have changed vs asked for
+  return PyUnicode_DecodeFSDefault(actual_path);
 
 fail:
   Py_XDECREF(input_path_bytes);

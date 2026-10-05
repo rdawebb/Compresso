@@ -104,7 +104,8 @@ done:
 }
 
 int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
-                    CoreContext *ctx) {
+                    int overwrite_existing, char *out_actual_path,
+                    size_t out_actual_path_size, CoreContext *ctx) {
   init_backends();
 
   if (check_source_readable(src_path) != 0) {
@@ -117,8 +118,10 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
     return -1;
   }
 
-  // OVERWRITE, as decompression has no conflict scheme of its own yet
-  OutputTarget out = {.path = dst_path, .overwrite = 2};
+  OutputTarget out = {.path = dst_path,
+                      .overwrite = overwrite_existing,
+                      .actual = out_actual_path,
+                      .actual_size = out_actual_path_size};
 
   // The standalone formats each open and size their own input
   const StandaloneFormat *standalone = find_standalone_format(format);

@@ -242,8 +242,10 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
                   char *out_actual_path, size_t out_actual_path_size,
                   CoreContext *ctx);
 
+// Takes the overwrite scheme and reports the path written as compress_file
 int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
-                    CoreContext *ctx);
+                    int overwrite_existing, char *out_actual_path,
+                    size_t out_actual_path_size, CoreContext *ctx);
 
 const char *get_default_backend_for_strategy(Strategy strat);
 

@@ -49,7 +49,7 @@ def compress(
     )
 
 
-def decompress(src_path: str, dest_path: str, *, algo: str | None = None) -> int:
+def decompress(src_path: str, dest_path: str, *, algo: str | None = None) -> str:
     """Decompress a file using the specified algorithm.
 
     Args:
@@ -58,9 +58,15 @@ def decompress(src_path: str, dest_path: str, *, algo: str | None = None) -> int
         algo: Compression algorithm to use (default: None)
 
     Returns:
-        The number of bytes written to the output file
+        The path actually written to.
     """
-    return decompress_file(src_path=src_path, dst_path=dest_path, algo=algo or "")
+    return decompress_file(
+        src_path=src_path,
+        dst_path=dest_path,
+        algo=algo or "",
+        # As in compress: an existing temp file by design
+        overwrite=2,
+    )
 
 
 @dataclass

@@ -77,10 +77,18 @@ def decompress_file(
     dst_path: str,
     algo: str,
     *,
+    overwrite: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
-) -> int:
-    """Decompress a file."""
+) -> str:
+    """Decompress a file.
+
+    `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
+    applied to the destination file.
+
+    Returns the path actually written, which RENAME may have changed from
+    `dst_path`; SKIP returns `dst_path` unchanged and writes nothing.
+    """
 
 # Stub-only: the extension builds a plain dict per backend, with every key set
 class _CapabilityDict(TypedDict):
@@ -226,7 +234,15 @@ def decompress_standalone(
     output_path: str,
     format: str = ...,
     *,
+    overwrite: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
-) -> None:
-    """Decompress a standalone container, detecting the format if not given."""
+) -> str:
+    """Decompress a standalone container, detecting the format if not given.
+
+    `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
+    applied to the destination file.
+
+    Returns the path actually written, which RENAME may have changed from
+    `output_path`; SKIP returns `output_path` unchanged and writes nothing.
+    """

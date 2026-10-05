@@ -121,7 +121,11 @@ def _extract_archive(
 
 
 def _decompress_one_file(
-    source: Path, output: Path | None, list_only: bool, quiet: bool
+    source: Path,
+    output: Path | None,
+    list_only: bool,
+    overwrite: OverwriteMode,
+    quiet: bool,
 ) -> None:
     """Unpack one single-file container: a `.comp` or a standalone codec.
 
@@ -129,6 +133,7 @@ def _decompress_one_file(
         source: The path to the single-file container.
         output: The output path.
         list_only: Whether to list entries only.
+        overwrite: What to do when the destination file already exists.
         quiet: Whether to suppress output.
     """
     if list_only:
@@ -137,10 +142,10 @@ def _decompress_one_file(
             EXIT_USAGE,
         )
 
-    job = DecompressionJob.from_file(src=source, dest=None)
+    job = DecompressionJob.from_file(src=source, dest=None, overwrite=overwrite)
     dest: Path = resolve_single_output(output, job.plan.dest)
     if dest != job.plan.dest:
-        job = DecompressionJob.from_file(src=source, dest=dest)
+        job = DecompressionJob.from_file(src=source, dest=dest, overwrite=overwrite)
 
     plan = job.plan
 
@@ -176,13 +181,18 @@ def _decompress_one_file(
 
     exit_for_result(result, "Decompression")
 
-    decompressed_size: int = plan.dest.stat().st_size
+    # RENAME may have written somewhere other than `dest`; job.plan is updated
+    # in place on success to reflect the path actually written
+    actual_dest: Path = job.plan.dest
+    decompressed_size: int = actual_dest.stat().st_size
     speed_mbs: int | float = (
         (decompressed_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
     )
 
     if not quiet:
         succeed("Decompression successful!\n")
+        if actual_dest != dest:
+            print(f"  Renamed to:        {actual_dest}")
         print(
             f"  Compressed size:   {format_size(size_bytes=compressed_size)}\n"
             f"  Decompressed size: {format_size(size_bytes=decompressed_size)}\n"
@@ -281,7 +291,7 @@ def extract(
                 _extract_archive(source, output, list_only, options, quiet)
 
             else:
-                _decompress_one_file(source, output, list_only, quiet)
+                _decompress_one_file(source, output, list_only, mode, quiet)
 
     except KeyboardInterrupt:
         cancelled("Extraction")
