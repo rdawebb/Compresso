@@ -626,11 +626,7 @@ class TestArchiveSkipsItsOwnOutput:
         fmt: str,
         overwrite: bool,
     ) -> None:
-        """Test that neither the output nor a temp file beside it is archived.
-
-        Overwriting matters for zip, which only creates its output on close,
-        so an existing one in the tree is all there is to find.
-        """
+        """Test that neither the output nor the temp file beside it is archived."""
         tree = temp_dir / "tree"
         tree.mkdir()
         (tree / "a.txt").write_text("a" * 10000)
@@ -644,12 +640,10 @@ class TestArchiveSkipsItsOwnOutput:
 
         listed = [e["path"] for e in _core.list_archive_contents(str(output))]
         assert listed == ["tree/", "tree/a.txt"]
-        skipped = any(
+        assert any(
             r.getMessage().endswith("it is the archive being created")
             for r in caplog.records
         )
-        # A new zip doesn't exist until libzip closes it, so nothing is skipped
-        assert skipped == (fmt != "zip" or overwrite)
         assert sorted(p.name for p in tree.iterdir()) == ["a.txt", output.name]
 
 
@@ -949,6 +943,25 @@ class TestOutputsCommitOnlyOnSuccess:
 
         with pytest.raises(CorruptDataError):
             decompress_file(str(compressed), str(existing), "")
+
+        assert existing.read_bytes() == b"keep me"
+        assert not list(temp_dir.glob(".compresso-*"))
+
+    @pytest.mark.parametrize("fmt", ["tar", "tar.gz", "zip"])
+    def test_failed_archive_creation_keeps_the_existing_file(
+        self, sample_text_file: Path, temp_dir: Path, fmt: str
+    ) -> None:
+        """Test that an archive that fails part way never replaces the one there."""
+        existing = temp_dir / f"existing.{fmt}"
+        existing.write_bytes(b"keep me")
+
+        with pytest.raises(FileNotFoundError):
+            _core.create_archive(
+                str(existing),
+                fmt,
+                [str(sample_text_file), str(temp_dir / "missing")],
+                overwrite=2,
+            )
 
         assert existing.read_bytes() == b"keep me"
         assert not list(temp_dir.glob(".compresso-*"))

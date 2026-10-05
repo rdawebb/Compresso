@@ -90,13 +90,17 @@ int codec_finish_file(int err, FILE *input, FILE *output,
 // success, so a failure never touches an existing file
 
 // Applies `out`'s scheme before any work: an early ERROR or SKIP, and refuses
-// to OVERWRITE `src_path` itself; returns 0 to proceed, 1 to skip (`actual`
-// filled), or -1 with an exception set
+// to OVERWRITE `src_path` itself (NULL for many inputs); returns 0 to proceed,
+// 1 to skip (`actual` filled), or -1 with an exception set
 int output_check(const char *src_path, const OutputTarget *out);
 
 // Opens the temp file for `out` into `temp` (at least FS_PATH_MAX bytes);
 // NULL with an exception set
 FILE *output_open(const OutputTarget *out, char *temp);
+
+// Commits the closed `temp` under `out`'s scheme, filling `actual`; removes
+// `temp` if it can't; returns 0, or -1 with an exception set
+int output_commit(const char *temp, const OutputTarget *out);
 
 // codec_finish_file on the temp, then commits it under `out`'s scheme, filling
 // `actual`; the temp never survives; `output` may be NULL if never opened

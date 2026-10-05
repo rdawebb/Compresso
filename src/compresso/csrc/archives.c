@@ -682,55 +682,43 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   if (!archive)
     return -1;
 
-  char resolved_path[FS_PATH_MAX];
-  int resolve_ret = fs_resolve_conflict(output_path, overwrite_existing,
-                                        resolved_path, sizeof(resolved_path));
-  if (resolve_ret != 0) {
-    if (resolve_ret > 0 && out_actual_path) { // SKIP is a successful no-op
-      snprintf(out_actual_path, out_actual_path_size, "%s", resolved_path);
-      return 0;
-    }
-    if (errno == ENAMETOOLONG) {
-      PyErr_Format(PyExc_ValueError, "Archive path too long: %s", output_path);
-    } else {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_path);
-    }
+  OutputTarget out = {.path = output_path,
+                      .overwrite = overwrite_existing,
+                      .actual = out_actual_path,
+                      .actual_size = out_actual_path_size};
+  int checked = output_check(NULL, &out);
+  if (checked != 0)
+    return checked < 0 ? -1 : 0;
+
+  // Written to a temp beside the output; with a codec it is an intermediate
+  // that the codec's own output replaces, so owner-only
+  int has_codec = pipeline->codec != FORMAT_UNKNOWN;
+  char tmp_path[FS_PATH_MAX];
+  OutputTarget tmp_out = {.path = output_path, .owner_only = has_codec};
+  FILE *tmp = output_open(&tmp_out, tmp_path);
+  if (!tmp)
     return -1;
-  }
-  output_path = resolved_path;
+  fclose(tmp);
 
-  // Write archive to a temp file, then compress via the standalone codec
-  char *tmp_path = NULL;
-  const char *write_path = output_path;
-  if (pipeline->codec != FORMAT_UNKNOWN) {
-    tmp_path = make_temp_path(output_path);
-    if (!tmp_path)
-      return -1;
-    write_path = tmp_path;
-  }
-
-  void *writer = archive->create_writer(write_path, level);
+  void *writer = archive->create_writer(tmp_path, level);
   if (!writer) {
-    if (tmp_path) {
-      fs_unlink(tmp_path);
-      free(tmp_path);
-    }
+    fs_unlink(tmp_path);
     return -1;
   }
 
   // With a codec, the temp archive is read a second time, so the two reads are
   // stages of one job
   uint64_t input_total = sum_input_size(input_paths, num_paths);
-  if (pipeline->codec != FORMAT_UNKNOWN) {
+  if (has_codec) {
     ctx_begin_job(ctx, input_total);
   }
   ctx_begin_stage(ctx, input_total);
 
-  // Once the writer has opened its output, so a tar's identity is known
+  // Once the writer has opened its output, so a tar's identity is known; an
+  // existing output is skipped too, as the commit replaces it
   OwnFiles own = {0};
-  own_files_add(&own, write_path);
-  if (write_path != output_path)
-    own_files_add(&own, output_path);
+  own_files_add(&own, tmp_path);
+  own_files_add(&own, output_path);
 
   int ret =
       add_paths_to_writer(archive, writer, input_paths, num_paths, &own, ctx);
@@ -741,27 +729,14 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   if (ret == 0 && close_ret != 0)
     ret = close_ret;
 
-  if (ret == 0 && pipeline->codec != FORMAT_UNKNOWN) {
+  if (ret == 0 && !has_codec)
+    return output_commit(tmp_path, &out);
+
+  if (ret == 0) {
     const StandaloneFormat *codec = find_standalone_format(pipeline->codec);
-    OutputTarget out = {.path = output_path, .overwrite = 2};
     ret = codec->compress_file(tmp_path, &out, level, ctx);
   }
-
-  if (tmp_path) {
-    fs_unlink(tmp_path);
-    free(tmp_path);
-  }
-
-  // Never leave a half-written archive behind. The codec stage cleans up after
-  // itself, so this covers the archive written straight to the destination.
-  if (ret != 0) {
-    fs_unlink(output_path);
-  }
-
-  if (ret == 0 && out_actual_path) {
-    snprintf(out_actual_path, out_actual_path_size, "%s", output_path);
-  }
-
+  fs_unlink(tmp_path);
   return ret;
 }
 

@@ -254,7 +254,7 @@ int output_check(const char *src_path, const OutputTarget *out) {
 
   // The commit would replace the input with its own output
   fs_stat src, dst;
-  if (out->overwrite == 2 && fs_stat_path(src_path, &src) == 0 &&
+  if (out->overwrite == 2 && src_path && fs_stat_path(src_path, &src) == 0 &&
       fs_stat_path(out->path, &dst) == 0 && fs_same_file(&src, &dst)) {
     PyErr_Format(PyExc_ValueError, "Input and output are the same file: %s",
                  out->path);
@@ -284,20 +284,14 @@ FILE *output_open(const OutputTarget *out, char *temp) {
     errno = saved;
     f = NULL;
   }
+  // Sets the destination as filename for error reporting
   if (!f) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, temp);
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out->path);
   }
   return f;
 }
 
-int output_finish(int err, FILE *input, FILE *output, const char *temp,
-                  const OutputTarget *out, const char *failure_message) {
-  err = codec_finish_file(err, input, output, output ? temp : NULL,
-                          failure_message);
-  if (err != 0 || !output) {
-    return err;
-  }
-
+int output_commit(const char *temp, const OutputTarget *out) {
   char actual[FS_PATH_MAX];
   int rc =
       fs_commit_temp(temp, out->path, out->overwrite, actual, sizeof(actual));
@@ -315,6 +309,16 @@ int output_finish(int err, FILE *input, FILE *output, const char *temp,
   errno = saved;
   set_output_error(out->path);
   return -1;
+}
+
+int output_finish(int err, FILE *input, FILE *output, const char *temp,
+                  const OutputTarget *out, const char *failure_message) {
+  err = codec_finish_file(err, input, output, output ? temp : NULL,
+                          failure_message);
+  if (err != 0 || !output) {
+    return err;
+  }
+  return output_commit(temp, out);
 }
 
 int ctx_finish(CoreContext *ctx) {
