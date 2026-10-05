@@ -613,6 +613,29 @@ class TestArchiveSkipsSpecialFiles:
         for skipped in (tree / "pipe", temp_dir / "named_pipe"):
             assert f"WARNING Skipped {skipped}:" in result.stderr
 
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
+    def test_nothing_left_to_archive_gives_an_empty_archive(
+        self, temp_dir: Path, fmt: str
+    ) -> None:
+        """Test that an archive whose only input is skipped is written empty."""
+        os.mkfifo(temp_dir / "pipe")
+        output = temp_dir / f"out.{fmt}"
+
+        result = subprocess.run(
+            [sys.executable, "-c", _ARCHIVE_AND_LIST, str(output), fmt]
+            + [str(temp_dir / "pipe")],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert orjson.loads(result.stdout) == []
+        if fmt == "zip":
+            with zipfile.ZipFile(output) as zf:
+                assert zf.namelist() == []
+
 
 class TestArchiveSkipsItsOwnOutput:
     """Test that archiving a tree into itself leaves the archive out."""

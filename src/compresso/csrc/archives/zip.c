@@ -260,6 +260,18 @@ static int zip_on_cancel(zip_t *za, void *userdata) {
 
 #endif
 
+// Writes the bare end-of-central-directory record, which readers accept
+static int write_empty_zip(const char *path) {
+  static const unsigned char EOCD[22] = {'P', 'K', 5, 6};
+  FILE *f = fs_fopen(path, "wb");
+  int ok = f && fwrite(EOCD, 1, sizeof(EOCD), f) == sizeof(EOCD);
+  if (f && fclose(f) != 0)
+    ok = 0;
+  if (!ok)
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+  return ok ? 0 : -1;
+}
+
 static int zip_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
   ZipWriter *writer = (ZipWriter *)writer_ptr;
 
@@ -290,6 +302,8 @@ static int zip_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
     return abort_code;
   }
 
+  const char *path = writer->output_path;
+  int empty = zip_get_num_entries(writer->archive, 0) == 0;
   int ret = zip_close(writer->archive);
   int abort_code = writer->abort_code;
 
@@ -308,7 +322,9 @@ static int zip_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
     return abort_code;
   }
 
-  return ret < 0 ? -1 : 0;
+  if (ret < 0)
+    return -1;
+  return empty ? write_empty_zip(path) : 0;
 }
 
 // ---- ZIP Reader ----
