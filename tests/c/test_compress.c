@@ -339,6 +339,7 @@ static void assert_size_refused(int index, int delta) {
   snprintf(out, sizeof(out), "tmp_cmp_size_%d.out", (int)algo);
   compress_with_recorded_size(comp, algo, delta);
 
+  remove(out); // Left by a failed run, it would read as written
   assert_error(decompress_file(comp, out, ALGO_NONE, OW_OVERWRITE, NULL, 0,
                                NULL),
                comp_CorruptDataError);

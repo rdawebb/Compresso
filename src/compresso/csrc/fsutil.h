@@ -87,6 +87,12 @@ FILE *fs_fopen_exclusive(const char *path);
 // The access time is set to the same value, since archives do not carry one
 int fs_set_mtime(const char *path, int64_t mtime);
 
+// fs_set_mtime and fs_chmod on an open file, so they reach the file written
+// even if its path has since been replaced; on Windows `mode` sets only the
+// read-only attribute, replacing any others
+int fs_futimens(FILE *f, int64_t mtime);
+int fs_fchmod(FILE *f, uint32_t mode);
+
 // Canonicalise `path` into `resolved` (at least FS_PATH_MAX bytes), resolving
 // symlinks and Windows reparse points; fails if `path` does not exist
 int fs_realpath(const char *path, char *resolved);

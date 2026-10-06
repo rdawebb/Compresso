@@ -552,6 +552,17 @@ FILE *fs_fopen_exclusive(const char *path) {
   return f;
 }
 
+static int fs_set_handle_mtime(HANDLE h, int64_t mtime) {
+  // FILETIME counts 100ns intervals since 1601-01-01
+  ULONGLONG ticks = (ULONGLONG)(mtime + 11644473600LL) * 10000000ULL;
+  FILETIME ft = {(DWORD)ticks, (DWORD)(ticks >> 32)};
+  if (h == INVALID_HANDLE_VALUE || !SetFileTime(h, NULL, &ft, &ft)) {
+    errno = EACCES;
+    return -1;
+  }
+  return 0;
+}
+
 int fs_set_mtime(const char *path, int64_t mtime) {
   wchar_t wpath[FS_PATH_MAX];
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
@@ -566,12 +577,23 @@ int fs_set_mtime(const char *path, int64_t mtime) {
     return -1;
   }
 
-  // FILETIME counts 100ns intervals since 1601-01-01
-  ULONGLONG ticks = (ULONGLONG)(mtime + 11644473600LL) * 10000000ULL;
-  FILETIME ft = {(DWORD)ticks, (DWORD)(ticks >> 32)};
-  BOOL ok = SetFileTime(h, NULL, &ft, &ft);
+  int rc = fs_set_handle_mtime(h, mtime);
   CloseHandle(h);
-  if (!ok) {
+  return rc;
+}
+
+int fs_futimens(FILE *f, int64_t mtime) {
+  return fs_set_handle_mtime((HANDLE)_get_osfhandle(_fileno(f)), mtime);
+}
+
+int fs_fchmod(FILE *f, uint32_t mode) {
+  // Zero times are left as they are; the attributes are written, not merged,
+  // as a write-only handle cannot read them
+  FILE_BASIC_INFO info = {0};
+  info.FileAttributes =
+      (mode & 0200) ? FILE_ATTRIBUTE_NORMAL : FILE_ATTRIBUTE_READONLY;
+  if (!SetFileInformationByHandle((HANDLE)_get_osfhandle(_fileno(f)),
+                                  FileBasicInfo, &info, sizeof(info))) {
     errno = EACCES;
     return -1;
   }
@@ -813,6 +835,15 @@ int fs_set_mtime(const char *path, int64_t mtime) {
   times[1].tv_sec = (time_t)mtime; // Modification time
   times[1].tv_usec = 0;
   return utimes(path, times);
+}
+
+int fs_futimens(FILE *f, int64_t mtime) {
+  struct timespec times[2] = {{(time_t)mtime, 0}, {(time_t)mtime, 0}};
+  return futimens(fileno(f), times);
+}
+
+int fs_fchmod(FILE *f, uint32_t mode) {
+  return fchmod(fileno(f), (mode_t)mode);
 }
 
 int fs_dir_error(const fs_dir *dir) {

@@ -1259,6 +1259,22 @@ class TestExtractionMetadata:
             1_000_000_000, abs=2
         )
 
+    def test_read_only_entry_keeps_its_mode_and_mtime(self, temp_dir: Path) -> None:
+        """Test that both are set on the open file, read-only included.
+
+        On Windows the mode is only the read-only attribute.
+        """
+        archive_path = temp_dir / "meta.tar"
+        self._archive_with_metadata(archive_path, mtime=1_000_000_000, mode=0o444)
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok, result.error
+        extracted = (out_dir / "a.txt").stat()
+        assert extracted.st_mode & 0o222 == 0
+        assert extracted.st_mtime == pytest.approx(1_000_000_000, abs=2)
+
     @pytest.mark.parametrize("opt_in", [False, True])
     def test_existing_directory_metadata_follows_the_option(
         self, temp_dir: Path, opt_in: bool

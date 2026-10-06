@@ -1315,14 +1315,28 @@ static int extract_entries(const CArchive *archive, void *reader,
         goto cleanup;
       }
 
-      fclose(f);
-
+      // Flushed first, as a later write would move the mtime again
       // Best-effort: a metadata failure must not fail extraction of
       // otherwise-valid data
-      if (policy->preserve_permissions)
-        fs_chmod(out_path, entry.mode);
-      if (policy->preserve_timestamps && entry.mtime > 0)
-        fs_set_mtime(out_path, (int64_t)entry.mtime);
+      int close_errno = fflush(f) != 0 ? errno : 0;
+      if (!close_errno) {
+        if (policy->preserve_timestamps && entry.mtime > 0)
+          fs_futimens(f, (int64_t)entry.mtime);
+        if (policy->preserve_permissions)
+          fs_fchmod(f, entry.mode);
+      }
+      if (fclose(f) != 0 && !close_errno)
+        close_errno = errno;
+
+      // The data never fully reached the disk, so the file is removed
+      if (close_errno) {
+        errno = close_errno;
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+        fs_unlink(out_path);
+        entry_reset(&entry);
+        result = -1;
+        goto cleanup;
+      }
     } else if (entry.type == ENTRY_HARDLINK) {
       // Shares the target's inode, and so its metadata too
       if (extract_hardlink(resolved_root, output_dir, out_path,
