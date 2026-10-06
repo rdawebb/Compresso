@@ -931,6 +931,27 @@ class TestHardlinkExtraction:
         assert os.path.samefile(renamed / "a", extra)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX symlinks")
+class TestOverwriteReplacesSymlinks:
+    """Test that OVERWRITE replaces a symlink at an entry's path."""
+
+    def test_symlink_at_the_entry_path_is_not_followed(self, temp_dir: Path) -> None:
+        """Test that the entry's data never lands where the link points."""
+        archive = temp_dir / "a.tar"
+        _tar_of(archive, [("a.txt", 0o644, 1_000_000_000)])
+        outside = temp_dir / "outside.txt"
+        outside.write_text("keep me")
+        out = temp_dir / "out"
+        out.mkdir()
+        (out / "a.txt").symlink_to(outside)
+
+        _core.extract_archive(str(archive), str(out), [], overwrite=2)
+
+        assert outside.read_text() == "keep me"
+        assert not (out / "a.txt").is_symlink()
+        assert (out / "a.txt").read_bytes() == b"x"
+
+
 def _compress_to(fmt: str, src: Path, dst: Path, overwrite: int = 0) -> None:
     """Compress `src` to `dst` as a .comp or a standalone gzip file."""
     if fmt == "comp":

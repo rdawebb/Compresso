@@ -1239,9 +1239,16 @@ static int extract_entries(const CArchive *archive, void *reader,
         }
       }
 
-      // Modes 0 and 1 both need the exclusive open
-      FILE *f = policy->overwrite_existing == 2 ? fs_fopen(out_path, "wb")
-                                                : fs_fopen_exclusive(out_path);
+      // OVERWRITE removes what is there instead of writing through it; every
+      // mode then opens exclusively
+      if (policy->overwrite_existing == 2 && fs_unlink(out_path) != 0 &&
+          errno != ENOENT) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+        entry_reset(&entry);
+        result = -1;
+        goto cleanup;
+      }
+      FILE *f = fs_fopen_exclusive(out_path);
 
       if (!f && errno == EEXIST && policy->overwrite_existing == 3) {
         // RENAME: try names until one is free; each attempt is its own
