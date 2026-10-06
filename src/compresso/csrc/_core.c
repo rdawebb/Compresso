@@ -707,7 +707,8 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
   OutputTarget out = {.path = output_path,
                       .overwrite = overwrite_existing,
                       .actual = actual_path,
-                      .actual_size = sizeof(actual_path)};
+                      .actual_size = sizeof(actual_path),
+                      .keep_source_metadata = 1};
   int rc = fmt->compress_file(input_path, &out, compression_level, &ctx);
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
@@ -795,7 +796,8 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
   OutputTarget out = {.path = output_path,
                       .overwrite = overwrite_existing,
                       .actual = actual_path,
-                      .actual_size = sizeof(actual_path)};
+                      .actual_size = sizeof(actual_path),
+                      .keep_source_metadata = 1};
   int rc = fmt->decompress_file(input_path, &out, &ctx);
   if (rc != 0) {
     set_cancelled_error(rc);

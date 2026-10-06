@@ -61,6 +61,10 @@ int fs_join(char *out, size_t out_size, const char *dir, const char *name);
 // Windows reparse point reports FS_TYPE_SYMLINK rather than its target's type
 int fs_stat_path(const char *path, fs_stat *out);
 
+// Stat an open file, so a path reached through a symlink reports its target;
+// the identity is left 0 on Windows
+int fs_fstat(FILE *f, fs_stat *out);
+
 // Read a symlink's target into `buf` (NUL-terminated); -1/ENAMETOOLONG if it
 // doesn't fit, rather than truncating it
 // On Windows this is the resolved absolute target, not the literal link text
@@ -140,6 +144,10 @@ typedef struct {
   char *actual;  // Optional; receives the path written, or skipped
   size_t actual_size;
   int owner_only; // 0600, for an intermediate that holds a whole archive
+
+  // The source's mode, less setuid/setgid/sticky, and mtime, as single-file
+  // tools give their outputs
+  int keep_source_metadata;
 } OutputTarget;
 
 // Apply POSIX permission bits to an existing path; on Windows only the

@@ -299,6 +299,15 @@ int output_commit(const char *temp, const OutputTarget *out) {
 
 int output_finish(int err, FILE *input, FILE *output, const char *temp,
                   const OutputTarget *out, const char *failure_message) {
+  // Flushed first, as a later write would move the mtime again; a failed flush
+  // is left for codec_finish_file to report; best-effort, as in extraction
+  fs_stat src;
+  if (err == 0 && out->keep_source_metadata && input && output &&
+      fflush(output) == 0 && fs_fstat(input, &src) == 0) {
+    fs_futimens(output, src.mtime);
+    fs_fchmod(output, src.mode);
+  }
+
   err = codec_finish_file(err, input, output, output ? temp : NULL,
                           failure_message);
   if (err != 0 || !output) {

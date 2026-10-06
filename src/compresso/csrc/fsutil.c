@@ -394,6 +394,24 @@ int fs_stat_path(const char *path, fs_stat *out) {
   return 0;
 }
 
+int fs_fstat(FILE *f, fs_stat *out) {
+  struct __stat64 st;
+  if (_fstat64(_fileno(f), &st) != 0)
+    return -1;
+
+  memset(out, 0, sizeof(*out));
+  out->size = (uint64_t)st.st_size;
+  out->mtime = (int64_t)st.st_mtime;
+  out->mode = (uint32_t)(st.st_mode & 0777);
+  if (st.st_mode & _S_IFDIR)
+    out->type = FS_TYPE_DIR;
+  else if (st.st_mode & _S_IFREG)
+    out->type = FS_TYPE_FILE;
+  else
+    out->type = FS_TYPE_OTHER;
+  return 0;
+}
+
 int fs_readlink(const char *path, char *buf, size_t buf_size) {
   wchar_t wpath[FS_PATH_MAX];
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
@@ -770,27 +788,37 @@ int fs_link(const char *existing, const char *new_path) {
 #include <sys/time.h>
 #include <unistd.h>
 
+static void fs_fill_stat(const struct stat *st, fs_stat *out) {
+  out->size = (uint64_t)st->st_size;
+  out->mtime = (int64_t)st->st_mtime;
+  out->mode = (uint32_t)(st->st_mode & 0777);
+  out->dev = (uint64_t)st->st_dev;
+  out->ino = (uint64_t)st->st_ino;
+
+  if (S_ISDIR(st->st_mode))
+    out->type = FS_TYPE_DIR;
+  else if (S_ISLNK(st->st_mode))
+    out->type = FS_TYPE_SYMLINK;
+  else if (S_ISREG(st->st_mode))
+    out->type = FS_TYPE_FILE;
+  else
+    out->type = FS_TYPE_OTHER;
+}
+
 int fs_stat_path(const char *path, fs_stat *out) {
   struct stat st;
   // lstat to prevent the archiver walking into a symlinked directory
   if (lstat(path, &st) != 0)
     return -1;
+  fs_fill_stat(&st, out);
+  return 0;
+}
 
-  out->size = (uint64_t)st.st_size;
-  out->mtime = (int64_t)st.st_mtime;
-  out->mode = (uint32_t)(st.st_mode & 0777);
-  out->dev = (uint64_t)st.st_dev;
-  out->ino = (uint64_t)st.st_ino;
-
-  if (S_ISDIR(st.st_mode))
-    out->type = FS_TYPE_DIR;
-  else if (S_ISLNK(st.st_mode))
-    out->type = FS_TYPE_SYMLINK;
-  else if (S_ISREG(st.st_mode))
-    out->type = FS_TYPE_FILE;
-  else
-    out->type = FS_TYPE_OTHER;
-
+int fs_fstat(FILE *f, fs_stat *out) {
+  struct stat st;
+  if (fstat(fileno(f), &st) != 0)
+    return -1;
+  fs_fill_stat(&st, out);
   return 0;
 }
 

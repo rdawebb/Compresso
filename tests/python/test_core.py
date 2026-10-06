@@ -1016,6 +1016,53 @@ class TestOutputsCommitOnlyOnSuccess:
         assert sample_text_file.read_bytes() == original
 
 
+class TestOutputsKeepSourceMetadata:
+    """Test that single-file outputs take the source's mode and mtime."""
+
+    MTIME = 1_600_000_000
+
+    @staticmethod
+    def _round_trip(fmt: str, source: Path) -> tuple[Path, Path]:
+        """Compress `source` beside itself and decompress it again.
+
+        Returns:
+            The compressed file and the restored one.
+        """
+        compressed = source.with_name(f"{source.name}.{fmt}")
+        _compress_to(fmt, source, compressed)
+        restored = source.with_name("restored")
+        decompress_file(str(compressed), str(restored), "")
+        return compressed, restored
+
+    @pytest.mark.parametrize("fmt", ["comp", "gz"])
+    def test_mtime_carries_through_both_ways(self, temp_dir: Path, fmt: str) -> None:
+        """Test that the compressed file, then the restored one, keep the date."""
+        source = temp_dir / "a.txt"
+        source.write_bytes(b"hello" * 100)
+        os.utime(source, (self.MTIME, self.MTIME))
+
+        for output in self._round_trip(fmt, source):
+            assert int(output.stat().st_mtime) == self.MTIME
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX modes")
+    @pytest.mark.parametrize("fmt", ["comp", "gz"])
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [(0o640, 0o640), (0o777, 0o777), (0o4755, 0o755)],
+        ids=["private", "no-umask", "setuid"],
+    )
+    def test_mode_carries_through_without_setuid(
+        self, temp_dir: Path, fmt: str, mode: int, expected: int
+    ) -> None:
+        """Test the permission bits are copied as is, setuid aside, both ways."""
+        source = temp_dir / "a.txt"
+        source.write_bytes(b"hello" * 100)
+        source.chmod(mode)
+
+        for output in self._round_trip(fmt, source):
+            assert stat.S_IMODE(output.stat().st_mode) == expected
+
+
 class TestStrategyNames:
     """Test the strategy names the other entry points accept."""
 

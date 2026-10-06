@@ -21,7 +21,8 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   OutputTarget out = {.path = dst_path,
                       .overwrite = overwrite_existing,
                       .actual = out_actual_path,
-                      .actual_size = out_actual_path_size};
+                      .actual_size = out_actual_path_size,
+                      .keep_source_metadata = 1};
   int checked = output_check(src_path, &out);
   if (checked != 0) {
     return checked < 0 ? -1 : 0;
@@ -116,7 +117,8 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
   OutputTarget out = {.path = dst_path,
                       .overwrite = overwrite_existing,
                       .actual = out_actual_path,
-                      .actual_size = out_actual_path_size};
+                      .actual_size = out_actual_path_size,
+                      .keep_source_metadata = 1};
 
   // The standalone formats each open and size their own input
   const StandaloneFormat *standalone = find_standalone_format(format);
