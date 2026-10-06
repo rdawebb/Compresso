@@ -159,6 +159,7 @@ def extract_archive(
     max_total_size: int = ...,
     max_depth: int = ...,
     preserve_permissions: bool = ...,
+    exact_permissions: bool = ...,
     preserve_timestamps: bool = ...,
     allow_symlinks: int = ...,
     overwrite_dir_metadata: bool = ...,
@@ -174,7 +175,9 @@ def extract_archive(
     `allow_symlinks` is 0 = deny, 1 = allow, 2 = rewrite to regular files;
     `max_total_size` and `max_depth` treat 0 as unlimited;
     `overwrite_dir_metadata` also restores the mode and mtime of a directory
-    that already exists, as GNU tar does, except when `overwrite` is 1 (skip).
+    that already exists, as GNU tar does, except when `overwrite` is 1 (skip);
+    `exact_permissions` restores modes verbatim, where by default
+    setuid/setgid/sticky are dropped and the umask applies.
     """
 
 def detect_format(file_path: str) -> str:

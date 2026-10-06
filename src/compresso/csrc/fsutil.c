@@ -719,6 +719,8 @@ int fs_chmod(const char *path, uint32_t mode) {
   return _wchmod(wpath, win_mode);
 }
 
+uint32_t fs_umask(void) { return 0; }
+
 int fs_unlink(const char *path) {
   wchar_t wpath[FS_PATH_MAX];
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
@@ -983,6 +985,12 @@ int fs_mkdir_exclusive(const char *path, uint32_t mode) {
 
 int fs_chmod(const char *path, uint32_t mode) {
   return chmod(path, (mode_t)mode);
+}
+
+uint32_t fs_umask(void) {
+  mode_t old = umask(0);
+  umask(old);
+  return (uint32_t)old;
 }
 
 int fs_unlink(const char *path) { return unlink(path); }

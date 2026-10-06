@@ -489,6 +489,7 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
                            "max_total_size",
                            "max_depth",
                            "preserve_permissions",
+                           "exact_permissions",
                            "preserve_timestamps",
                            "allow_symlinks",
                            "overwrite_dir_metadata",
@@ -511,10 +512,10 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   unsigned int max_depth = (unsigned int)policy.max_depth;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OOO|$iKIppipOO", kwlist, &archive_path_obj,
+          args, kwargs, "OOO|$iKIpppipOO", kwlist, &archive_path_obj,
           &output_dir_obj, &files_obj, &policy.overwrite_existing,
           &max_total_size, &max_depth, &policy.preserve_permissions,
-          &policy.preserve_timestamps, &policy.allow_symlinks,
+          &policy.exact_permissions, &policy.preserve_timestamps, &policy.allow_symlinks,
           &policy.overwrite_dir_metadata, &progress, &cancel)) {
     return NULL; // Error already set
   }

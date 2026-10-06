@@ -1349,6 +1349,51 @@ class TestExtractionMetadata:
         created = (out_dir / "a.txt").stat().st_mode & 0o777
         assert created == 0o666 & ~_umask()
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows has no POSIX permission bits"
+    )
+    @pytest.mark.parametrize(
+        ("mode", "exact", "expected"),
+        [
+            (0o4755, False, 0o755),
+            (0o777, False, 0o777),
+            (0o777, True, 0o777),
+        ],
+        ids=["setuid", "umask", "exact"],
+    )
+    def test_mode_is_masked_unless_exact(
+        self, temp_dir: Path, mode: int, exact: bool, expected: int
+    ) -> None:
+        """Test that setuid and the umask's bits go unless exact modes are asked for."""
+        archive_path = temp_dir / "meta.tar"
+        self._archive_with_metadata(archive_path, mtime=1_000_000_000, mode=mode)
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(exact_permissions=exact)
+        ).run()
+
+        assert result.ok, result.error
+        if not exact:
+            expected &= ~_umask()
+        assert (out_dir / "a.txt").stat().st_mode & 0o7777 == expected
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows has no POSIX permission bits"
+    )
+    def test_directory_mode_is_masked_too(self, temp_dir: Path) -> None:
+        """Test that a directory loses setgid and the umask's bits by default."""
+        archive_path = temp_dir / "meta.tar"
+        directory = _dir_entry("d")
+        directory.mode = 0o2777
+        _tar_with_entries(archive_path, [directory])
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "d").stat().st_mode & 0o7777 == 0o777 & ~_umask()
+
 
 def _umask() -> int:
     """Read the process umask without leaving it changed.

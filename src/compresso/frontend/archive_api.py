@@ -134,6 +134,9 @@ class ExtractOptions:
         max_total_size: Cap on total extracted bytes; 0 means unlimited.
         max_depth: Maximum nesting depth of an entry path; 0 means unlimited.
         preserve_permissions: Whether to restore each entry's mode bits.
+        exact_permissions: Whether those bits are restored exactly, setuid,
+            setgid and sticky included; by default those are dropped and the
+            umask applies, as tar does for a non-root user.
         preserve_timestamps: Whether to restore each entry's modification time.
         overwrite_dir_metadata: Whether a directory that already exists also
             gets the archive's mode and modification time; by default only directories
@@ -144,6 +147,7 @@ class ExtractOptions:
     max_total_size: int = 0
     max_depth: int = 32
     preserve_permissions: bool = True
+    exact_permissions: bool = False
     preserve_timestamps: bool = True
     overwrite_dir_metadata: bool = False
 
@@ -562,6 +566,7 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
                 max_total_size=options.max_total_size,
                 max_depth=options.max_depth,
                 preserve_permissions=options.preserve_permissions,
+                exact_permissions=options.exact_permissions,
                 preserve_timestamps=options.preserve_timestamps,
                 overwrite_dir_metadata=options.overwrite_dir_metadata,
                 progress=to_core_progress(progress, total),

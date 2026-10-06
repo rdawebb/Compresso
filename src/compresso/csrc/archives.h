@@ -89,12 +89,16 @@ typedef struct CArchive {
 typedef struct {
   int allow_symlinks; // 0 = deny (default), 1 = allow, 2 = rewrite to regular
                       // files
-  int allow_absolute_paths; // always 0; field exists for documentation/future
-                            // use
+  int allow_absolute_paths; // always 0; exists for documentation/future use
   int overwrite_existing;   // 0 = error, 1 = skip, 2 = overwrite, 3 = rename
   int allow_special_files;  // 0 = reject device nodes, FIFOs, sockets (default)
   int preserve_permissions; // 1 = restore mode bits, 0 = apply umask
-  int preserve_timestamps;  // 1 = restore mtime, 0 = use current time
+
+  // 1 = restore them exactly, setuid/setgid/sticky included; 0 = drop those
+  // and apply the umask (default), as tar does for a non-root user
+  int exact_permissions;
+  int preserve_timestamps; // 1 = restore mtime, 0 = use current time
+
   // 1 = also restore a directory's mode and mtime when it already exists, 0 =
   // only on directories the extraction creates (default); never in SKIP mode,
   // which leaves existing paths alone

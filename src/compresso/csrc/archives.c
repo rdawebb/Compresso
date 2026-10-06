@@ -19,6 +19,7 @@ static const ExtractionPolicy EXTRACTION_POLICY_DEFAULT = {
     .allow_special_files = 0,
     .overwrite_existing = 0,
     .preserve_permissions = 1,
+    .exact_permissions = 0,
     .preserve_timestamps = 1,
     .overwrite_dir_metadata = 0,
     .max_depth = 32,
@@ -940,12 +941,13 @@ static int deepest_first(const void *a, const void *b) {
 // Deepest first, so a parent made read-only or unsearchable can't block its
 // children; best-effort, like the metadata of files
 static void apply_deferred_dirs(DeferredDirs *d,
-                                const ExtractionPolicy *policy) {
+                                const ExtractionPolicy *policy,
+                                uint32_t mode_mask) {
   qsort(d->items, d->count, sizeof(*d->items), deepest_first);
 
   for (size_t i = 0; i < d->count; i++) {
     if (policy->preserve_permissions)
-      fs_chmod(d->items[i].path, d->items[i].mode);
+      fs_chmod(d->items[i].path, d->items[i].mode & mode_mask);
     if (policy->preserve_timestamps && d->items[i].mtime > 0)
       fs_set_mtime(d->items[i].path, d->items[i].mtime);
     free(d->items[i].path);
@@ -1087,6 +1089,10 @@ static int extract_entries(const CArchive *archive, void *reader,
   PathRename *renames = NULL;
   size_t num_renames = 0, cap_renames = 0;
   DeferredDirs deferred = {0};
+
+  // Read once, as fs_umask briefly changes it
+  uint32_t mode_mask =
+      policy->exact_permissions ? 07777 : 0777 & ~fs_umask();
 
   while ((ret = archive->get_next_entry(reader, &entry, ctx)) == 1) {
     // Catches a cancel between entries; extract_entry_data catches one during
@@ -1330,7 +1336,7 @@ static int extract_entries(const CArchive *archive, void *reader,
         if (policy->preserve_timestamps && entry.mtime > 0)
           fs_futimens(f, (int64_t)entry.mtime);
         if (policy->preserve_permissions)
-          fs_fchmod(f, entry.mode);
+          fs_fchmod(f, entry.mode & mode_mask);
       }
       if (fclose(f) != 0 && !close_errno)
         close_errno = errno;
@@ -1363,7 +1369,7 @@ static int extract_entries(const CArchive *archive, void *reader,
 
 cleanup:
   // Also after a failure, so what was extracted carries its archived metadata
-  apply_deferred_dirs(&deferred, policy);
+  apply_deferred_dirs(&deferred, policy, mode_mask);
   free(renames);
   return result;
 }

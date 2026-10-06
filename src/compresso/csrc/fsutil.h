@@ -146,6 +146,9 @@ typedef struct {
 // read-only bit is honoured
 int fs_chmod(const char *path, uint32_t mode);
 
+// The process umask; always 0 on Windows, which has no permission bits to mask
+uint32_t fs_umask(void);
+
 int fs_unlink(const char *path);
 
 // Hardlink `new_path` to `existing`, which is never followed if it is a
