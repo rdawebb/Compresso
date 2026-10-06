@@ -115,6 +115,10 @@ int output_finish(int err, FILE *input, FILE *output, const char *temp,
 // Size on disk: CHeader is never written or read directly
 #define C_HEADER_SIZE 16
 
+// The payload embeds its codec's own content checksum, which the decoder
+// verifies from the frame itself; informational, as older files lack it
+#define C_FLAG_CHECKSUMMED 0x01
+
 typedef struct {
   uint8_t magic[C_MAGIC_LEN];
   uint8_t version;
@@ -166,6 +170,9 @@ typedef struct CBackend {
   LevelRange levels;
 
   int (*is_available)(void);
+
+  // Its payload carries a content checksum, recorded as C_FLAG_CHECKSUMMED
+  int checksummed;
 
   // `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation
   int (*compress_stream)(FILE *src, FILE *dst, int level, CoreContext *ctx);

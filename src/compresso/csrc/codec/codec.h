@@ -38,7 +38,7 @@ typedef struct {
 // `.comp`'s lzma asks for an extreme preset `.xz` does not
 typedef struct {
   int level;           // -1 for the library default
-  int checksum;        // Embed, or verify, the codec's own integrity check
+  int checksum;        // Embed the codec's own integrity check
   int extreme;         // lzma: LZMA_PRESET_EXTREME
   int wrap;            // deflate: a CodecWrap
   int concatenated;    // The container allows members back to back

@@ -71,7 +71,7 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   header.version = 1;
   header.algo = backend->id;
   header.level = (uint8_t)((level >= 0 && level <= 254) ? level : 255);
-  header.flags = 0;
+  header.flags = backend->checksummed ? C_FLAG_CHECKSUMMED : 0;
   header.orig_size = (uint64_t)len;
 
   uint8_t header_buf[C_HEADER_SIZE];

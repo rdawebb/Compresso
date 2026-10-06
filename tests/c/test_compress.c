@@ -4,6 +4,7 @@
 #define UNITY_SUPPORT_TEST_CASES
 
 #define PY_SSIZE_T_CLEAN
+#include "codec/codec.h"
 #include "common.h"
 #include "files.h"
 #include "fsutil.h"
@@ -112,7 +113,7 @@ void test_header_records_algo_level_and_size(void) {
   TEST_ASSERT_EQUAL_UINT8(1, header.version);
   TEST_ASSERT_EQUAL_UINT8(ALGO_ZSTD, header.algo);
   TEST_ASSERT_EQUAL_UINT8(3, header.level);
-  TEST_ASSERT_EQUAL_UINT8(0, header.flags);
+  TEST_ASSERT_EQUAL_UINT8(C_FLAG_CHECKSUMMED, header.flags);
   TEST_ASSERT_EQUAL_UINT64((uint64_t)file_size(TEST_INPUT), header.orig_size);
 
   remove(comp);
@@ -355,4 +356,105 @@ void test_decompress_stops_past_an_understated_size(int index) {
 TEST_RANGE([ 0, 5, 1 ])
 void test_decompress_rejects_an_overstated_size(int index) {
   assert_size_refused(index, 1);
+}
+
+// ---- Payload checksum ----
+
+static const AlgoID CHECKSUMMED[] = {ALGO_ZSTD, ALGO_LZ4};
+
+// Every TEST_RANGE over CHECKSUMMED must span exactly these rows
+_Static_assert(sizeof(CHECKSUMMED) / sizeof(CHECKSUMMED[0]) == 2,
+               "update TEST_RANGE");
+
+TEST_RANGE([ 0, 5, 1 ])
+void test_header_flags_a_checksummed_payload(int index) {
+  AlgoID algo = ALGOS[index];
+  char comp[64];
+  snprintf(comp, sizeof(comp), "tmp_cmp_flags_%d.comp", (int)algo);
+  TEST_ASSERT_EQUAL_INT(
+      0, compress(TEST_INPUT, comp, algo, -1, OW_OVERWRITE, NULL, 0));
+
+  int checksummed = algo == ALGO_ZSTD || algo == ALGO_LZ4;
+  TEST_ASSERT_EQUAL_UINT8(checksummed ? C_FLAG_CHECKSUMMED : 0,
+                          read_header(comp).flags);
+
+  remove(comp);
+}
+
+// Incompressible, so both codecs store it raw and a changed byte alters the
+// content without breaking the frame's structure
+static void write_noise(const char *path, size_t size) {
+  FILE *f = fopen(path, "wb");
+  TEST_ASSERT_NOT_NULL(f);
+  uint32_t x = 2463534242u;
+  for (size_t i = 0; i < size; i++) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    fputc((int)(x & 0xFF), f);
+  }
+  fclose(f);
+}
+
+TEST_RANGE([ 0, 1, 1 ])
+void test_checksum_catches_a_changed_byte(int index) {
+  AlgoID algo = CHECKSUMMED[index];
+  const char *comp = "tmp_cmp_noise.comp";
+  const char *out = "tmp_cmp_noise.out";
+  write_noise("tmp_cmp_noise", 65536);
+  TEST_ASSERT_EQUAL_INT(
+      0, compress("tmp_cmp_noise", comp, algo, -1, OW_OVERWRITE, NULL, 0));
+
+  // The middle of the file is inside the stored block's data
+  FILE *f = fopen(comp, "rb+");
+  TEST_ASSERT_NOT_NULL(f);
+  long pos = file_size(comp) / 2;
+  fseek(f, pos, SEEK_SET);
+  int byte = fgetc(f);
+  fseek(f, pos, SEEK_SET);
+  fputc(byte ^ 0xFF, f);
+  fclose(f);
+
+  remove(out); // Left by a failed run, it would read as written
+  assert_error(decompress_file(comp, out, ALGO_NONE, OW_OVERWRITE, NULL, 0,
+                               NULL),
+               comp_CorruptDataError);
+  TEST_ASSERT_EQUAL_INT(-1, file_size(out));
+
+  remove("tmp_cmp_noise");
+  remove(comp);
+  remove(out);
+}
+
+TEST_RANGE([ 0, 1, 1 ])
+void test_payload_without_a_checksum_still_decodes(int index) {
+  AlgoID algo = CHECKSUMMED[index];
+  const char *comp = "tmp_cmp_legacy.comp";
+  const char *out = "tmp_cmp_legacy.out";
+
+  // As written before payloads were checksummed: flags clear, no checksum
+  CHeader header = valid_header();
+  header.algo = algo;
+  header.orig_size = (uint64_t)file_size(TEST_INPUT);
+  uint8_t buf[C_HEADER_SIZE];
+  c_header_pack(&header, buf);
+
+  FILE *src = fopen(TEST_INPUT, "rb");
+  FILE *dst = fopen(comp, "wb");
+  TEST_ASSERT_NOT_NULL(src);
+  TEST_ASSERT_NOT_NULL(dst);
+  fwrite(buf, 1, sizeof(buf), dst);
+  CodecParams params = {.level = -1};
+  const CodecOps *ops =
+      algo == ALGO_ZSTD ? codec_zstd_ops() : codec_lz4_ops();
+  TEST_ASSERT_EQUAL_INT(0, codec_run_stream(ops, &params, 0, src, dst, NULL));
+  fclose(src);
+  fclose(dst);
+
+  TEST_ASSERT_EQUAL_INT(
+      0, decompress_file(comp, out, ALGO_NONE, OW_OVERWRITE, NULL, 0, NULL));
+  TEST_ASSERT_TRUE(files_equal(TEST_INPUT, out));
+
+  remove(comp);
+  remove(out);
 }
