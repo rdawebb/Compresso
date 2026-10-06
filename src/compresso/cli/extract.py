@@ -234,6 +234,14 @@ def extract(
             help="Refuse archives extracting to more than this many bytes",
         ),
     ] = None,
+    same_permissions: Annotated[
+        bool,
+        app.Option(
+            "--same-permissions",
+            "-p",
+            help="Restore modes exactly, keeping setuid/setgid/sticky and ignoring the umask",
+        ),
+    ] = False,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
@@ -262,6 +270,8 @@ def extract(
         skip_existing: If True, leave files that already exist untouched.
         error_on_conflict: If True, fail instead of renaming a clashing file.
         max_total_size: Cap on total extracted bytes (default: no cap).
+        same_permissions: If True, restore archive entries' modes exactly;
+            single-file outputs are unaffected.
         quiet: If True, suppress all output.
     """
     if sum([overwrite, skip_existing, error_on_conflict]) > 1:
@@ -283,7 +293,11 @@ def extract(
     else:
         mode = OverwriteMode.RENAME
 
-    options = ExtractOptions(overwrite=mode, max_total_size=max_total_size or 0)
+    options = ExtractOptions(
+        overwrite=mode,
+        max_total_size=max_total_size or 0,
+        exact_permissions=same_permissions,
+    )
 
     try:
         for source in inputs:
