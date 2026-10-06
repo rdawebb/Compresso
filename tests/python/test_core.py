@@ -160,13 +160,6 @@ class TestCompressFile:
         with pytest.raises(FileNotFoundError):
             compress_file(str(input_file), str(output_file), "zlib", "balanced", 6)
 
-    def test_compress_empty_file(self, empty_file: Path, temp_dir: Path) -> None:
-        """Test compressing an empty file."""
-        output_file = temp_dir / "compressed_empty.comp"
-
-        with pytest.raises(ValueError):
-            compress_file(str(empty_file), str(output_file), "zlib", "balanced", 6)
-
     def test_compress_large_file(
         self, large_compressible_file: Path, temp_dir: Path
     ) -> None:

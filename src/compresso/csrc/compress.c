@@ -60,11 +60,6 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
     goto done;
   }
 
-  if (validate_size((uint64_t)len, MAX_FILE_SIZE, "Input file size") != 0) {
-    return_code = -1;
-    goto done;
-  }
-
   dst = output_open(&out, temp);
   if (!dst) {
     return_code = -1;
@@ -203,11 +198,6 @@ static int decompress_compresso_file(const char *src_path,
   }
 
   uint64_t orig_size = header.orig_size;
-  if (validate_size(orig_size, MAX_DECOMPRESSED_SIZE,
-                    "Original file size in header") != 0) {
-    return_code = -1;
-    goto done;
-  }
 
   // Only once the header is known good, so a bad one creates nothing
   dst = output_open(out, temp);

@@ -7,20 +7,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-int validate_size(uint64_t size, uint64_t max_size, const char *name) {
-  if (size == 0) {
-    PyErr_Format(PyExc_ValueError, "%s is zero", name);
-    return -1;
-  }
-  if (size > max_size) {
-    PyErr_Format(PyExc_ValueError,
-                 "%s (%llu bytes) exceeds maximum size (%llu bytes)", name,
-                 (unsigned long long)size, (unsigned long long)max_size);
-    return -1;
-  }
-  return 0;
-}
-
 void *safe_malloc(size_t size) {
   if (size == 0) {
     PyErr_SetString(PyExc_ValueError, "Cannot allocate zero bytes");

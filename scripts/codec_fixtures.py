@@ -103,8 +103,8 @@ def sha256(path: Path) -> str:
 def record_outcome(write: Callable[[], object], dst: Path) -> str:
     """Run one compression and describe what it produced.
 
-    A refusal is recorded rather than skipped: `.comp` rejects empty input via
-    `validate_size` while the standalone containers accept it.
+    A refusal is recorded rather than skipped, so a format that starts or stops
+    refusing an input shows up as a change.
 
     Args:
         write: Thunk performing the compression.

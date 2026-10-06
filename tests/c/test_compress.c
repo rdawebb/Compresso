@@ -136,15 +136,6 @@ void test_strategy_picks_the_backend_without_an_algo(void) {
   remove(comp);
 }
 
-void test_compress_refuses_empty_input(void) {
-  write_file("tmp_cmp_empty", "");
-  assert_error(compress("tmp_cmp_empty", "tmp_cmp_empty.comp", ALGO_ZLIB, -1,
-                        OW_OVERWRITE, NULL, 0),
-               PyExc_ValueError);
-  TEST_ASSERT_EQUAL_INT(-1, file_size("tmp_cmp_empty.comp"));
-  remove("tmp_cmp_empty");
-}
-
 void test_compress_reports_a_missing_source(void) {
   assert_error(compress("tmp_cmp_missing", "tmp_cmp_missing.comp", ALGO_ZLIB,
                         -1, OW_OVERWRITE, NULL, 0),

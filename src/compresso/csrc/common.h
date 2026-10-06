@@ -217,11 +217,6 @@ const CBackend *find_backend_by_id(uint8_t id);
 
 PyObject *get_capabilities(void);
 
-#define MAX_FILE_SIZE (10ULL * 1024 * 1024 * 1024)         // 10 GB
-#define MAX_DECOMPRESSED_SIZE (10ULL * 1024 * 1024 * 1024) // 10 GB
-
-int validate_size(uint64_t size, uint64_t max_size, const char *name);
-
 void *safe_malloc(size_t size);
 
 // Raises the errno-mapped OSError if `path` cannot be opened and read
