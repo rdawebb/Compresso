@@ -305,9 +305,13 @@ jobs:
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
 
-      # A per-input timeout, since -max_total_time alone never reports a hang
+      # A per-input timeout, since -max_total_time alone never reports a hang;
+      # PYTHONMALLOC=malloc lets the per-input leak check see leaked PyObjects;
+      # the exit check only sees the harness's never-finalised interpreter
       - name: Run fuzz target
         env:
+          PYTHONMALLOC: malloc
+          ASAN_OPTIONS: leak_check_at_exit=0
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           mkdir -p build/fuzz-artifacts build/fuzz-corpus
