@@ -30,7 +30,15 @@ typedef struct {
   int64_t mtime; // Seconds since the Unix epoch
   uint32_t mode; // POSIX permission bits (0777), best-effort on Windows
   fs_file_type type;
+
+  // Identity, for fs_same_file; on Windows only filled for regular files (the
+  // volume serial and file index), and 0 wherever it is unknown
+  uint64_t dev, ino;
 } fs_stat;
+
+// True if both name the same file, e.g. through a hardlink; false whenever
+// either identity is unknown
+int fs_same_file(const fs_stat *a, const fs_stat *b);
 
 // True if `path` is anything other than a plain relative path: a leading
 // separator, or a drive qualifier; Windows forms are rejected on POSIX too,
@@ -45,11 +53,20 @@ int fs_is_stream_path(const char *path);
 // Locate the last path separator in `path`, or NULL if it has none
 char *fs_last_sep(const char *path);
 
+// Write `dir` + "/" + `name` into `out`, leaving out the "/" when `dir` is
+// empty or already ends in a separator; -1/ENAMETOOLONG if it would not fit
+int fs_join(char *out, size_t out_size, const char *dir, const char *name);
+
 // Stat `path` itself, without following symlinks (lstat(2)), so a symlink or
 // Windows reparse point reports FS_TYPE_SYMLINK rather than its target's type
 int fs_stat_path(const char *path, fs_stat *out);
 
-// Read a symlink's target into `buf` (NUL-terminated)
+// Stat an open file, so a path reached through a symlink reports its target;
+// the identity is left 0 on Windows
+int fs_fstat(FILE *f, fs_stat *out);
+
+// Read a symlink's target into `buf` (NUL-terminated); -1/ENAMETOOLONG if it
+// doesn't fit, rather than truncating it
 // On Windows this is the resolved absolute target, not the literal link text
 int fs_readlink(const char *path, char *buf, size_t buf_size);
 
@@ -74,15 +91,23 @@ FILE *fs_fopen_exclusive(const char *path);
 // The access time is set to the same value, since archives do not carry one
 int fs_set_mtime(const char *path, int64_t mtime);
 
+// fs_set_mtime and fs_chmod on an open file, so they reach the file written
+// even if its path has since been replaced; on Windows `mode` sets only the
+// read-only attribute, replacing any others
+int fs_futimens(FILE *f, int64_t mtime);
+int fs_fchmod(FILE *f, uint32_t mode);
+
 // Canonicalise `path` into `resolved` (at least FS_PATH_MAX bytes), resolving
 // symlinks and Windows reparse points; fails if `path` does not exist
 int fs_realpath(const char *path, char *resolved);
 
-// Create a unique temp file from a mkstemp-style template ending in "XXXXXX"
-int fs_mkstemp(char *template_path);
+// Create a unique temp file from a mkstemp-style template ending in "XXXXXX",
+// returning it open for writing; its mode is the one fopen(path, "wb") would
+// give, so it can become the output as is; NULL with errno set on failure
+FILE *fs_mkstemp(char *template_path);
 
 // Create `path` and any missing parents, applying `mode` to the final
-// component only
+// component only; splits on either separator on Windows
 int fs_mkdir_p(const char *path, uint32_t mode);
 
 // Create `path` (parent must already exist), failing with errno EEXIST if
@@ -99,17 +124,45 @@ int fs_conflict_path(const char *path, int n, char *out, size_t out_size);
 
 // Applies an overwrite scheme (0=error, 1=skip, 2=overwrite, 3=rename) to
 // `path`, writing the safe path into `resolved` (at least FS_PATH_MAX bytes);
-// only stat(2)s, never touches the dest; not race-free as a codec pipeline has
-// no atomic point to open against until its output is fully produced; returns 0
-// to proceed with `resolved`, 1 to skip, or -1/errno
+// only stat(2)s, never touches the dest, so it is an early check rather than a
+// guarantee; fs_commit_temp enforces the scheme; returns 0 to proceed with
+// `resolved`, 1 to skip, or -1/errno
 int fs_resolve_conflict(const char *path, int overwrite_existing,
                         char *resolved, size_t resolved_size);
+
+// Move closed `temp` to `dst` under the same scheme with no race window: only
+// OVERWRITE replaces, RENAME retries conflict names with a no-replace move;
+// `actual` (at least FS_PATH_MAX bytes) gets the path used; returns 0 if moved,
+// 1 if skipped, or -1/errno (EEXIST for ERROR); `temp` stays unless moved
+int fs_commit_temp(const char *temp, const char *dst, int overwrite_existing,
+                   char *actual, size_t actual_size);
+
+// A file output, written to a temp beside `path` and committed on success
+typedef struct {
+  const char *path;
+  int overwrite; // The 0-3 scheme above
+  char *actual;  // Optional; receives the path written, or skipped
+  size_t actual_size;
+  int owner_only; // 0600, for an intermediate that holds a whole archive
+
+  // The source's mode, less setuid/setgid/sticky, and mtime, as single-file
+  // tools give their outputs
+  int keep_source_metadata;
+} OutputTarget;
 
 // Apply POSIX permission bits to an existing path; on Windows only the
 // read-only bit is honoured
 int fs_chmod(const char *path, uint32_t mode);
 
+// The process umask; always 0 on Windows, which has no permission bits to mask
+uint32_t fs_umask(void);
+
 int fs_unlink(const char *path);
+
+// Hardlink `new_path` to `existing`, which is never followed if it is a
+// symlink; -1 with errno set (EEXIST if `new_path` exists, EXDEV across
+// filesystems)
+int fs_link(const char *existing, const char *new_path);
 
 // Current read/write offset in an open stream, as a 64-bit value on every
 // platform (plain ftell() is 32-bit on Windows); returns -1 on failure

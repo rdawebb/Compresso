@@ -5,18 +5,19 @@
 
 // The .bz2 frame (BZh header + per-block CRC32s) is produced by libbz2, which
 // verifies CRCs as it reads
-static int bzip2_compress_file(const char *input_path, const char *output_path,
+static int bzip2_compress_file(const char *input_path, const OutputTarget *out,
                                int level, CoreContext *ctx) {
   CodecParams params = {.level = level};
-  return codec_run_file(codec_bzip2_ops(), &params, 0, input_path, output_path,
-                        ctx, "bzip2 compression failed");
+  return codec_run_file(codec_bzip2_ops(), &params, 0, input_path, out, ctx,
+                        "bzip2 compression failed");
 }
 
 static int bzip2_decompress_file(const char *input_path,
-                                 const char *output_path, CoreContext *ctx) {
-  CodecParams params = {0};
-  return codec_run_file(codec_bzip2_ops(), &params, 1, input_path, output_path,
-                        ctx, "bzip2 decompression failed");
+                                 const OutputTarget *out, CoreContext *ctx) {
+  // Trailing garbage is ignored with a warning
+  CodecParams params = {.concatenated = 1, .ignore_trailing = 1};
+  return codec_run_file(codec_bzip2_ops(), &params, 1, input_path, out, ctx,
+                        "bzip2 decompression failed");
 }
 
 static char *bzip2_get_original_name(const char *compressed_path) {

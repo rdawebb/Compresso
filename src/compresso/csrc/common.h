@@ -4,6 +4,7 @@
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
 #include "context.h"
+#include "fsutil.h"
 #include "levels.h"
 #include <Python.h>
 #include <stddef.h>
@@ -79,9 +80,32 @@ static inline uint64_t read_le64(const uint8_t *buf) {
 
 // Closes both streams, and on failure or cancellation unlinks the half-written
 // output; sets `failure_message` unless cancelled or pending exception; pass
-// NULL when every failing path sets its own; returns `err` unchanged
+// NULL when every failing path sets its own; returns `err`, or -1 with an
+// OSError when it was 0 but the output couldn't be flushed or closed
 int codec_finish_file(int err, FILE *input, FILE *output,
                       const char *output_path, const char *failure_message);
+
+// ---- Outputs ----
+// Every file output is written to a temp beside its path and committed only on
+// success, so a failure never touches an existing file
+
+// Applies `out`'s scheme before any work: an early ERROR or SKIP, and refuses
+// to OVERWRITE `src_path` itself (NULL for many inputs); returns 0 to proceed,
+// 1 to skip (`actual` filled), or -1 with an exception set
+int output_check(const char *src_path, const OutputTarget *out);
+
+// Opens the temp file for `out` into `temp` (at least FS_PATH_MAX bytes);
+// NULL with an exception set
+FILE *output_open(const OutputTarget *out, char *temp);
+
+// Commits the closed `temp` under `out`'s scheme, filling `actual`; removes
+// `temp` if it can't; returns 0, or -1 with an exception set
+int output_commit(const char *temp, const OutputTarget *out);
+
+// codec_finish_file on the temp, then commits it under `out`'s scheme, filling
+// `actual`; the temp never survives; `output` may be NULL if never opened
+int output_finish(int err, FILE *input, FILE *output, const char *temp,
+                  const OutputTarget *out, const char *failure_message);
 
 // ---- Header ----
 
@@ -90,6 +114,10 @@ int codec_finish_file(int err, FILE *input, FILE *output,
 
 // Size on disk: CHeader is never written or read directly
 #define C_HEADER_SIZE 16
+
+// The payload embeds its codec's own content checksum, which the decoder
+// verifies from the frame itself; informational, as older files lack it
+#define C_FLAG_CHECKSUMMED 0x01
 
 typedef struct {
   uint8_t magic[C_MAGIC_LEN];
@@ -143,6 +171,9 @@ typedef struct CBackend {
 
   int (*is_available)(void);
 
+  // Its payload carries a content checksum, recorded as C_FLAG_CHECKSUMMED
+  int checksummed;
+
   // `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation
   int (*compress_stream)(FILE *src, FILE *dst, int level, CoreContext *ctx);
   int (*decompress_stream)(FILE *src, FILE *dst, uint64_t orig_size,
@@ -152,6 +183,7 @@ typedef struct CBackend {
 // ---- Strategy ----
 
 typedef enum {
+  STRAT_UNKNOWN = -1, // A name strategy_from_string doesn't recognise
   STRAT_BALANCED = 0,
   STRAT_FAST = 1,
   STRAT_MAX_RATIO = 2,
@@ -176,10 +208,14 @@ const CBackend *get_snappy_backend(void);
 extern PyObject *comp_Error;
 extern PyObject *comp_HeaderError;
 extern PyObject *comp_BackendError;
+extern PyObject *comp_CorruptDataError;
+extern PyObject *comp_ExtractionPolicyError;
 extern PyObject *comp_Cancelled;
+extern PyObject *comp_TrailingDataWarning;
 
 // ---- Helpers ----
 
+// NULL and "" mean balanced; anything unrecognised is STRAT_UNKNOWN
 Strategy strategy_from_string(const char *str);
 AlgoID algo_from_string(const char *str);
 
@@ -188,15 +224,9 @@ const CBackend *find_backend_by_id(uint8_t id);
 
 PyObject *get_capabilities(void);
 
-#define MAX_FILE_SIZE (10ULL * 1024 * 1024 * 1024)         // 10 GB
-#define MAX_DECOMPRESSED_SIZE (10ULL * 1024 * 1024 * 1024) // 10 GB
-
-int validate_size(uint64_t size, uint64_t max_size, const char *name);
-
 void *safe_malloc(size_t size);
 
-// Raises the errno-mapped OSError (FileNotFoundError, PermissionError, ...) if
-// `path` cannot be opened and read
+// Raises the errno-mapped OSError if `path` cannot be opened and read
 int check_source_readable(const char *path);
 
 // ---- Backend Error Helper ----
@@ -214,8 +244,10 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
                   char *out_actual_path, size_t out_actual_path_size,
                   CoreContext *ctx);
 
+// Takes the overwrite scheme and reports the path written as compress_file
 int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
-                    CoreContext *ctx);
+                    int overwrite_existing, char *out_actual_path,
+                    size_t out_actual_path_size, CoreContext *ctx);
 
 const char *get_default_backend_for_strategy(Strategy strat);
 

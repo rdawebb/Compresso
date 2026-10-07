@@ -16,19 +16,21 @@ typedef enum {
   ENTRY_FILE = 0,
   ENTRY_DIR = 1,
   ENTRY_SYMLINK = 2,
-  ENTRY_SPECIAL = 3
+  ENTRY_SPECIAL = 3,
+  ENTRY_HARDLINK = 4 // Shares the data of an earlier entry; no data of its own
 } EntryType;
 
 // ---- Archive Entry Metadata ----
 
 typedef struct {
-  char *path;           // Relative path within the archive
-  EntryType type;       // Type of the entry (file, dir, symlink)
-  uint64_t size;        // Uncompressed size (0 for directories)
-  time_t mtime;         // Modified time
-  uint32_t mode;        // Unix permissions
-  char *symlink_target; // Target of the symlink (if applicable)
-  void *internal_data;  // Backend-specific data
+  char *path;          // Relative path within the archive
+  EntryType type;      // Type of the entry (file, dir, symlink)
+  uint64_t size;       // Uncompressed size (0 for directories)
+  time_t mtime;        // Modified time
+  uint32_t mode;       // Unix permissions
+  char *link_target;   // A symlink's target, or for a hardlink the archive
+                       // path of the entry it shares data with
+  void *internal_data; // Backend-specific data
 
   // Per-entry compression detail, which only a container that compresses each
   // entry separately has; zero means "not recorded"
@@ -60,13 +62,16 @@ typedef struct CArchive {
   int (*add_entry)(void *writer, const ArchiveEntry *entry, FILE *data,
                    const char *source_path, CoreContext *ctx);
 
-  // Some backends defer the real work to here, so this takes a context too
-  int (*close_writer)(void *writer, CoreContext *ctx);
+  // Some backends defer the real work to here, so this takes a context too;
+  // `discard` abandons a failed archive, and raises nothing, so the failure
+  // that caused it stays the one reported
+  int (*close_writer)(void *writer, CoreContext *ctx, int discard);
 
   // Reading (Extracting Archives)
   void *(*create_reader)(const char *input_path);
   int (*get_entry_count)(void *reader);
-  int (*get_next_entry)(void *reader, ArchiveEntry *entry);
+  // `ctx` (NULL-tolerant) only receives warnings about a still-usable entry
+  int (*get_next_entry)(void *reader, ArchiveEntry *entry, CoreContext *ctx);
 
   // Writes the current entry's data to `output`, refusing to write more than
   // `max_bytes` (UINT64_MAX for no limit) and reporting the byte count through
@@ -75,7 +80,8 @@ typedef struct CArchive {
                             uint64_t *bytes_written, CoreContext *ctx);
   int (*skip_entry_data)(void *reader);
   int (*reset_reader)(void *reader);
-  int (*close_reader)(void *reader);
+  // `discard` releases a reader whose pass already failed, raising nothing
+  int (*close_reader)(void *reader, int discard);
 } CArchive;
 
 // ---- Extraction Policy ----
@@ -83,15 +89,23 @@ typedef struct CArchive {
 typedef struct {
   int allow_symlinks; // 0 = deny (default), 1 = allow, 2 = rewrite to regular
                       // files
-  int allow_absolute_paths; // always 0; field exists for documentation/future
-                            // use
+  int allow_absolute_paths; // always 0; exists for documentation/future use
   int overwrite_existing;   // 0 = error, 1 = skip, 2 = overwrite, 3 = rename
   int allow_special_files;  // 0 = reject device nodes, FIFOs, sockets (default)
   int preserve_permissions; // 1 = restore mode bits, 0 = apply umask
-  int preserve_timestamps;  // 1 = restore mtime, 0 = use current time
-  uint32_t max_depth;       // maximum recursive nesting depth (0 = unlimited,
-                            // recommend 32)
-  uint64_t max_total_size;  // maximum total extracted bytes (0 = unlimited)
+
+  // 1 = restore them exactly, setuid/setgid/sticky included; 0 = drop those
+  // and apply the umask (default), as tar does for a non-root user
+  int exact_permissions;
+  int preserve_timestamps; // 1 = restore mtime, 0 = use current time
+
+  // 1 = also restore a directory's mode and mtime when it already exists, 0 =
+  // only on directories the extraction creates (default); never in SKIP mode,
+  // which leaves existing paths alone
+  int overwrite_dir_metadata;
+  uint32_t max_depth;      // maximum recursive nesting depth (0 = unlimited,
+                           // recommend 32)
+  uint64_t max_total_size; // maximum total extracted bytes (0 = unlimited)
 } ExtractionPolicy;
 
 ExtractionPolicy extraction_policy_default(void); // returns safe defaults
@@ -193,6 +207,8 @@ int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files,
                     const ExtractionPolicy *policy, CoreContext *ctx);
 
-PyObject *list_archive_contents(const char *archive_path);
+// `ctx` (NULL-tolerant) carries signal checks and warnings; there is no
+// progress to report
+PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx);
 
 #endif // ARCHIVE_H

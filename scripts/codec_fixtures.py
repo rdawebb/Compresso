@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import random
 import shutil
 import sys
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from typing import NamedTuple
+
+import orjson
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -100,8 +103,8 @@ def sha256(path: Path) -> str:
 def record_outcome(write: Callable[[], object], dst: Path) -> str:
     """Run one compression and describe what it produced.
 
-    A refusal is recorded rather than skipped: `.comp` rejects empty input via
-    `validate_size` while the standalone containers accept it.
+    A refusal is recorded rather than skipped, so a format that starts or stops
+    refusing an input shows up as a change.
 
     Args:
         write: Thunk performing the compression.
@@ -119,6 +122,49 @@ def record_outcome(write: Callable[[], object], dst: Path) -> str:
     return sha256(dst)
 
 
+class Job(NamedTuple):
+    """One compression for `compress_one` to run.
+
+    Attributes:
+        kind: `comp` for `.comp` framing, or `standalone` for a container.
+        codec: The `.comp` algorithm or standalone format.
+        level: The compression level.
+        src: The input to compress.
+        dst: Where to write the compressed output.
+    """
+
+    kind: str
+    codec: str
+    level: int
+    src: Path
+    dst: Path
+
+
+def compress_one(job: Job) -> str:
+    """Run one compression in a worker process and describe what it produced.
+
+    Args:
+        job: The compression to run.
+
+    Returns:
+        The output's SHA-256, or an `error:` line naming the refusal.
+    """
+    src, dst = str(job.src), str(job.dst)
+    if job.kind == "comp":
+        return record_outcome(
+            # overwrite=2, so a re-run replaces rather than renaming
+            lambda: _core.compress_file(
+                src, dst, job.codec, "balanced", job.level, overwrite=2
+            ),
+            job.dst,
+        )
+
+    return record_outcome(
+        lambda: _core.compress_standalone(src, dst, job.codec, job.level, overwrite=2),
+        job.dst,
+    )
+
+
 def compress_all(corpus: dict[str, Path], out_dir: Path) -> dict[str, str]:
     """Compress every corpus entry through both paths at every level.
 
@@ -131,30 +177,27 @@ def compress_all(corpus: dict[str, Path], out_dir: Path) -> dict[str, str]:
         where that combination is refused.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    digests: dict[str, str] = {}
+    jobs: dict[str, Job] = {}
 
     for case, src in sorted(corpus.items()):
         for level in LEVELS:
             for algo in COMP_ALGOS:
                 dst = out_dir / f"{case}.{algo}.{level}.comp"
-                digests[f"comp/{algo}/{level}/{case}"] = record_outcome(
-                    # overwrite=2, so a re-run replaces rather than renaming
-                    lambda s=src, d=dst, a=algo, lv=level: _core.compress_file(
-                        str(s), str(d), a, "balanced", lv, overwrite=2
-                    ),
-                    dst,
-                )
+                jobs[f"comp/{algo}/{level}/{case}"] = Job("comp", algo, level, src, dst)
 
             for fmt in STANDALONE_FORMATS:
                 dst = out_dir / f"{case}.{fmt}.{level}.bin"
-                digests[f"standalone/{fmt}/{level}/{case}"] = record_outcome(
-                    lambda s=src, d=dst, f=fmt, lv=level: _core.compress_standalone(
-                        str(s), str(d), f, lv, overwrite=2
-                    ),
-                    dst,
+                jobs[f"standalone/{fmt}/{level}/{case}"] = Job(
+                    "standalone", fmt, level, src, dst
                 )
 
-    return digests
+    # Processes, since the `.comp` path holds the GIL; the largest inputs go
+    # first, so none is left running alone at the end
+    order = sorted(jobs, key=lambda key: jobs[key].src.stat().st_size, reverse=True)
+    with ProcessPoolExecutor() as pool:
+        futures = {key: pool.submit(compress_one, jobs[key]) for key in order}
+
+    return {key: future.result() for key, future in futures.items()}
 
 
 def decode_all(
@@ -300,7 +343,7 @@ def main() -> int:
             return 1
 
         corpus = build_corpus(corpus_dir)
-        baseline = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))["outputs"]
+        baseline = orjson.loads(MANIFEST_PATH.read_bytes())["outputs"]
         failures = decode_all(corpus, out_dir, baseline)
         for key in failures:
             print(f"MISMATCH {key}")
@@ -317,12 +360,13 @@ def main() -> int:
     if args.mode == "record":
         digests = compress_all(corpus, out_dir)
         MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-        MANIFEST_PATH.write_text(
-            json.dumps(
-                {"seed": RANDOM_SEED, "outputs": digests}, indent=2, sort_keys=True
+        MANIFEST_PATH.write_bytes(
+            orjson.dumps(
+                {"seed": RANDOM_SEED, "outputs": digests},
+                option=orjson.OPT_INDENT_2
+                | orjson.OPT_SORT_KEYS
+                | orjson.OPT_APPEND_NEWLINE,
             )
-            + "\n",
-            encoding="utf-8",
         )
         print(
             f"recorded {len(digests)} outputs to {MANIFEST_PATH.relative_to(REPO_ROOT)}"
@@ -333,7 +377,7 @@ def main() -> int:
         print(f"no manifest at {MANIFEST_PATH}; run `record` first")
         return 1
 
-    baseline = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))["outputs"]
+    baseline = orjson.loads(MANIFEST_PATH.read_bytes())["outputs"]
 
     # A check writes into its own directory, so it can never overwrite the
     # artifacts `decode` needs from the recording build

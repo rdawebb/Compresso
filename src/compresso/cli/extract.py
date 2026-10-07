@@ -48,10 +48,10 @@ def list_entries(entries: list[ArchiveEntry]) -> None:
         if entry.is_dir:
             listed_dirs.add("/".join(parts))
 
-        # A symlink's stored size is the length of its target, not file data
+        # A symlink's stored size is the length of its target; hardlink's have no data
         size = (
             ""
-            if entry.is_dir or entry.is_symlink
+            if entry.is_dir or entry.is_symlink or entry.is_hardlink
             else format_size(size_bytes=entry.size)
         )
         target = f" -> {entry.link_target}" if entry.is_symlink else ""
@@ -121,7 +121,11 @@ def _extract_archive(
 
 
 def _decompress_one_file(
-    source: Path, output: Path | None, list_only: bool, quiet: bool
+    source: Path,
+    output: Path | None,
+    list_only: bool,
+    overwrite: OverwriteMode,
+    quiet: bool,
 ) -> None:
     """Unpack one single-file container: a `.comp` or a standalone codec.
 
@@ -129,6 +133,7 @@ def _decompress_one_file(
         source: The path to the single-file container.
         output: The output path.
         list_only: Whether to list entries only.
+        overwrite: What to do when the destination file already exists.
         quiet: Whether to suppress output.
     """
     if list_only:
@@ -137,10 +142,10 @@ def _decompress_one_file(
             EXIT_USAGE,
         )
 
-    job = DecompressionJob.from_file(src=source, dest=None)
+    job = DecompressionJob.from_file(src=source, dest=None, overwrite=overwrite)
     dest: Path = resolve_single_output(output, job.plan.dest)
     if dest != job.plan.dest:
-        job = DecompressionJob.from_file(src=source, dest=dest)
+        job = DecompressionJob.from_file(src=source, dest=dest, overwrite=overwrite)
 
     plan = job.plan
 
@@ -176,13 +181,18 @@ def _decompress_one_file(
 
     exit_for_result(result, "Decompression")
 
-    decompressed_size: int = plan.dest.stat().st_size
+    # RENAME may have written somewhere other than `dest`; job.plan is updated
+    # in place on success to reflect the path actually written
+    actual_dest: Path = job.plan.dest
+    decompressed_size: int = actual_dest.stat().st_size
     speed_mbs: int | float = (
         (decompressed_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
     )
 
     if not quiet:
         succeed("Decompression successful!\n")
+        if actual_dest != dest:
+            print(f"  Renamed to:        {actual_dest}")
         print(
             f"  Compressed size:   {format_size(size_bytes=compressed_size)}\n"
             f"  Decompressed size: {format_size(size_bytes=decompressed_size)}\n"
@@ -224,6 +234,14 @@ def extract(
             help="Refuse archives extracting to more than this many bytes",
         ),
     ] = None,
+    same_permissions: Annotated[
+        bool,
+        app.Option(
+            "--same-permissions",
+            "-p",
+            help="Restore modes exactly, keeping setuid/setgid/sticky and ignoring the umask",
+        ),
+    ] = False,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
@@ -252,6 +270,8 @@ def extract(
         skip_existing: If True, leave files that already exist untouched.
         error_on_conflict: If True, fail instead of renaming a clashing file.
         max_total_size: Cap on total extracted bytes (default: no cap).
+        same_permissions: If True, restore archive entries' modes exactly;
+            single-file outputs are unaffected.
         quiet: If True, suppress all output.
     """
     if sum([overwrite, skip_existing, error_on_conflict]) > 1:
@@ -273,7 +293,11 @@ def extract(
     else:
         mode = OverwriteMode.RENAME
 
-    options = ExtractOptions(overwrite=mode, max_total_size=max_total_size or 0)
+    options = ExtractOptions(
+        overwrite=mode,
+        max_total_size=max_total_size or 0,
+        exact_permissions=same_permissions,
+    )
 
     try:
         for source in inputs:
@@ -281,7 +305,7 @@ def extract(
                 _extract_archive(source, output, list_only, options, quiet)
 
             else:
-                _decompress_one_file(source, output, list_only, quiet)
+                _decompress_one_file(source, output, list_only, mode, quiet)
 
     except KeyboardInterrupt:
         cancelled("Extraction")

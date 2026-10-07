@@ -4,20 +4,20 @@
 #include "../standalone.h"
 #include <string.h>
 
-static int lz4_compress_file(const char *input_path, const char *output_path,
+static int lz4_compress_file(const char *input_path, const OutputTarget *out,
                              int level, CoreContext *ctx) {
   // The xxHash content checksum is verified as the frame is consumed
   CodecParams params = {.level = level, .checksum = 1};
-  return codec_run_file(codec_lz4_ops(), &params, 0, input_path, output_path,
-                        ctx, "lz4 compression failed");
+  return codec_run_file(codec_lz4_ops(), &params, 0, input_path, out, ctx,
+                        "lz4 compression failed");
 }
 
-static int lz4_decompress_file(const char *input_path, const char *output_path,
+static int lz4_decompress_file(const char *input_path, const OutputTarget *out,
                                CoreContext *ctx) {
-  CodecParams params = {0};
-  return codec_run_file(codec_lz4_ops(), &params, 1, input_path, output_path,
-                        ctx, "lz4 decompression failed: corrupted or invalid "
-                             "data");
+  CodecParams params = {.concatenated = 1};
+  return codec_run_file(codec_lz4_ops(), &params, 1, input_path, out, ctx,
+                        "lz4 decompression failed: corrupted or invalid "
+                        "data");
 }
 
 static char *lz4_get_original_name(const char *compressed_path) {

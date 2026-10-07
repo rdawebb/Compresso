@@ -11,13 +11,13 @@ static int lz4_is_available(void) {
 
 static int lz4_compress_stream(FILE *src, FILE *dst, int level,
                                CoreContext *ctx) {
-  CodecParams params = {.level = level};
+  CodecParams params = {.level = level, .checksum = 1};
   return codec_run_stream(codec_lz4_ops(), &params, 0, src, dst, ctx);
 }
 
 static int lz4_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
                                  CoreContext *ctx) {
-  CodecParams params = {.orig_size = orig_size};
+  CodecParams params = {.exact_size = 1, .orig_size = orig_size};
   return codec_run_stream(codec_lz4_ops(), &params, 1, src, dst, ctx);
 }
 
@@ -28,6 +28,7 @@ static const CBackend lz4_backend = {
     .id = ALGO_LZ4,
     .levels = LEVELS_LZ4,
     .is_available = lz4_is_available,
+    .checksummed = 1,
     .compress_stream = lz4_compress_stream,
     .decompress_stream = lz4_decompress_stream,
 };

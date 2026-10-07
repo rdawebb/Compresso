@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from compresso import ExtractionPolicyError
 from compresso.frontend._job import JobResult
 from compresso.frontend.archive_api import (
     ArchiveEntry,
@@ -523,6 +524,31 @@ def _tar_with_entry(archive_path: Path, entry_name: str) -> None:
         tf.addfile(info, io.BytesIO(payload))
 
 
+class TestExtractionRefusesDeniedEntryTypes:
+    """Test that the default policy refuses symlink and special-file entries."""
+
+    @pytest.mark.parametrize(
+        ("entry_type", "kind"),
+        [(tarfile.SYMTYPE, "symlink"), (tarfile.FIFOTYPE, "special file")],
+    )
+    def test_refuses_entry_type(
+        self, temp_dir: Path, entry_type: bytes, kind: str
+    ) -> None:
+        """Test that the entry is refused by policy, naming what it is."""
+        archive_path = temp_dir / "typed.tar"
+        with tarfile.open(archive_path, "w", format=tarfile.GNU_FORMAT) as tf:
+            info = tarfile.TarInfo("entry")
+            info.type = entry_type
+            info.linkname = "target" if entry_type == tarfile.SYMTYPE else ""
+            tf.addfile(info)
+
+        result = ExtractJob.from_archive(archive_path, temp_dir / "out").run()
+
+        assert result.ok is False
+        assert isinstance(result.error, ExtractionPolicyError)
+        assert f"contains {kind}, but policy denies it" in str(result.error)
+
+
 class TestExtractionRefusesUnsafePaths:
     """Test that extraction refuses entry names that escape the output directory.
 
@@ -551,6 +577,7 @@ class TestExtractionRefusesUnsafePaths:
 
         assert result.ok is False
         assert "absolute path" in str(result.error)
+        assert isinstance(result.error, ExtractionPolicyError)
 
     @pytest.mark.parametrize("entry_name", ["../escape.txt", "sub/../../escape.txt"])
     def test_rejects_parent_traversal(self, temp_dir: Path, entry_name: str) -> None:
@@ -562,6 +589,7 @@ class TestExtractionRefusesUnsafePaths:
 
         assert result.ok is False
         assert "traversal" in str(result.error)
+        assert isinstance(result.error, ExtractionPolicyError)
         assert not (temp_dir / "escape.txt").exists()
 
     def test_backslash_traversal_stays_contained(self, temp_dir: Path) -> None:
@@ -583,6 +611,7 @@ class TestExtractionRefusesUnsafePaths:
         if sys.platform == "win32":
             assert result.ok is False
             assert "traversal" in str(result.error)
+            assert isinstance(result.error, ExtractionPolicyError)
 
         else:
             assert result.ok, result.error
@@ -612,6 +641,7 @@ class TestExtractionRefusesUnsafePaths:
         if sys.platform == "win32":
             assert result.ok is False
             assert "alternate data stream" in str(result.error)
+            assert isinstance(result.error, ExtractionPolicyError)
 
         else:
             assert result.ok, result.error
@@ -637,6 +667,7 @@ class TestExtractionRefusesUnsafePaths:
 
         assert result.ok is False
         assert "traversal" in str(result.error)
+        assert isinstance(result.error, ExtractionPolicyError)
         assert not (outside / "sub" / "escape.txt").exists()
         assert not (outside / "sub").exists()
 
@@ -666,6 +697,7 @@ class TestExtractionRefusesUnsafePaths:
 
         assert result.ok is False
         assert "traversal" in str(result.error)
+        assert isinstance(result.error, ExtractionPolicyError)
         assert not (outside / "sub" / "escape.txt").exists()
         assert not (outside / "sub").exists()
 
@@ -754,6 +786,7 @@ class TestExtractionSizeCap:
 
         assert result.ok is False
         assert "maximum extracted size" in str(result.error)
+        assert isinstance(result.error, ExtractionPolicyError)
         assert list(out_dir.iterdir()) == []
 
     def test_cap_applies_to_the_total_not_each_entry(self, temp_dir: Path) -> None:
@@ -770,6 +803,7 @@ class TestExtractionSizeCap:
 
         assert result.ok is False
         assert "maximum extracted size" in str(result.error)
+        assert isinstance(result.error, ExtractionPolicyError)
 
     def test_entry_under_the_cap_extracts(self, temp_dir: Path) -> None:
         """Test that the cap does not over-reject an archive that fits."""
@@ -807,6 +841,7 @@ class TestExtractionSizeCap:
 
         assert result.ok is False
         assert "maximum extracted size" in str(result.error)
+        assert isinstance(result.error, ExtractionPolicyError)
         assert (out_dir / "big.bin").stat().st_size == 0
 
 
@@ -824,6 +859,7 @@ class TestExtractionDepthLimit:
 
         assert result.ok is False
         assert "max depth" in str(result.error)
+        assert isinstance(result.error, ExtractionPolicyError)
         assert list(out_dir.iterdir()) == []
 
     def test_accepts_entry_within_the_depth_limit(self, temp_dir: Path) -> None:
@@ -850,6 +886,7 @@ class TestExtractionDepthLimit:
 
         assert result.ok is False
         assert "max depth" in str(result.error)
+        assert isinstance(result.error, ExtractionPolicyError)
 
 
 class TestExtractionOverwrite:
@@ -1222,6 +1259,48 @@ class TestExtractionMetadata:
             1_000_000_000, abs=2
         )
 
+    def test_read_only_entry_keeps_its_mode_and_mtime(self, temp_dir: Path) -> None:
+        """Test that both are set on the open file, read-only included.
+
+        On Windows the mode is only the read-only attribute.
+        """
+        archive_path = temp_dir / "meta.tar"
+        self._archive_with_metadata(archive_path, mtime=1_000_000_000, mode=0o444)
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok, result.error
+        extracted = (out_dir / "a.txt").stat()
+        assert extracted.st_mode & 0o222 == 0
+        assert extracted.st_mtime == pytest.approx(1_000_000_000, abs=2)
+
+    @pytest.mark.parametrize("opt_in", [False, True])
+    def test_existing_directory_metadata_follows_the_option(
+        self, temp_dir: Path, opt_in: bool
+    ) -> None:
+        """Test that only the opt-in re-dates a directory that already exists."""
+        archive_path = temp_dir / "meta.tar"
+        directory = _dir_entry("d")
+        directory.mtime = 1_000_000_000
+        _tar_with_entries(archive_path, [directory, _file_entry("d/a.txt")])
+        out_dir = temp_dir / "out"
+        (out_dir / "d").mkdir(parents=True)
+
+        result = ExtractJob.from_archive(
+            archive_path,
+            out_dir,
+            options=ExtractOptions(
+                overwrite=OverwriteMode.OVERWRITE, overwrite_dir_metadata=opt_in
+            ),
+        ).run()
+
+        assert result.ok, result.error
+        restored = (out_dir / "d").stat().st_mtime == pytest.approx(
+            1_000_000_000, abs=2
+        )
+        assert restored == opt_in
+
     def test_preserve_timestamps_off_uses_the_current_time(
         self, temp_dir: Path
     ) -> None:
@@ -1270,6 +1349,51 @@ class TestExtractionMetadata:
         created = (out_dir / "a.txt").stat().st_mode & 0o777
         assert created == 0o666 & ~_umask()
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows has no POSIX permission bits"
+    )
+    @pytest.mark.parametrize(
+        ("mode", "exact", "expected"),
+        [
+            (0o4755, False, 0o755),
+            (0o777, False, 0o777),
+            (0o777, True, 0o777),
+        ],
+        ids=["setuid", "umask", "exact"],
+    )
+    def test_mode_is_masked_unless_exact(
+        self, temp_dir: Path, mode: int, exact: bool, expected: int
+    ) -> None:
+        """Test that setuid and the umask's bits go unless exact modes are asked for."""
+        archive_path = temp_dir / "meta.tar"
+        self._archive_with_metadata(archive_path, mtime=1_000_000_000, mode=mode)
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(exact_permissions=exact)
+        ).run()
+
+        assert result.ok, result.error
+        if not exact:
+            expected &= ~_umask()
+        assert (out_dir / "a.txt").stat().st_mode & 0o7777 == expected
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows has no POSIX permission bits"
+    )
+    def test_directory_mode_is_masked_too(self, temp_dir: Path) -> None:
+        """Test that a directory loses setgid and the umask's bits by default."""
+        archive_path = temp_dir / "meta.tar"
+        directory = _dir_entry("d")
+        directory.mode = 0o2777
+        _tar_with_entries(archive_path, [directory])
+        out_dir = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out_dir).run()
+
+        assert result.ok, result.error
+        assert (out_dir / "d").stat().st_mode & 0o7777 == 0o777 & ~_umask()
+
 
 def _umask() -> int:
     """Read the process umask without leaving it changed.
@@ -1315,6 +1439,7 @@ class TestExtractionIsAllOrNothing:
 
         assert result.ok is False
         assert "traversal" in str(result.error)
+        assert isinstance(result.error, ExtractionPolicyError)
         assert not (out_dir / "good.txt").exists()
         assert not (temp_dir / "escape.txt").exists()
 

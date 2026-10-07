@@ -12,6 +12,9 @@ typedef enum {
   FAIL_WRITE,
   FAIL_CODEC,
   FAIL_TRUNCATED,
+  FAIL_TRAILING,
+  FAIL_TOO_LONG,
+  FAIL_TOO_SHORT,
 } FailKind;
 
 static const char *codec_label(const CodecOps *ops, const CodecParams *params) {
@@ -32,15 +35,36 @@ static void set_failure(const CodecOps *ops, const CodecParams *params,
     PyErr_SetString(PyExc_IOError, "Error writing output file");
     return;
   case FAIL_TRUNCATED:
-    PyErr_Format(comp_BackendError, "Truncated or incomplete %s stream",
+    PyErr_Format(decompress ? comp_CorruptDataError : comp_BackendError,
+                 "Truncated or incomplete %s stream", codec_label(ops, params));
+    return;
+  case FAIL_TRAILING:
+    PyErr_Format(comp_CorruptDataError,
+                 "Invalid data after the end of a %s stream",
                  codec_label(ops, params));
     return;
+  case FAIL_TOO_LONG:
+    PyErr_Format(comp_CorruptDataError,
+                 "Decoded %s data exceeds its recorded size of %llu bytes",
+                 codec_label(ops, params),
+                 (unsigned long long)params->orig_size);
+    return;
+  case FAIL_TOO_SHORT:
+    PyErr_Format(comp_CorruptDataError,
+                 "Decoded %s data is shorter than its recorded size of %llu "
+                 "bytes",
+                 codec_label(ops, params),
+                 (unsigned long long)params->orig_size);
+    return;
   case FAIL_CODEC: {
-    const char *message =
-        ops->describe ? ops->describe(state, codec_label(ops, params), decompress)
-                      : NULL;
+    int corrupt = 0;
+    const char *message = ops->describe
+                              ? ops->describe(state, codec_label(ops, params),
+                                              decompress, &corrupt)
+                              : NULL;
     if (message) {
-      PyErr_SetString(comp_BackendError, message);
+      PyErr_SetString(corrupt ? comp_CorruptDataError : comp_BackendError,
+                      message);
     }
     return; // No describe: the caller applies its own fallback
   }
@@ -53,19 +77,25 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
                      int decompress, FILE *src, FILE *dst, CoreContext *ctx) {
   size_t out_size = ops->out_chunk ? ops->out_chunk : CODEC_CHUNK;
 
-  // A stateless engine is allowed, but safe_malloc rejects a zero size
-  void *state = ops->state_size ? safe_malloc(ops->state_size) : NULL;
+  // A stateless engine is allowed, so a NULL state isn't a failure by itself
+  void *state = NULL;
+  if (ops->state_size) {
+    state = calloc(1, ops->state_size);
+    if (!state) {
+      PyErr_NoMemory();
+      return -1;
+    }
+  }
   unsigned char *in_buf = (unsigned char *)safe_malloc(CODEC_CHUNK);
   unsigned char *out_buf = (unsigned char *)safe_malloc(out_size);
-  if ((ops->state_size && !state) || !in_buf || !out_buf) {
+  if (!in_buf || !out_buf) {
     free(state);
     free(in_buf);
     free(out_buf);
     return -1;
   }
-  memset(state, 0, ops->state_size);
 
-  if (ops->begin(state, params, decompress) != 0) {
+  if (ops->begin(state, params, decompress, ctx) != 0) {
     set_failure(ops, params, state, FAIL_CODEC, decompress);
     ops->end(state);
     free(state);
@@ -80,9 +110,18 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
   int finish = 0;
   int done = 0;
 
+  // Set once a member ends, until the input left over is resolved
+  int at_boundary = 0;
+  int members = 0;
+  size_t member_out = 0;
+  uint64_t total_out = 0;
+  uint64_t read_total = 0;
+  uint64_t member_start = 0; // Input offset of the member being decoded
+  int trailing_ignored = 0;
+
   Py_BEGIN_ALLOW_THREADS
 
-      while (!done) {
+  while (!done) {
     if (buf.avail_in == 0 && !finish) {
       size_t nread = fread(in_buf, 1, CODEC_CHUNK, src);
       if (ferror(src)) {
@@ -93,6 +132,7 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
 
       buf.next_in = in_buf;
       buf.avail_in = nread;
+      read_total += nread;
       if (feof(src)) {
         finish = 1;
       }
@@ -104,24 +144,62 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
       }
     }
 
+    if (at_boundary) {
+      if (buf.avail_in == 0) {
+        break; // Only reachable at end of input: the last member was complete
+      }
+      member_start = read_total - buf.avail_in;
+      if (!params->concatenated || !ops->reset) {
+        if (params->ignore_trailing) {
+          trailing_ignored = 1;
+        } else {
+          err = -1;
+          fail = FAIL_TRAILING;
+        }
+        break;
+      }
+      if (ops->reset(state) != 0) {
+        err = -1;
+        fail = FAIL_CODEC;
+        break;
+      }
+      at_boundary = 0;
+      member_out = 0;
+    }
+
     size_t before_in = buf.avail_in;
     size_t produced_pass = 0;
 
-    // Keep pumping while the engine fills the output buffer, since a full
-    // buffer means it may have more waiting
+    // Full buffer means the engine may have more waiting
     do {
       buf.next_out = out_buf;
       buf.avail_out = out_size;
 
       int status = ops->process(state, &buf, finish);
       if (status == CODEC_ERR) {
+        // Failing before producing anything is a trailing error
+        int trailing = members > 0 && member_out == 0;
+        if (trailing && params->ignore_trailing) {
+          trailing_ignored = 1;
+          done = 1;
+          break;
+        }
         err = -1;
-        fail = FAIL_CODEC;
+        fail = trailing ? FAIL_TRAILING : FAIL_CODEC;
         break;
       }
 
       size_t produced = out_size - buf.avail_out;
       produced_pass += produced;
+      member_out += produced;
+
+      // Caught before the write, so a bomb stops at its claimed size
+      if (params->exact_size && produced > params->orig_size - total_out) {
+        err = -1;
+        fail = FAIL_TOO_LONG;
+        break;
+      }
+      total_out += produced;
 
       if (produced > 0 &&
           (fwrite(out_buf, 1, produced, dst) != produced || ferror(dst))) {
@@ -134,14 +212,21 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
         done = 1;
         break;
       }
+      if (status == CODEC_STREAM_END) {
+        at_boundary = 1;
+        members++;
+        break;
+      }
     } while (buf.avail_out == 0);
 
     if (err || done) {
       break;
     }
+    if (at_boundary) {
+      continue; // Whatever input is left is resolved before the next pass
+    }
 
-    // The engine neither consumed nor produced, so another pass would do the
-    // same: the input ran out before the stream ended, or the engine stalled
+    // The input ran out before the stream ended, or the engine stalled
     if (buf.avail_in == before_in && produced_pass == 0) {
       err = -1;
       fail = finish ? FAIL_TRUNCATED : FAIL_CODEC;
@@ -149,10 +234,25 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
     }
   }
 
+  if (err == 0 && params->exact_size && total_out != params->orig_size) {
+    err = -1;
+    fail = FAIL_TOO_SHORT;
+  }
+
   Py_END_ALLOW_THREADS
 
-      // Before end(), which releases what describe() reads from
-      if (err == -1) {
+  // Fails the run instead when warnings are errors
+  if (err == 0 && trailing_ignored &&
+      PyErr_WarnFormat(comp_TrailingDataWarning, 1,
+                       "Ignored trailing data from byte %llu, after the "
+                       "end of the %s stream",
+                       (unsigned long long)member_start,
+                       codec_label(ops, params)) < 0) {
+    err = -1;
+  }
+
+  // Before end(), which releases what describe() reads from
+  if (err == -1) {
     set_failure(ops, params, state, fail, decompress);
   }
 
@@ -167,8 +267,13 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
 
 int codec_run_file(const CodecOps *ops, const CodecParams *params,
                    int decompress, const char *input_path,
-                   const char *output_path, CoreContext *ctx,
+                   const OutputTarget *out, CoreContext *ctx,
                    const char *failure_message) {
+  int checked = output_check(input_path, out);
+  if (checked != 0) {
+    return checked < 0 ? -1 : 0;
+  }
+
   FILE *input = fs_fopen(input_path, "rb");
   if (!input) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
@@ -177,14 +282,14 @@ int codec_run_file(const CodecOps *ops, const CodecParams *params,
 
   ctx_begin_stage_stream(ctx, input);
 
-  FILE *output = fs_fopen(output_path, "wb");
+  char temp[FS_PATH_MAX];
+  FILE *output = output_open(out, temp);
   if (!output) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_path);
     fclose(input);
     return -1;
   }
 
   int err = codec_run_stream(ops, params, decompress, input, output, ctx);
 
-  return codec_finish_file(err, input, output, output_path, failure_message);
+  return output_finish(err, input, output, temp, out, failure_message);
 }

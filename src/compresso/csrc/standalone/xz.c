@@ -6,18 +6,18 @@
 
 // lzma_easy_encoder emits the complete .xz container with an embedded CRC64
 // integrity check, verified by the decoder
-static int xz_compress_file(const char *input_path, const char *output_path,
+static int xz_compress_file(const char *input_path, const OutputTarget *out,
                             int level, CoreContext *ctx) {
   CodecParams params = {.level = level, .label = "xz"};
-  return codec_run_file(codec_lzma_ops(), &params, 0, input_path, output_path,
-                        ctx, "xz compression failed");
+  return codec_run_file(codec_lzma_ops(), &params, 0, input_path, out, ctx,
+                        "xz compression failed");
 }
 
-static int xz_decompress_file(const char *input_path, const char *output_path,
+static int xz_decompress_file(const char *input_path, const OutputTarget *out,
                               CoreContext *ctx) {
-  CodecParams params = {.label = "xz"};
-  return codec_run_file(codec_lzma_ops(), &params, 1, input_path, output_path,
-                        ctx, "xz decompression failed");
+  CodecParams params = {.concatenated = 1, .label = "xz"};
+  return codec_run_file(codec_lzma_ops(), &params, 1, input_path, out, ctx,
+                        "xz decompression failed");
 }
 
 static char *xz_get_original_name(const char *compressed_path) {

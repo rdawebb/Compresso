@@ -17,7 +17,7 @@ static int bzip2_compress_stream(FILE *src, FILE *dst, int level,
 
 static int bzip2_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
                                    CoreContext *ctx) {
-  CodecParams params = {.orig_size = orig_size};
+  CodecParams params = {.exact_size = 1, .orig_size = orig_size};
   return codec_run_stream(codec_bzip2_ops(), &params, 1, src, dst, ctx);
 }
 

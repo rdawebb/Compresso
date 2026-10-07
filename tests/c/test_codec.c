@@ -1,10 +1,15 @@
 // Driven by a stub engine rather than a real library, so the driver's own
 // behaviour is tested, not zlib's or zstd's
 
+// For fopencookie
+#define _GNU_SOURCE
+
 #include "codec/codec.h"
 #include "common.h"
 #include "files.h"
+#include "test_stubs.h"
 #include "unity.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +26,9 @@ enum {
   STUB_FAIL_PROCESS,
   STUB_STALL,
   STUB_EXPAND, // Four output bytes per input byte, to force the drain loop
+  // Copies members that each end at a '|'; a member starting with '!' is
+  // invalid, and one without its '|' never completes
+  STUB_MEMBERS,
 };
 
 typedef struct {
@@ -28,16 +36,20 @@ typedef struct {
   int process_calls;
   unsigned char pending; // STUB_EXPAND: byte still being written out
   int pending_left;
+  int in_member; // STUB_MEMBERS: past the current member's first byte
 } StubState;
 
 // The driver frees the state before a test can read it, so what outlives the
 // run is recorded here
 static int stub_end_calls;
+static int stub_reset_calls;
 static int stub_last_finish;
 static const char *stub_last_label;
 
-static int stub_begin(void *state, const CodecParams *params, int decompress) {
+static int stub_begin(void *state, const CodecParams *params, int decompress,
+                      CoreContext *ctx) {
   (void)decompress;
+  (void)ctx;
   StubState *s = (StubState *)state;
   s->mode = params->level;
 
@@ -55,6 +67,25 @@ static int stub_process(void *state, CodecBuf *buf, int finish) {
 
   if (s->mode == STUB_STALL) {
     return CODEC_MORE; // Consumes nothing and produces nothing, forever
+  }
+
+  if (s->mode == STUB_MEMBERS) {
+    if (!s->in_member && buf->avail_in > 0 && *buf->next_in == '!') {
+      return CODEC_ERR;
+    }
+
+    while (buf->avail_in > 0 && buf->avail_out > 0) {
+      unsigned char c = *buf->next_in++;
+      buf->avail_in--;
+      if (c == '|') {
+        s->in_member = 0;
+        return CODEC_STREAM_END;
+      }
+      *buf->next_out++ = c;
+      buf->avail_out--;
+      s->in_member = 1;
+    }
+    return CODEC_MORE;
   }
 
   if (s->mode == STUB_EXPAND) {
@@ -92,15 +123,22 @@ static int stub_process(void *state, CodecBuf *buf, int finish) {
   return CODEC_MORE;
 }
 
+static int stub_reset(void *state) {
+  (void)state;
+  stub_reset_calls++;
+  return 0;
+}
+
 static void stub_end(void *state) {
   (void)state;
   stub_end_calls++;
 }
 
-static const char *stub_describe(void *state, const char *label,
-                                 int decompress) {
+static const char *stub_describe(void *state, const char *label, int decompress,
+                                 int *corrupt) {
   (void)state;
-  (void)decompress;
+  // Blames the input when decoding, as a real engine's data errors would
+  *corrupt = decompress;
   stub_last_label = label;
   return "stub engine failed";
 }
@@ -110,6 +148,7 @@ static const CodecOps stub_ops = {
     .state_size = sizeof(StubState),
     .begin = stub_begin,
     .process = stub_process,
+    .reset = stub_reset,
     .end = stub_end,
     .describe = stub_describe,
 };
@@ -145,13 +184,10 @@ void setUp(void) {
     Py_Initialize();
   }
 
-  // test_stubs.c leaves these NULL, which the driver would hand to
-  // PyErr_SetString as an exception type
-  comp_BackendError = PyExc_RuntimeError;
-  comp_HeaderError = PyExc_ValueError;
-  comp_Error = PyExc_RuntimeError;
+  ensure_comp_exceptions();
 
   stub_end_calls = 0;
+  stub_reset_calls = 0;
   stub_last_finish = -1;
   stub_last_label = NULL;
   cancel_flag = 0;
@@ -165,6 +201,7 @@ void setUp(void) {
 
 void tearDown(void) {
   PyErr_Clear();
+  PyRun_SimpleString("import warnings; warnings.resetwarnings()");
   remove(TMP_OUT);
   remove(TMP_IN);
 }
@@ -172,8 +209,8 @@ void tearDown(void) {
 // Runs the driver over `input_path` with `level` selecting the stub's mode
 static int run_stub(int level, const char *input_path) {
   CodecParams params = {.level = level};
-  return codec_run_file(&stub_ops, &params, 0, input_path, TMP_OUT, &ctx,
-                        "stub run failed");
+  return codec_run_file(&stub_ops, &params, 0, input_path,
+                        OVERWRITE_TO(TMP_OUT), &ctx, "stub run failed");
 }
 
 // As run_stub, but against the stream entry point with a reporting interval
@@ -264,6 +301,21 @@ void test_driver_reports_a_process_failure(void) {
   TEST_ASSERT_EQUAL_INT(1, stub_end_calls);
 }
 
+void test_driver_blames_the_engine_for_an_encoding_failure(void) {
+  TEST_ASSERT_EQUAL_INT(-1, run_stub(STUB_FAIL_PROCESS, TEST_INPUT));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_BackendError));
+  TEST_ASSERT_FALSE(PyErr_ExceptionMatches(comp_CorruptDataError));
+}
+
+void test_driver_blames_the_input_when_the_engine_does(void) {
+  CodecParams params = {.level = STUB_FAIL_PROCESS};
+
+  TEST_ASSERT_EQUAL_INT(-1, codec_run_file(&stub_ops, &params, 1, TEST_INPUT,
+                                           OVERWRITE_TO(TMP_OUT), &ctx,
+                                           "stub run failed"));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+}
+
 void test_driver_unlinks_the_output_on_failure(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_stub(STUB_FAIL_PROCESS, TEST_INPUT));
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
@@ -279,7 +331,8 @@ void test_driver_prefers_the_label_over_the_codec_name(void) {
   CodecParams params = {.level = STUB_FAIL_PROCESS, .label = "container"};
 
   TEST_ASSERT_EQUAL_INT(-1, codec_run_file(&stub_ops, &params, 0, TEST_INPUT,
-                                           TMP_OUT, &ctx, "stub run failed"));
+                                           OVERWRITE_TO(TMP_OUT), &ctx,
+                                           "stub run failed"));
   TEST_ASSERT_EQUAL_STRING("container", stub_last_label);
 }
 
@@ -298,12 +351,210 @@ void test_driver_reports_a_missing_input(void) {
   TEST_ASSERT_EQUAL_INT(0, stub_end_calls);
 }
 
+// ---- Concatenated members ----
+
+// Decodes `input` with STUB_MEMBERS, allowing concatenation or not
+static int run_members(const char *input, int concatenated) {
+  write_file(TMP_IN, input);
+  CodecParams params = {.level = STUB_MEMBERS, .concatenated = concatenated};
+  return codec_run_file(&stub_ops, &params, 1, TMP_IN, OVERWRITE_TO(TMP_OUT),
+                        &ctx, "stub run failed");
+}
+
+// Whether the pending exception's message contains `needle`; leaves it set
+static int error_says(const char *needle) {
+#if PY_VERSION_HEX >= 0x030C0000
+  PyObject *exc = PyErr_GetRaisedException();
+#else
+  PyObject *type, *exc, *tb;
+  PyErr_Fetch(&type, &exc, &tb);
+  PyErr_NormalizeException(&type, &exc, &tb);
+#endif
+  if (!exc) {
+    return 0;
+  }
+  PyObject *text = PyObject_Str(exc);
+  const char *message = text ? PyUnicode_AsUTF8(text) : NULL;
+  int found = message && strstr(message, needle) != NULL;
+  Py_XDECREF(text);
+#if PY_VERSION_HEX >= 0x030C0000
+  PyErr_SetRaisedException(exc);
+#else
+  PyErr_Restore(type, exc, tb);
+#endif
+  return found;
+}
+
+static int output_is(const char *expected) {
+  write_file(TMP_IN, expected);
+  return files_equal(TMP_IN, TMP_OUT);
+}
+
+void test_driver_decodes_every_member(void) {
+  TEST_ASSERT_EQUAL_INT(0, run_members("abc|def|ghi|", 1));
+  TEST_ASSERT_TRUE(output_is("abcdefghi"));
+  TEST_ASSERT_EQUAL_INT(2, stub_reset_calls);
+}
+
+void test_driver_ends_cleanly_after_a_single_member(void) {
+  TEST_ASSERT_EQUAL_INT(0, run_members("abc|", 1));
+  TEST_ASSERT_TRUE(output_is("abc"));
+  TEST_ASSERT_EQUAL_INT(0, stub_reset_calls);
+}
+
+void test_driver_reads_on_when_a_member_ends_a_chunk(void) {
+  // First member fills the read buffer exactly, so the driver has to read again
+  static char input[CODEC_CHUNK + 8];
+  memset(input, 'a', CODEC_CHUNK - 1);
+  strcpy(input + CODEC_CHUNK - 1, "|def|");
+
+  TEST_ASSERT_EQUAL_INT(0, run_members(input, 1));
+  TEST_ASSERT_EQUAL_INT(CODEC_CHUNK - 1 + 3, file_size(TMP_OUT));
+  TEST_ASSERT_EQUAL_INT(1, stub_reset_calls);
+}
+
+void test_driver_ends_cleanly_when_a_member_ends_the_input_on_a_chunk(void) {
+  static char input[CODEC_CHUNK + 1];
+  memset(input, 'a', CODEC_CHUNK - 1);
+  strcpy(input + CODEC_CHUNK - 1, "|");
+
+  TEST_ASSERT_EQUAL_INT(0, run_members(input, 1));
+  TEST_ASSERT_EQUAL_INT(CODEC_CHUNK - 1, file_size(TMP_OUT));
+  TEST_ASSERT_EQUAL_INT(0, stub_reset_calls);
+}
+
+void test_driver_refuses_a_second_member_unless_concatenated(void) {
+  TEST_ASSERT_EQUAL_INT(-1, run_members("abc|def|", 0));
+  TEST_ASSERT_TRUE(error_says("Invalid data after the end of a stub stream"));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+  TEST_ASSERT_EQUAL_INT(0, stub_reset_calls);
+  TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+void test_driver_reports_trailing_data_that_is_not_a_member(void) {
+  TEST_ASSERT_EQUAL_INT(-1, run_members("abc|!junk", 1));
+  TEST_ASSERT_TRUE(error_says("Invalid data after the end of a stub stream"));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+  TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+void test_driver_reports_a_truncated_later_member(void) {
+  TEST_ASSERT_EQUAL_INT(-1, run_members("abc|de", 1));
+  TEST_ASSERT_TRUE(error_says("Truncated or incomplete stub stream"));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+  TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+// ---- Ignoring trailing data ----
+
+static int run_members_ignoring(const char *input, int concatenated) {
+  write_file(TMP_IN, input);
+  CodecParams params = {.level = STUB_MEMBERS,
+                        .concatenated = concatenated,
+                        .ignore_trailing = 1};
+  return codec_run_file(&stub_ops, &params, 1, TMP_IN, OVERWRITE_TO(TMP_OUT),
+                        &ctx, "stub run failed");
+}
+
+// `action` is a warnings.simplefilter action, e.g. "error" to catch a warning
+static void filter_warnings(const char *action) {
+  char code[96];
+  snprintf(code, sizeof(code), "import warnings; warnings.simplefilter('%s')",
+           action);
+  TEST_ASSERT_EQUAL_INT(0, PyRun_SimpleString(code));
+}
+
+void test_driver_keeps_the_output_before_ignored_trailing_data(void) {
+  filter_warnings("ignore");
+
+  TEST_ASSERT_EQUAL_INT(0, run_members_ignoring("abc|def|!junk", 1));
+  TEST_ASSERT_TRUE(output_is("abcdef"));
+}
+
+void test_driver_warns_with_the_offset_of_ignored_trailing_data(void) {
+  filter_warnings("error");
+
+  TEST_ASSERT_EQUAL_INT(-1, run_members_ignoring("abc|def|!junk", 1));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_UserWarning));
+  TEST_ASSERT_TRUE(error_says("from byte 8, after the end of the stub stream"));
+  // A warning raised as an error fails the run like any other
+  TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+void test_driver_ignores_a_second_member_unless_concatenated(void) {
+  filter_warnings("error");
+
+  TEST_ASSERT_EQUAL_INT(-1, run_members_ignoring("abc|def|", 0));
+  TEST_ASSERT_TRUE(error_says("from byte 4"));
+  TEST_ASSERT_EQUAL_INT(0, stub_reset_calls);
+}
+
+void test_driver_still_fails_a_truncated_member_when_ignoring(void) {
+  filter_warnings("error");
+
+  TEST_ASSERT_EQUAL_INT(-1, run_members_ignoring("abc|de", 1));
+  TEST_ASSERT_TRUE(error_says("Truncated or incomplete stub stream"));
+}
+
 // ---- Without a context ----
 
 void test_driver_tolerates_a_null_context(void) {
   CodecParams params = {.level = STUB_COPY};
 
   TEST_ASSERT_EQUAL_INT(0, codec_run_file(&stub_ops, &params, 0, TEST_INPUT,
-                                          TMP_OUT, NULL, "stub run failed"));
+                                          OVERWRITE_TO(TMP_OUT), NULL,
+                                          "stub run failed"));
   TEST_ASSERT_TRUE(files_equal(TEST_INPUT, TMP_OUT));
+}
+
+// ---- Closing the output ----
+
+#if defined(__APPLE__)
+static int refuse_write(void *cookie, const char *buf, int size) {
+  (void)cookie;
+  (void)buf;
+  (void)size;
+  errno = ENOSPC;
+  return -1;
+}
+#else
+static ssize_t refuse_write(void *cookie, const char *buf, size_t size) {
+  (void)cookie;
+  (void)buf;
+  (void)size;
+  errno = ENOSPC;
+  return -1;
+}
+#endif
+
+// Simulates a full disk stream that fails to flush at close
+static FILE *full_disk_stream(void) {
+#if defined(__APPLE__)
+  return funopen(NULL, NULL, refuse_write, NULL, NULL);
+#else
+  cookie_io_functions_t io = {.write = refuse_write};
+  return fopencookie(NULL, "w", io);
+#endif
+}
+
+void test_finish_reports_an_output_that_fails_to_flush(void) {
+  FILE *out = full_disk_stream();
+  TEST_ASSERT_NOT_NULL(out);
+  fputs("buffered", out);
+  write_file(TMP_OUT, "partial"); // Stands in for the half-written file
+
+  TEST_ASSERT_EQUAL_INT(-1, codec_finish_file(0, NULL, out, TMP_OUT, NULL));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_OSError));
+  TEST_ASSERT_TRUE(error_says("No space left on device"));
+  TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
+}
+
+void test_finish_keeps_an_earlier_failure_over_a_close_failure(void) {
+  FILE *out = full_disk_stream();
+  TEST_ASSERT_NOT_NULL(out);
+  fputs("buffered", out);
+  PyErr_SetString(comp_BackendError, "the real failure");
+
+  TEST_ASSERT_EQUAL_INT(-1, codec_finish_file(-1, NULL, out, TMP_OUT, NULL));
+  TEST_ASSERT_TRUE(error_says("the real failure"));
 }

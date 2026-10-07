@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gzip
-import json
 import os
 import subprocess
 import sys
@@ -13,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import orjson
 import pytest
 from typer.testing import CliRunner, Result
 
@@ -538,6 +538,28 @@ class TestArchiveRoundTrip:
 
         invoke("extract", archive, "-o", dest, flag, "-q")
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows has no POSIX permission bits"
+    )
+    @pytest.mark.parametrize("exact", [False, True], ids=["umask", "same-perms"])
+    def test_same_permissions_skips_the_umask(
+        self, temp_dir: Path, exact: bool
+    ) -> None:
+        """Test that -p restores an entry's mode without the umask applied."""
+        archive = temp_dir / "modes.tar"
+        info = tarfile.TarInfo("a.txt")
+        info.mode = 0o777
+        with tarfile.open(archive, "w") as tar:
+            tar.addfile(info)
+        dest = temp_dir / "dest"
+
+        invoke("extract", archive, "-o", dest, *(["-p"] if exact else []), "-q")
+
+        umask = os.umask(0)
+        os.umask(umask)
+        expected = 0o777 if exact else 0o777 & ~umask
+        assert (dest / "a.txt").stat().st_mode & 0o7777 == expected
+
 
 class TestCompressConflicts:
     """Test what `compress` does when its output already exists."""
@@ -590,6 +612,39 @@ class TestCompressConflicts:
         assert t.dest.read_bytes() == original_bytes
 
 
+class TestDecompressConflicts:
+    """Test what decompressing one file does when its output already exists."""
+
+    def test_renames_clashing_output_by_default(
+        self, payload: Path, temp_dir: Path
+    ) -> None:
+        """Test that an existing output is kept and the new one renamed."""
+        archive = temp_dir / "out.comp"
+        restored = temp_dir / "restored.bin"
+        invoke("compress", payload, "-o", archive, "-q")
+        restored.write_bytes(b"stale")
+
+        result = invoke("decompress", archive, "-o", restored)
+
+        sibling = temp_dir / renamed(restored.name)
+        assert f"Renamed to:        {sibling}" in result.output
+        assert restored.read_bytes() == b"stale"
+        assert sibling.read_bytes() == payload.read_bytes()
+
+    def test_overwrite_replaces_the_existing_output(
+        self, payload: Path, temp_dir: Path
+    ) -> None:
+        """Test that --overwrite replaces the existing output."""
+        archive = temp_dir / "out.comp"
+        restored = temp_dir / "restored.bin"
+        invoke("compress", payload, "-o", archive, "-q")
+        restored.write_bytes(b"stale")
+
+        invoke("decompress", archive, "-o", restored, "--overwrite", "-q")
+
+        assert restored.read_bytes() == payload.read_bytes()
+
+
 class TestInspectAndList:
     """Test the read-only commands."""
 
@@ -609,7 +664,7 @@ class TestInspectAndList:
 
         result = invoke("inspect", archive, "--json")
 
-        assert json.loads(result.output)["is_compresso"] is True
+        assert orjson.loads(result.output)["is_compresso"] is True
 
     def test_runs_as_a_module(self) -> None:
         """Test that `python -m compresso.cli` works, which a package needs __main__ for."""
@@ -648,7 +703,7 @@ class TestInspectAndList:
         """Test that --json without --entries has no entries key."""
         result = invoke("inspect", make_archive("zip"), "--json")
 
-        data = json.loads(result.output)
+        data = orjson.loads(result.output)
         assert data["is_archive"] is True
         assert data["entry_count"] == 4
         assert "entries" not in data
@@ -667,7 +722,7 @@ class TestInspectAndList:
         """Test that --entries --json includes a populated entries list."""
         result = invoke("inspect", make_archive("zip"), "--entries", "--json")
 
-        data = json.loads(result.output)
+        data = orjson.loads(result.output)
         assert len(data["entries"]) == 4
         assert any("f0.bin" in entry["path"] for entry in data["entries"])
 

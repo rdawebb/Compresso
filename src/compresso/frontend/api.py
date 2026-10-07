@@ -129,6 +129,7 @@ class DecompressionPlan:
             when the source is a Compresso file.
         can_run: Whether decompression can proceed.
         reason_if_unavailable: Reason it cannot, if applicable.
+        overwrite: What to do when the destination file already exists.
     """
 
     src: Path
@@ -139,6 +140,7 @@ class DecompressionPlan:
     format: str | None = None
     can_run: bool = True
     reason_if_unavailable: str | None = None
+    overwrite: OverwriteMode = OverwriteMode.RENAME
 
 
 def plan_compression(
@@ -227,7 +229,20 @@ def plan_compression(
         backend_name = options.algo.lower()
 
     else:
-        backend_name = default_backend(options.strategy or "balanced")
+        try:
+            backend_name = default_backend(options.strategy or "balanced")
+
+        except ValueError as e:
+            return CompressionPlan(
+                src=src_path,
+                dest=dest_path,
+                options=options,
+                input_size=input_size,
+                backend_name=None,
+                estimated_seconds=None,
+                can_compress=False,
+                reason_if_unavailable=str(e),
+            )
 
     if backend_name is None:
         return CompressionPlan(
@@ -277,7 +292,9 @@ def plan_compression(
 
 
 def plan_decompression(
-    src: str | Path, dest: str | Path | None = None
+    src: str | Path,
+    dest: str | Path | None = None,
+    overwrite: OverwriteMode = OverwriteMode.RENAME,
 ) -> DecompressionPlan:
     """Plan a decompression operation based on file inspection.
 
@@ -286,6 +303,7 @@ def plan_decompression(
         dest: Destination file path; if None, the source path with its last
             suffix removed (`notes.txt.gz` becomes `notes.txt`), or with
             `.out` appended when it has no suffix.
+        overwrite: What to do when the destination file already exists.
 
     Returns:
         DecompressionPlan: The resulting decompression plan.
@@ -301,6 +319,13 @@ def plan_decompression(
     else:
         dest_path = Path(dest)
 
+    try:
+        # Plain strings still work at runtime
+        mode: OverwriteMode | None = OverwriteMode(overwrite)
+
+    except ValueError:
+        mode = None
+
     inspection: InspectResult = inspect_file(path=src_path)
     est_seconds: int | float | None = inspection.estimated_decomp_s
 
@@ -315,6 +340,15 @@ def plan_decompression(
             format=fmt,
             can_run=can_run,
             reason_if_unavailable=reason,
+            overwrite=mode or OverwriteMode.RENAME,
+        )
+
+    if mode is None:
+        return plan(
+            None,
+            False,
+            f"Unknown overwrite mode: {overwrite!r} "
+            f"(expected one of {', '.join(OverwriteMode)})",
         )
 
     if not src_path.is_file():
@@ -491,18 +525,24 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
         self.plan: DecompressionPlan = plan
 
     @classmethod
-    def from_file(cls, src: str | Path, dest: str | Path | None = None) -> Self:
+    def from_file(
+        cls,
+        src: str | Path,
+        dest: str | Path | None = None,
+        overwrite: OverwriteMode = OverwriteMode.RENAME,
+    ) -> Self:
         """Create a DecompressionJob from file paths.
 
         Args:
             src: Source file path.
             dest: Destination file path; if None, derived from `src` as
                 `plan_decompression` does.
+            overwrite: What to do when the destination file already exists.
 
         Returns:
             DecompressionJob: The created decompression job.
         """
-        return cls(plan=plan_decompression(src, dest))
+        return cls(plan=plan_decompression(src, dest, overwrite))
 
     def run(
         self,
@@ -510,6 +550,11 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
         cancel: CancelToken | None = None,
     ) -> JobResult:
         """Run the decompression job.
+
+        A destination that already exists is handled per `plan.overwrite`
+        (default `RENAME`); when that renames the file, `self.plan.dest` (and
+        the plan on the returned `JobResult`) is updated to the path actually
+        written.
 
         Args:
             progress: Optional progress callback, invoked with
@@ -537,23 +582,26 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
             if self.plan.format:
                 # The format came from the file's magic bytes, so pass it on
                 # rather than letting the C layer re-guess from the extension
-                decompress_standalone(
+                actual_path = decompress_standalone(
                     input_path=str(object=self.plan.src),
                     output_path=str(object=self.plan.dest),
                     format=self.plan.format,
+                    overwrite=_OVERWRITE_CODES[self.plan.overwrite],
                     progress=to_core_progress(progress, total),
                     cancel=cancel,
                 )
 
             else:
-                decompress_file(
+                actual_path = decompress_file(
                     src_path=str(object=self.plan.src),
                     dst_path=str(object=self.plan.dest),
                     algo="",
+                    overwrite=_OVERWRITE_CODES[self.plan.overwrite],
                     progress=to_core_progress(progress, total),
                     cancel=cancel,
                 )
 
+            self.plan = replace(self.plan, dest=Path(actual_path))
             return JobResult(
                 ok=True,
                 error=None,

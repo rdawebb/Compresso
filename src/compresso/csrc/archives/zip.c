@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,71 @@
 #ifndef ZIP_LENGTH_TO_END
 #define ZIP_LENGTH_TO_END 0
 #endif
+
+// A damaged archive, as opposed to one using a feature libzip lacks
+static int zip_error_is_corrupt(int code) {
+  switch (code) {
+  case ZIP_ER_CRC:
+  case ZIP_ER_ZLIB:
+  case ZIP_ER_EOF:
+  case ZIP_ER_NOZIP:
+  case ZIP_ER_INCONS:
+#ifdef ZIP_ER_COMPRESSED_DATA
+  case ZIP_ER_COMPRESSED_DATA:
+#endif
+#ifdef ZIP_ER_DATA_LENGTH
+  case ZIP_ER_DATA_LENGTH:
+#endif
+#ifdef ZIP_ER_TRUNCATED_ZIP
+  case ZIP_ER_TRUNCATED_ZIP:
+#endif
+    return 1;
+  default:
+    return 0;
+  }
+}
+
+// Raises OSError for a system call's errno, CorruptDataError for a damaged
+// archive while reading, and BackendError otherwise; `saved_errno` stands in
+// when libzip didn't keep one
+static void set_zip_error(zip_error_t *error, const char *what,
+                          const char *path, int reading, int saved_errno) {
+  int code = zip_error_code_zip(error);
+
+  int sys = 0;
+  if (zip_error_system_type(error) == ZIP_ET_SYS) {
+    sys = zip_error_code_system(error);
+    if (sys == 0) {
+      sys = saved_errno ? saved_errno : EIO;
+    }
+  } else if (code == ZIP_ER_NOENT) {
+    sys = ENOENT;
+  } else if (code == ZIP_ER_EXISTS) {
+    sys = EEXIST;
+  }
+
+  if (sys) {
+    errno = sys;
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+  } else if (code == ZIP_ER_MEMORY) {
+    PyErr_NoMemory();
+  } else if (reading && zip_error_is_corrupt(code)) {
+    PyErr_Format(comp_CorruptDataError, "%s: %s", what,
+                 zip_error_strerror(error));
+  } else {
+    PyErr_Format(comp_BackendError, "%s: %s", what, zip_error_strerror(error));
+  }
+}
+
+// zip_open reports only a libzip code; errno still holds the cause
+static void set_zip_open_error(int err, const char *what, const char *path,
+                               int reading) {
+  int saved_errno = errno;
+  zip_error_t error;
+  zip_error_init_with_code(&error, err);
+  set_zip_error(&error, what, path, reading, saved_errno);
+  zip_error_fini(&error);
+}
 
 // ---- ZIP Writer ----
 
@@ -36,11 +102,7 @@ static void *zip_create_writer(const char *output_path, int compression_level) {
   int err;
   zip_t *za = zip_open(output_path, ZIP_CREATE | ZIP_TRUNCATE, &err);
   if (!za) {
-    zip_error_t error;
-    zip_error_init_with_code(&error, err);
-    PyErr_Format(PyExc_IOError, "Failed to create ZIP archive: %s",
-                 zip_error_strerror(&error));
-    zip_error_fini(&error);
+    set_zip_open_error(err, "Failed to create ZIP archive", output_path, 0);
     return NULL;
   }
 
@@ -84,8 +146,8 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
     zip_int64_t idx = zip_dir_add(writer->archive, dir_path, ZIP_FL_ENC_UTF_8);
     free(dir_path);
     if (idx < 0) {
-      PyErr_Format(PyExc_IOError, "Failed to add directory: %s",
-                   zip_strerror(writer->archive));
+      set_zip_error(zip_get_error(writer->archive), "Failed to add directory",
+                    writer->output_path, 0, 0);
       return -1;
     }
 
@@ -104,8 +166,8 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
     zip_source_t *source =
         zip_source_file(writer->archive, source_path, 0, ZIP_LENGTH_TO_END);
     if (!source) {
-      PyErr_Format(PyExc_IOError, "Failed to create ZIP source: %s",
-                   zip_strerror(writer->archive));
+      set_zip_error(zip_get_error(writer->archive), "Failed to read source",
+                    source_path, 0, 0);
       return -1;
     }
 
@@ -114,16 +176,16 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
                                    ZIP_FL_ENC_UTF_8 | ZIP_FL_OVERWRITE);
     if (idx < 0) {
       zip_source_free(source);
-      PyErr_Format(PyExc_IOError, "Failed to add file: %s",
-                   zip_strerror(writer->archive));
+      set_zip_error(zip_get_error(writer->archive), "Failed to add file",
+                    writer->output_path, 0, 0);
       return -1;
     }
 
     // Set compression method and level
     if (zip_set_file_compression(writer->archive, idx, ZIP_CM_DEFLATE,
                                  writer->compression_level) < 0) {
-      PyErr_Format(PyExc_IOError, "Failed to set compression: %s",
-                   zip_strerror(writer->archive));
+      set_zip_error(zip_get_error(writer->archive), "Failed to set compression",
+                    writer->output_path, 0, 0);
       return -1;
     }
 
@@ -139,17 +201,18 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
 
   if (entry->type == ENTRY_SYMLINK) {
     // Store as a regular file containing the symlink target
-    if (!entry->symlink_target) {
-      PyErr_SetString(PyExc_ValueError, "Symlink requires symlink_target");
+    if (!entry->link_target) {
+      PyErr_SetString(PyExc_ValueError, "Symlink requires a target");
       return -1;
     }
 
-    size_t target_len = strlen(entry->symlink_target);
+    size_t target_len = strlen(entry->link_target);
     zip_source_t *source = zip_source_buffer(
-        writer->archive, strdup(entry->symlink_target), target_len, 1);
+        writer->archive, strdup(entry->link_target), target_len, 1);
     if (!source) {
-      PyErr_Format(PyExc_IOError, "Failed to create symlink source: %s",
-                   zip_strerror(writer->archive));
+      set_zip_error(zip_get_error(writer->archive),
+                    "Failed to create symlink source", writer->output_path, 0,
+                    0);
       return -1;
     }
 
@@ -157,8 +220,8 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
         zip_file_add(writer->archive, entry->path, source, ZIP_FL_ENC_UTF_8);
     if (idx < 0) {
       zip_source_free(source);
-      PyErr_Format(PyExc_IOError, "Failed to add symlink: %s",
-                   zip_strerror(writer->archive));
+      set_zip_error(zip_get_error(writer->archive), "Failed to add symlink",
+                    writer->output_path, 0, 0);
       return -1;
     }
 
@@ -197,8 +260,27 @@ static int zip_on_cancel(zip_t *za, void *userdata) {
 
 #endif
 
-static int zip_close_writer(void *writer_ptr, CoreContext *ctx) {
+// Writes the bare end-of-central-directory record, which readers accept
+static int write_empty_zip(const char *path) {
+  static const unsigned char EOCD[22] = {'P', 'K', 5, 6};
+  FILE *f = fs_fopen(path, "wb");
+  int ok = f && fwrite(EOCD, 1, sizeof(EOCD), f) == sizeof(EOCD);
+  if (f && fclose(f) != 0)
+    ok = 0;
+  if (!ok)
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+  return ok ? 0 : -1;
+}
+
+static int zip_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
   ZipWriter *writer = (ZipWriter *)writer_ptr;
+
+  // Prevents redundant compression when the archive is discarded
+  if (discard) {
+    zip_discard(writer->archive);
+    free(writer);
+    return 0;
+  }
 
   writer->ctx = ctx;
 
@@ -220,8 +302,19 @@ static int zip_close_writer(void *writer_ptr, CoreContext *ctx) {
     return abort_code;
   }
 
+  const char *path = writer->output_path;
+  int empty = zip_get_num_entries(writer->archive, 0) == 0;
   int ret = zip_close(writer->archive);
   int abort_code = writer->abort_code;
+
+  // A failed zip_close leaves the archive open, so it is discarded here
+  if (ret < 0) {
+    if (abort_code == 0) {
+      set_zip_error(zip_get_error(writer->archive),
+                    "Failed to close ZIP archive", writer->output_path, 0, 0);
+    }
+    zip_discard(writer->archive);
+  }
   free(writer);
 
   if (abort_code != 0) {
@@ -229,12 +322,9 @@ static int zip_close_writer(void *writer_ptr, CoreContext *ctx) {
     return abort_code;
   }
 
-  if (ret < 0) {
-    PyErr_SetString(PyExc_IOError, "Failed to close ZIP archive");
+  if (ret < 0)
     return -1;
-  }
-
-  return 0;
+  return empty ? write_empty_zip(path) : 0;
 }
 
 // ---- ZIP Reader ----
@@ -244,17 +334,14 @@ typedef struct {
   zip_int64_t num_entries;
   zip_int64_t current_index;
   zip_file_t *current_file;
+  const char *input_path;
 } ZipReader;
 
 static void *zip_create_reader(const char *input_path) {
   int err;
   zip_t *za = zip_open(input_path, ZIP_RDONLY, &err);
   if (!za) {
-    zip_error_t error;
-    zip_error_init_with_code(&error, err);
-    PyErr_Format(PyExc_IOError, "Failed to open ZIP archive: %s",
-                 zip_error_strerror(&error));
-    zip_error_fini(&error);
+    set_zip_open_error(err, "Failed to open ZIP archive", input_path, 1);
     return NULL;
   }
 
@@ -268,6 +355,7 @@ static void *zip_create_reader(const char *input_path) {
   reader->num_entries = zip_get_num_entries(za, 0);
   reader->current_index = 0;
   reader->current_file = NULL;
+  reader->input_path = input_path;
 
   return reader;
 }
@@ -277,7 +365,9 @@ static int zip_get_entry_count(void *reader_ptr) {
   return (int)reader->num_entries;
 }
 
-static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
+static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
+                              CoreContext *ctx) {
+  (void)ctx; // libzip has no warnings to pass on
   ZipReader *reader = (ZipReader *)reader_ptr;
 
   if (reader->current_index >= reader->num_entries) {
@@ -289,17 +379,21 @@ static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry) {
 
   if (zip_stat_index(reader->archive, reader->current_index, ZIP_FL_ENC_GUESS,
                      &st) < 0) {
-    PyErr_Format(PyExc_IOError, "Failed to stat entry: %s",
-                 zip_strerror(reader->archive));
+    set_zip_error(zip_get_error(reader->archive), "Failed to stat entry",
+                  reader->input_path, 1, 0);
     return -1;
   }
 
   // Set entry metadata
   entry->path = NULL;
-  entry->symlink_target = NULL;
+  entry->link_target = NULL;
 
   if (st.valid & ZIP_STAT_NAME) {
     entry->path = strdup(st.name);
+    if (!entry->path) {
+      PyErr_NoMemory();
+      return -1;
+    }
 
     // Check if directory (ends with '/')
     size_t name_len = strlen(st.name);
@@ -344,8 +438,8 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
 
   zip_file_t *zf = zip_fopen_index(reader->archive, idx, 0);
   if (!zf) {
-    PyErr_Format(PyExc_IOError, "Failed to open file in archive: %s",
-                 zip_strerror(reader->archive));
+    set_zip_error(zip_get_error(reader->archive),
+                  "Failed to open file in archive", reader->input_path, 1, 0);
     return -1;
   }
 
@@ -357,7 +451,7 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
 
   Py_BEGIN_ALLOW_THREADS
 
-      while ((bytes_read = zip_fread(zf, buffer, sizeof(buffer))) > 0) {
+  while ((bytes_read = zip_fread(zf, buffer, sizeof(buffer))) > 0) {
     // Cap is applied to the bytes produced rather than to the declared size
     if ((uint64_t)bytes_read > max_bytes - total) {
       over_limit = 1;
@@ -366,8 +460,9 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
 
     size_t written = fwrite(buffer, 1, bytes_read, output);
     if (written != (size_t)bytes_read || ferror(output)) {
-      Py_BLOCK_THREADS zip_fclose(zf);
-      PyErr_SetString(PyExc_IOError, "Error writing output");
+      Py_BLOCK_THREADS
+      PyErr_SetFromErrno(PyExc_OSError);
+      zip_fclose(zf);
       return -1;
     }
     total += (uint64_t)bytes_read;
@@ -380,7 +475,8 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
 
   Py_END_ALLOW_THREADS
 
-      if (bytes_written) *bytes_written = total;
+  if (bytes_written)
+    *bytes_written = total;
 
   if (advance != 0) {
     zip_fclose(zf);
@@ -389,14 +485,14 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
 
   if (over_limit) {
     zip_fclose(zf);
-    PyErr_SetString(PyExc_ValueError,
+    PyErr_SetString(comp_ExtractionPolicyError,
                     "Archive exceeds the maximum extracted size");
     return -1;
   }
 
   if (bytes_read < 0) {
-    PyErr_Format(PyExc_IOError, "Error reading from archive: %s",
-                 zip_file_strerror(zf));
+    set_zip_error(zip_file_get_error(zf), "Error reading from archive",
+                  reader->input_path, 1, 0);
     zip_fclose(zf);
     return -1;
   }
@@ -406,6 +502,7 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
 }
 
 static int zip_skip_entry(void *reader_ptr) {
+  (void)reader_ptr;
   // ZIP reader moves to next entry by default
   return 0;
 }
@@ -416,14 +513,25 @@ static int zip_reset_reader(void *reader_ptr) {
   return 0;
 }
 
-static int zip_close_reader(void *reader_ptr) {
+static int zip_close_reader(void *reader_ptr, int discard) {
   ZipReader *reader = (ZipReader *)reader_ptr;
 
+  // Opened read-only, so there is nothing to lose
+  if (discard) {
+    zip_discard(reader->archive);
+    free(reader);
+    return 0;
+  }
+
   int ret = zip_close(reader->archive);
+  if (ret < 0) {
+    set_zip_error(zip_get_error(reader->archive), "Failed to close ZIP archive",
+                  reader->input_path, 1, 0);
+    zip_discard(reader->archive);
+  }
   free(reader);
 
   if (ret < 0) {
-    PyErr_SetString(PyExc_IOError, "Failed to close ZIP archive");
     return -1;
   }
 

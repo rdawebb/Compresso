@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import stat
 import time
 from pathlib import Path
 from typing import Annotated
+
+import orjson
 
 from .._core import detect_format
 from ..frontend.archive_api import ArchiveEntry
@@ -42,10 +43,14 @@ def _entry_detail_line(entry: ArchiveEntry) -> str:
 
     mode = stat.filemode(type_bit | entry.mode)
     mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry.mtime))
-    size = (
-        "" if entry.is_dir or entry.is_symlink else format_size(size_bytes=entry.size)
-    )
-    target = f" -> {entry.link_target}" if entry.is_symlink else ""
+    has_no_data = entry.is_dir or entry.is_symlink or entry.is_hardlink
+    size = "" if has_no_data else format_size(size_bytes=entry.size)
+    if entry.is_symlink:
+        target = f" -> {entry.link_target}"
+    elif entry.is_hardlink:
+        target = f" link to {entry.link_target}"
+    else:
+        target = ""
 
     detail = ""
     if entry.compressed_size is not None:
@@ -92,6 +97,7 @@ def _inspect_archive(file: Path, output_json: bool, show_entries: bool) -> None:
                     "size": entry.size,
                     "is_dir": entry.is_dir,
                     "is_symlink": entry.is_symlink,
+                    "is_hardlink": entry.is_hardlink,
                     "mtime": entry.mtime,
                     "mode": entry.mode,
                     "link_target": entry.link_target,
@@ -101,7 +107,7 @@ def _inspect_archive(file: Path, output_json: bool, show_entries: bool) -> None:
                 }
                 for entry in plan.entries
             ]
-        print(json.dumps(obj=data, indent=2))
+        print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
         return
 
     lines: list[str] = [
@@ -172,7 +178,7 @@ def inspect(
                 "estimated_decomp_s": result.estimated_decomp_s,
                 "reason": result.reason,
             }
-            print(json.dumps(obj=data, indent=2))
+            print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
             return
 
         print(f"File: {result.path}\n")

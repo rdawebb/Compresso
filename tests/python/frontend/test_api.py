@@ -84,6 +84,7 @@ class TestPlanCompressionLevels:
             # No algo: the backend the strategy picks is the one checked
             (CompressionOptions(strategy="fast", level=13), "lz4 compression level"),
             (CompressionOptions(format="gz", level=10), "gzip compression level 10"),
+            (CompressionOptions(strategy="fsat"), "Unknown strategy: fsat"),
         ],
     )
     def test_out_of_range_level_is_unrunnable(
@@ -227,4 +228,63 @@ class TestCompressionOverwrite:
         ).plan
 
         assert plan.can_compress is False
+        assert "Unknown overwrite mode" in str(plan.reason_if_unavailable)
+
+
+class TestDecompressionOverwrite:
+    """Test the four `overwrite` modes when decompressing onto an existing file."""
+
+    @pytest.mark.parametrize("fmt", ["comp", "gz"])
+    @pytest.mark.parametrize(
+        ("mode", "ok", "replaced", "to_sibling"),
+        [
+            (OverwriteMode.RENAME, True, False, True),
+            (OverwriteMode.ERROR, False, False, False),
+            (OverwriteMode.SKIP, True, False, False),
+            (OverwriteMode.OVERWRITE, True, True, False),
+        ],
+    )
+    def test_mode_against_an_existing_output(
+        self,
+        temp_dir: Path,
+        fmt: str,
+        mode: OverwriteMode,
+        ok: bool,
+        replaced: bool,
+        to_sibling: bool,
+    ) -> None:
+        """Test each mode for the Compresso container and a standalone format."""
+        source = temp_dir / "a.txt"
+        source.write_bytes(b"hello compresso")
+        compressed = temp_dir / f"a.txt.{fmt}"
+        options = CompressionOptions(format=None if fmt == "comp" else fmt)
+        assert CompressionJob.from_file(source, compressed, options=options).run().ok
+        dest = temp_dir / "out.txt"
+        dest.write_bytes(b"stale")
+
+        job = DecompressionJob.from_file(compressed, dest, overwrite=mode)
+        result = job.run()
+
+        assert result.ok is ok, result.error
+        if not ok:
+            assert isinstance(result.error, FileExistsError)
+        assert dest.read_bytes() == (b"hello compresso" if replaced else b"stale")
+        sibling = temp_dir / renamed("out.txt")
+        assert job.plan.dest == (sibling if to_sibling else dest)
+        if to_sibling:
+            assert sibling.read_bytes() == b"hello compresso"
+
+    def test_unknown_mode_is_an_unavailable_plan(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that a mode outside the four names never reaches the C layer."""
+        compressed = temp_dir / "a.comp"
+        assert CompressionJob.from_file(sample_text_file, compressed).run().ok
+
+        plan = DecompressionJob.from_file(
+            compressed,
+            overwrite="clobber",  # ty: ignore
+        ).plan
+
+        assert plan.can_run is False
         assert "Unknown overwrite mode" in str(plan.reason_if_unavailable)

@@ -11,13 +11,13 @@ static int zstd_is_available(void) {
 
 static int zstd_compress_stream(FILE *src, FILE *dst, int level,
                                 CoreContext *ctx) {
-  CodecParams params = {.level = level};
+  CodecParams params = {.level = level, .checksum = 1};
   return codec_run_stream(codec_zstd_ops(), &params, 0, src, dst, ctx);
 }
 
 static int zstd_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
                                   CoreContext *ctx) {
-  CodecParams params = {.orig_size = orig_size};
+  CodecParams params = {.exact_size = 1, .orig_size = orig_size};
   return codec_run_stream(codec_zstd_ops(), &params, 1, src, dst, ctx);
 }
 
@@ -28,6 +28,7 @@ static const CBackend zstd_backend = {
     .id = ALGO_ZSTD,
     .levels = LEVELS_ZSTD,
     .is_available = zstd_is_available,
+    .checksummed = 1,
     .compress_stream = zstd_compress_stream,
     .decompress_stream = zstd_decompress_stream,
 };

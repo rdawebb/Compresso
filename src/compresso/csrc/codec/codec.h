@@ -5,6 +5,7 @@
 // the `.comp` header, `standalone/*.c` in each real-world container
 
 #include "../context.h"
+#include "../fsutil.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,6 +15,9 @@
 typedef enum {
   CODEC_MORE = 0,
   CODEC_DONE = 1, // Stream complete; nothing further to write
+  // Decoding only: one member ended, and any input left over is either the
+  // next member (see CodecParams.concatenated) or an error
+  CODEC_STREAM_END = 2,
   CODEC_ERR = -1,
 } CodecStatus;
 
@@ -33,10 +37,13 @@ typedef struct {
 // The standalone containers embed integrity checks `.comp` does not, and
 // `.comp`'s lzma asks for an extreme preset `.xz` does not
 typedef struct {
-  int level;    // -1 for the library default
-  int checksum; // Embed, or verify, the codec's own integrity check
-  int extreme;  // lzma: LZMA_PRESET_EXTREME
-  int wrap;     // deflate: a CodecWrap
+  int level;           // -1 for the library default
+  int checksum;        // Embed the codec's own integrity check
+  int extreme;         // lzma: LZMA_PRESET_EXTREME
+  int wrap;            // deflate: a CodecWrap
+  int concatenated;    // The container allows members back to back
+  int ignore_trailing; // Trailing data ends decoding with a TrailingDataWarning
+  int exact_size;      // Decoding must produce exactly orig_size bytes
   uint64_t orig_size;
 
   // Codec's name in an error message; NULL uses CodecOps.name
@@ -52,19 +59,27 @@ typedef struct CodecOps {
   // 0 means CODEC_CHUNK; lz4 needs its frame bound, which exceeds the input
   size_t out_chunk;
 
-  // GIL held
-  int (*begin)(void *state, const CodecParams *params, int decompress);
+  // GIL held; `ctx` (NULL-tolerant) outlives the run, so an engine may keep it
+  // to ctx_log from process()
+  int (*begin)(void *state, const CodecParams *params, int decompress,
+               CoreContext *ctx);
 
   // GIL released; `finish` is set once the input is exhausted, which is the
   // signal to flush; returns a CodecStatus
   int (*process)(void *state, CodecBuf *buf, int finish);
 
+  // GIL released; readies a decoder that returned CODEC_STREAM_END for the
+  // next member; NULL for an engine that never returns it
+  int (*reset)(void *state);
+
   // GIL held, on every path including failure and cancellation
   void (*end)(void *state);
 
   // GIL re-acquired, so a code captured inside the loop can become an
-  // exception; `label` is the codec's name; NULL leaves message to the caller
-  const char *(*describe)(void *state, const char *label, int decompress);
+  // exception; `label` is the codec's name; sets *corrupt when the input caused
+  // a decoding failure; NULL leaves the message to the caller
+  const char *(*describe)(void *state, const char *label, int decompress,
+                          int *corrupt);
 } CodecOps;
 
 // `ctx` is NULL-tolerant; returns 0, -1 with a Python exception set, or
@@ -72,11 +87,11 @@ typedef struct CodecOps {
 int codec_run_stream(const CodecOps *ops, const CodecParams *params,
                      int decompress, FILE *src, FILE *dst, CoreContext *ctx);
 
-// codec_run_stream against two paths, closing and (on failure) unlinking
-// through codec_finish_file, to which `failure_message` is passed
+// codec_run_stream from a path into `out`, through output_check, output_open
+// and output_finish, to which `failure_message` is passed
 int codec_run_file(const CodecOps *ops, const CodecParams *params,
                    int decompress, const char *input_path,
-                   const char *output_path, CoreContext *ctx,
+                   const OutputTarget *out, CoreContext *ctx,
                    const char *failure_message);
 
 // ---- Engines ----

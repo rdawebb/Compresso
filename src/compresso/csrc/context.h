@@ -9,6 +9,15 @@
 // Distinct from -1 so callers can tell cancelled from failed
 #define COMP_CANCELLED (-2)
 
+// Python's logging levels, which the _core.c bridge passes straight through
+enum { CTX_LOG_DEBUG = 10, CTX_LOG_INFO = 20, CTX_LOG_WARNING = 30 };
+
+#if defined(__GNUC__) || defined(__clang__)
+#define CTX_PRINTF(fmt, args) __attribute__((format(printf, fmt, args)))
+#else
+#define CTX_PRINTF(fmt, args)
+#endif
+
 // Per-call progress and cancellation state; every field is optional, and a
 // NULL CoreContext behaves as no context
 typedef struct CoreContext {
@@ -19,6 +28,9 @@ typedef struct CoreContext {
   // Returns 0 to continue, non-zero to abort
   int (*on_progress)(struct CoreContext *ctx, uint64_t done, uint64_t total);
   void *userdata; // PyObject* callback, owned by the _core.c bridge
+
+  // `message` is only valid for the call; safe with or without the GIL
+  void (*on_log)(struct CoreContext *ctx, int level, const char *message);
 
   uint64_t total_bytes, done_bytes;
   uint64_t report_interval, last_reported;
@@ -58,5 +70,10 @@ int ctx_set_position(CoreContext *ctx, uint64_t done);
 
 // Emits one final report at 100%; called after a successful run
 int ctx_finish(CoreContext *ctx);
+
+// Reports something worth knowing that doesn't stop the operation, e.g. a
+// skipped entry; the bridge takes the GIL
+void ctx_log(CoreContext *ctx, int level, const char *fmt, ...)
+    CTX_PRINTF(3, 4);
 
 #endif // CONTEXT_H

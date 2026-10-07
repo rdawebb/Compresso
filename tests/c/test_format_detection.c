@@ -57,3 +57,33 @@ void test_detect_format_from_magic_bytes(int index) {
       detect_format_from_magic_bytes(CASES[index].magic, CASES[index].size),
       CASES[index].label);
 }
+
+static const struct {
+  const char *path;
+  Format expected;
+} EXTENSIONS[] = {
+    {"a.gz", FORMAT_GZIP},
+    {"A.GZ", FORMAT_GZIP},
+    {"dir/a.tar", FORMAT_TAR},
+    {"a.tgz", FORMAT_GZIP},
+    {"noext", FORMAT_UNKNOWN},
+    // A dot in a directory name is not the file's extension
+    {"dir.gz/file", FORMAT_UNKNOWN},
+    // A leading dot names a hidden file, as os.path.splitext has it
+    {".gz", FORMAT_UNKNOWN},
+    {"dir/.zst", FORMAT_UNKNOWN},
+    // UTF-8 bytes are negative as a char, which tolower must not be given
+    {"caf\xc3\xa9.xz", FORMAT_XZ},
+    {"file.\xc3\xa9", FORMAT_UNKNOWN},
+};
+
+// The TEST_RANGE below must span exactly these rows
+_Static_assert(sizeof(EXTENSIONS) / sizeof(EXTENSIONS[0]) == 10,
+               "update TEST_RANGE");
+
+TEST_RANGE([0, 9, 1])
+void test_detect_format_from_extension(int index) {
+  TEST_ASSERT_EQUAL_MESSAGE(EXTENSIONS[index].expected,
+                            detect_format_from_extension(EXTENSIONS[index].path),
+                            EXTENSIONS[index].path);
+}

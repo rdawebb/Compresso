@@ -1,3 +1,7 @@
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE // renameat2
+#endif
+
 #include "fsutil.h"
 
 #include <errno.h>
@@ -7,6 +11,9 @@
 
 // Split-and-create helper shared by both platforms
 static int fs_mkdir_one(const char *path, uint32_t mode);
+
+// Rename `from` to `to`, failing with EEXIST if `to` exists unless `replace`
+static int fs_rename(const char *from, const char *to, int replace);
 
 // Returns the current read/write offset in an open stream as a 64-bit value
 int64_t fs_ftell(FILE *stream) {
@@ -66,6 +73,29 @@ char *fs_last_sep(const char *path) {
 #else
   return fwd;
 #endif
+}
+
+int fs_join(char *out, size_t out_size, const char *dir, const char *name) {
+  size_t dir_len = strlen(dir);
+  size_t name_len = strlen(name);
+  size_t sep_len = dir_len > 0 && !FS_IS_SEP(dir[dir_len - 1]) ? 1 : 0;
+
+  // Both strings are already in memory, so their lengths can't sum past
+  // SIZE_MAX
+  if (dir_len + sep_len + name_len >= out_size) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  memcpy(out, dir, dir_len);
+  if (sep_len)
+    out[dir_len] = '/';
+  memcpy(out + dir_len + sep_len, name, name_len + 1);
+  return 0;
+}
+
+int fs_same_file(const fs_stat *a, const fs_stat *b) {
+  return a->ino != 0 && a->dev == b->dev && a->ino == b->ino;
 }
 
 int fs_is_stream_path(const char *path) {
@@ -158,6 +188,65 @@ int fs_resolve_conflict(const char *path, int overwrite_existing,
   return -1;
 }
 
+int fs_commit_temp(const char *temp, const char *dst, int overwrite_existing,
+                   char *actual, size_t actual_size) {
+  for (int n = 1; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
+    char candidate[FS_PATH_MAX];
+    const char *target = dst;
+    if (n > 1) {
+      if (fs_conflict_path(dst, n, candidate, sizeof(candidate)) != 0) {
+        errno = ENAMETOOLONG;
+        return -1;
+      }
+      target = candidate;
+    }
+
+    // Checked before the move, so a committed file's name is always reported
+    size_t len = strlen(target);
+    if (len >= actual_size) {
+      errno = ENAMETOOLONG;
+      return -1;
+    }
+
+    if (fs_rename(temp, target, overwrite_existing == 2) == 0) {
+      memcpy(actual, target, len + 1);
+      return 0;
+    }
+    if (errno == EEXIST && overwrite_existing == 1)
+      return 1;
+    if (errno != EEXIST || overwrite_existing != 3)
+      return -1;
+  }
+
+  errno = EEXIST;
+  return -1;
+}
+
+// Length of `path`'s root, which exists and can't itself be created: leading
+// separators, and on Windows a drive (C:) or a UNC share (\\host\share, which
+// also covers the \\?\C: form)
+static size_t fs_root_len(const char *path) {
+  size_t i = 0;
+#if defined(_WIN32) || defined(_WIN64)
+  if (FS_IS_SEP(path[0]) && FS_IS_SEP(path[1])) {
+    i = 2;
+    for (int part = 0; part < 2; part++) {
+      while (path[i] && !FS_IS_SEP(path[i]))
+        i++;
+      while (FS_IS_SEP(path[i]))
+        i++;
+    }
+    return i;
+  }
+  char drive = (char)(path[0] | 0x20);
+  if (drive >= 'a' && drive <= 'z' && path[1] == ':')
+    i = 2;
+#endif
+  while (FS_IS_SEP(path[i]))
+    i++;
+  return i;
+}
+
 int fs_mkdir_p(const char *path, uint32_t mode) {
   char tmp[FS_PATH_MAX];
   size_t len = strlen(path);
@@ -168,12 +257,13 @@ int fs_mkdir_p(const char *path, uint32_t mode) {
 
   memcpy(tmp, path, len + 1);
 
-  for (char *p = tmp + 1; *p; p++) {
-    if (*p == '/') {
+  for (char *p = tmp + fs_root_len(tmp); *p; p++) {
+    if (FS_IS_SEP(*p)) {
+      char sep = *p;
       *p = '\0';
       if (fs_mkdir_one(tmp, 0755) != 0)
         return -1;
-      *p = '/';
+      *p = sep;
     }
   }
 
@@ -189,7 +279,6 @@ int fs_mkdir_p(const char *path, uint32_t mode) {
 #include <io.h>
 #include <share.h>
 #include <sys/stat.h>
-#include <sys/utime.h>
 #include <wchar.h>
 #include <windows.h>
 #include <winioctl.h>
@@ -276,6 +365,8 @@ int fs_stat_path(const char *path, fs_stat *out) {
   out->size = (uint64_t)st.st_size;
   out->mtime = (int64_t)st.st_mtime;
   out->mode = (uint32_t)(st.st_mode & 0777);
+  out->dev = 0;
+  out->ino = 0;
 
   if (is_reparse)
     out->type = FS_TYPE_SYMLINK;
@@ -286,6 +377,38 @@ int fs_stat_path(const char *path, fs_stat *out) {
   else
     out->type = FS_TYPE_OTHER;
 
+  // _wstat64 leaves st_ino 0, so the identity needs a handle; only regular
+  // files get one, as nothing compares directories
+  if (out->type == FS_TYPE_FILE) {
+    HANDLE h = fs_open_for_metadata(wpath);
+    BY_HANDLE_FILE_INFORMATION info;
+    if (h != INVALID_HANDLE_VALUE) {
+      if (GetFileInformationByHandle(h, &info)) {
+        out->dev = info.dwVolumeSerialNumber;
+        out->ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow;
+      }
+      CloseHandle(h);
+    }
+  }
+
+  return 0;
+}
+
+int fs_fstat(FILE *f, fs_stat *out) {
+  struct __stat64 st;
+  if (_fstat64(_fileno(f), &st) != 0)
+    return -1;
+
+  memset(out, 0, sizeof(*out));
+  out->size = (uint64_t)st.st_size;
+  out->mtime = (int64_t)st.st_mtime;
+  out->mode = (uint32_t)(st.st_mode & 0777);
+  if (st.st_mode & _S_IFDIR)
+    out->type = FS_TYPE_DIR;
+  else if (st.st_mode & _S_IFREG)
+    out->type = FS_TYPE_FILE;
+  else
+    out->type = FS_TYPE_OTHER;
   return 0;
 }
 
@@ -447,15 +570,52 @@ FILE *fs_fopen_exclusive(const char *path) {
   return f;
 }
 
+static int fs_set_handle_mtime(HANDLE h, int64_t mtime) {
+  // FILETIME counts 100ns intervals since 1601-01-01
+  ULONGLONG ticks = (ULONGLONG)(mtime + 11644473600LL) * 10000000ULL;
+  FILETIME ft = {(DWORD)ticks, (DWORD)(ticks >> 32)};
+  if (h == INVALID_HANDLE_VALUE || !SetFileTime(h, NULL, &ft, &ft)) {
+    errno = EACCES;
+    return -1;
+  }
+  return 0;
+}
+
 int fs_set_mtime(const char *path, int64_t mtime) {
   wchar_t wpath[FS_PATH_MAX];
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
     return -1;
 
-  struct __utimbuf64 times;
-  times.actime = (__time64_t)mtime;
-  times.modtime = (__time64_t)mtime;
-  return _wutime64(wpath, &times);
+  // _wutime64 opens the path as a file, which fails for a directory
+  HANDLE h = CreateFileW(wpath, FILE_WRITE_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  if (h == INVALID_HANDLE_VALUE) {
+    errno = EACCES;
+    return -1;
+  }
+
+  int rc = fs_set_handle_mtime(h, mtime);
+  CloseHandle(h);
+  return rc;
+}
+
+int fs_futimens(FILE *f, int64_t mtime) {
+  return fs_set_handle_mtime((HANDLE)_get_osfhandle(_fileno(f)), mtime);
+}
+
+int fs_fchmod(FILE *f, uint32_t mode) {
+  // Zero times are left as they are; the attributes are written, not merged,
+  // as a write-only handle cannot read them
+  FILE_BASIC_INFO info = {0};
+  info.FileAttributes =
+      (mode & 0200) ? FILE_ATTRIBUTE_NORMAL : FILE_ATTRIBUTE_READONLY;
+  if (!SetFileInformationByHandle((HANDLE)_get_osfhandle(_fileno(f)),
+                                  FileBasicInfo, &info, sizeof(info))) {
+    errno = EACCES;
+    return -1;
+  }
+  return 0;
 }
 
 // Resolves `path` to an absolute path, following reparse points if necessary
@@ -483,15 +643,20 @@ int fs_realpath(const char *path, char *resolved) {
   return fs_narrow(wresolved, resolved, FS_PATH_MAX);
 }
 
-int fs_mkstemp(char *template_path) {
+FILE *fs_mkstemp(char *template_path) {
   size_t narrow_size = strlen(template_path) + 1;
 
   wchar_t wtemplate[FS_PATH_MAX];
   if (fs_widen(template_path, wtemplate, FS_PATH_MAX) != 0)
-    return -1;
+    return NULL;
 
   if (_wmktemp_s(wtemplate, wcslen(wtemplate) + 1) != 0)
-    return -1;
+    return NULL;
+
+  // The substituted characters keep the name exactly as long as the template,
+  // so it still fits the caller's buffer
+  if (fs_narrow(wtemplate, template_path, (int)narrow_size) != 0)
+    return NULL;
 
   int fd;
   errno_t e =
@@ -499,13 +664,45 @@ int fs_mkstemp(char *template_path) {
                 _SH_DENYNO, _S_IREAD | _S_IWRITE);
   if (e != 0) {
     errno = e;
-    return -1;
+    return NULL;
   }
-  _close(fd);
 
-  // The substituted characters keep the name exactly as long as the template,
-  // so it still fits the caller's buffer
-  return fs_narrow(wtemplate, template_path, (int)narrow_size);
+  FILE *f = _fdopen(fd, "wb");
+  if (!f) {
+    int saved = errno;
+    _close(fd);
+    _wremove(wtemplate);
+    errno = saved;
+  }
+  return f;
+}
+
+static int fs_rename(const char *from, const char *to, int replace) {
+  wchar_t wfrom[FS_PATH_MAX], wto[FS_PATH_MAX];
+  if (fs_widen(from, wfrom, FS_PATH_MAX) != 0 ||
+      fs_widen(to, wto, FS_PATH_MAX) != 0)
+    return -1;
+
+  if (MoveFileExW(wfrom, wto, replace ? MOVEFILE_REPLACE_EXISTING : 0))
+    return 0;
+
+  switch (GetLastError()) {
+  case ERROR_ALREADY_EXISTS:
+  case ERROR_FILE_EXISTS:
+    errno = EEXIST;
+    break;
+  case ERROR_FILE_NOT_FOUND:
+  case ERROR_PATH_NOT_FOUND:
+    errno = ENOENT;
+    break;
+  case ERROR_NOT_SAME_DEVICE:
+    errno = EXDEV;
+    break;
+  default: // Includes a destination that is a directory or open elsewhere
+    errno = EACCES;
+    break;
+  }
+  return -1;
 }
 
 static int fs_mkdir_one(const char *path, uint32_t mode) {
@@ -540,12 +737,45 @@ int fs_chmod(const char *path, uint32_t mode) {
   return _wchmod(wpath, win_mode);
 }
 
+uint32_t fs_umask(void) { return 0; }
+
 int fs_unlink(const char *path) {
   wchar_t wpath[FS_PATH_MAX];
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
     return -1;
 
   return _wremove(wpath);
+}
+
+int fs_link(const char *existing, const char *new_path) {
+  wchar_t wexisting[FS_PATH_MAX], wnew[FS_PATH_MAX];
+  if (fs_widen(existing, wexisting, FS_PATH_MAX) != 0 ||
+      fs_widen(new_path, wnew, FS_PATH_MAX) != 0)
+    return -1;
+
+  if (CreateHardLinkW(wnew, wexisting, NULL))
+    return 0;
+
+  switch (GetLastError()) {
+  case ERROR_ALREADY_EXISTS:
+  case ERROR_FILE_EXISTS:
+    errno = EEXIST;
+    break;
+  case ERROR_FILE_NOT_FOUND:
+  case ERROR_PATH_NOT_FOUND:
+    errno = ENOENT;
+    break;
+  case ERROR_NOT_SAME_DEVICE:
+    errno = EXDEV;
+    break;
+  case ERROR_ACCESS_DENIED:
+    errno = EACCES;
+    break;
+  default: // e.g. a FAT volume, which has no hardlinks
+    errno = EPERM;
+    break;
+  }
+  return -1;
 }
 
 #else
@@ -558,32 +788,50 @@ int fs_unlink(const char *path) {
 #include <sys/time.h>
 #include <unistd.h>
 
+static void fs_fill_stat(const struct stat *st, fs_stat *out) {
+  out->size = (uint64_t)st->st_size;
+  out->mtime = (int64_t)st->st_mtime;
+  out->mode = (uint32_t)(st->st_mode & 0777);
+  out->dev = (uint64_t)st->st_dev;
+  out->ino = (uint64_t)st->st_ino;
+
+  if (S_ISDIR(st->st_mode))
+    out->type = FS_TYPE_DIR;
+  else if (S_ISLNK(st->st_mode))
+    out->type = FS_TYPE_SYMLINK;
+  else if (S_ISREG(st->st_mode))
+    out->type = FS_TYPE_FILE;
+  else
+    out->type = FS_TYPE_OTHER;
+}
+
 int fs_stat_path(const char *path, fs_stat *out) {
   struct stat st;
   // lstat to prevent the archiver walking into a symlinked directory
   if (lstat(path, &st) != 0)
     return -1;
+  fs_fill_stat(&st, out);
+  return 0;
+}
 
-  out->size = (uint64_t)st.st_size;
-  out->mtime = (int64_t)st.st_mtime;
-  out->mode = (uint32_t)(st.st_mode & 0777);
-
-  if (S_ISDIR(st.st_mode))
-    out->type = FS_TYPE_DIR;
-  else if (S_ISLNK(st.st_mode))
-    out->type = FS_TYPE_SYMLINK;
-  else if (S_ISREG(st.st_mode))
-    out->type = FS_TYPE_FILE;
-  else
-    out->type = FS_TYPE_OTHER;
-
+int fs_fstat(FILE *f, fs_stat *out) {
+  struct stat st;
+  if (fstat(fileno(f), &st) != 0)
+    return -1;
+  fs_fill_stat(&st, out);
   return 0;
 }
 
 int fs_readlink(const char *path, char *buf, size_t buf_size) {
-  ssize_t len = readlink(path, buf, buf_size - 1);
+  // readlink doesn't terminate and silently truncates, so a result that fills
+  // the whole buffer may have been cut short
+  ssize_t len = readlink(path, buf, buf_size);
   if (len < 0)
     return -1;
+  if ((size_t)len >= buf_size) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
   buf[len] = '\0';
   return 0;
 }
@@ -617,6 +865,15 @@ int fs_set_mtime(const char *path, int64_t mtime) {
   times[1].tv_sec = (time_t)mtime; // Modification time
   times[1].tv_usec = 0;
   return utimes(path, times);
+}
+
+int fs_futimens(FILE *f, int64_t mtime) {
+  struct timespec times[2] = {{(time_t)mtime, 0}, {(time_t)mtime, 0}};
+  return futimens(fileno(f), times);
+}
+
+int fs_fchmod(FILE *f, uint32_t mode) {
+  return fchmod(fileno(f), (mode_t)mode);
 }
 
 int fs_dir_error(const fs_dir *dir) {
@@ -662,11 +919,85 @@ int fs_realpath(const char *path, char *resolved) {
   return realpath(path, resolved) ? 0 : -1;
 }
 
-int fs_mkstemp(char *template_path) {
-  int fd = mkstemp(template_path);
+// Opening with 0666 instead lets the kernel apply the umask
+FILE *fs_mkstemp(char *template_path) {
+  static const char CHARS[] =
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+  size_t len = strlen(template_path);
+  if (len < 6 || strcmp(template_path + len - 6, "XXXXXX") != 0) {
+    errno = EINVAL;
+    return NULL;
+  }
+  char *x = template_path + len - 6;
+
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  uint64_t seed = ((uint64_t)tv.tv_sec << 20) ^ (uint64_t)tv.tv_usec ^
+                  ((uint64_t)getpid() << 40) ^ (uint64_t)(uintptr_t)&tv;
+
+  for (int attempt = 0; attempt < 100; attempt++) {
+    seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+    uint64_t r = seed >> 16;
+    for (int i = 0; i < 6; i++) {
+      x[i] = CHARS[r % (sizeof(CHARS) - 1)];
+      r /= sizeof(CHARS) - 1;
+    }
+
+    int fd = open(template_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (fd >= 0) {
+      FILE *f = fdopen(fd, "wb");
+      if (!f) {
+        int saved = errno;
+        close(fd);
+        unlink(template_path);
+        errno = saved;
+      }
+      return f;
+    }
+    if (errno != EEXIST)
+      return NULL;
+  }
+
+  errno = EEXIST;
+  return NULL;
+}
+
+static int fs_rename(const char *from, const char *to, int replace) {
+  if (replace)
+    return rename(from, to);
+
+#if defined(__linux__)
+  if (renameat2(AT_FDCWD, from, AT_FDCWD, to, RENAME_NOREPLACE) == 0)
+    return 0;
+  if (errno != EINVAL && errno != ENOSYS)
+    return -1;
+#elif defined(__APPLE__)
+  if (renamex_np(from, to, RENAME_EXCL) == 0)
+    return 0;
+  if (errno != ENOTSUP && errno != EINVAL)
+    return -1;
+#endif
+
+  // For filesystems without a no-replace rename; link(2) never replaces
+  if (link(from, to) == 0) {
+    unlink(from);
+    return 0;
+  }
+  if (errno != EPERM && errno != ENOTSUP && errno != EOPNOTSUPP)
+    return -1;
+
+  // Reserves name, then renames over it to avoid race window in rename(2)
+  int fd = open(to, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
   if (fd < 0)
     return -1;
   close(fd);
+  if (rename(from, to) != 0) {
+    int saved = errno;
+    unlink(to);
+    errno = saved;
+    return -1;
+  }
   return 0;
 }
 
@@ -684,6 +1015,17 @@ int fs_chmod(const char *path, uint32_t mode) {
   return chmod(path, (mode_t)mode);
 }
 
+uint32_t fs_umask(void) {
+  mode_t old = umask(0);
+  umask(old);
+  return (uint32_t)old;
+}
+
 int fs_unlink(const char *path) { return unlink(path); }
+
+// linkat without AT_SYMLINK_FOLLOW, since link(2) follows a symlink on macOS
+int fs_link(const char *existing, const char *new_path) {
+  return linkat(AT_FDCWD, existing, AT_FDCWD, new_path, 0);
+}
 
 #endif
