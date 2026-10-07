@@ -17,59 +17,14 @@ typedef struct {
   const char *extension;
   // gzip reads a stored name back from the file; the rest never store one
   int stores_name;
-  unsigned char magic[6];
-  size_t magic_size;
-  // The magic with one byte wrong, which must not be taken for the format
-  unsigned char near_miss[6];
-  size_t near_miss_size;
 } FormatCase;
 
 static const FormatCase FORMATS[] = {
-    {get_gzip_format,
-     FORMAT_GZIP,
-     "gzip",
-     ".gz",
-     1,
-     {0x1f, 0x8b, 0x08},
-     3,
-     {0x1f, 0x8c, 0x08},
-     3},
-    {get_bzip2_format,
-     FORMAT_BZIP2,
-     "bzip2",
-     ".bz2",
-     0,
-     {'B', 'Z', 'h', '9'},
-     4,
-     {'B', 'Z', 'x', '9'},
-     4},
-    {get_xz_format,
-     FORMAT_XZ,
-     "xz",
-     ".xz",
-     0,
-     {0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00},
-     6,
-     {0xFD, 0x37, 0x7A, 0x00, 0x00, 0x00},
-     6},
-    {get_zstd_format,
-     FORMAT_ZSTD,
-     "zstd",
-     ".zst",
-     0,
-     {0x28, 0xB5, 0x2F, 0xFD},
-     4,
-     {0x28, 0xB5, 0x2F, 0x00},
-     4},
-    {get_lz4_format,
-     FORMAT_LZ4,
-     "lz4",
-     ".lz4",
-     0,
-     {0x04, 0x22, 0x4D, 0x18},
-     4,
-     {0x04, 0x22, 0x4D, 0x00},
-     4},
+    {get_gzip_format, FORMAT_GZIP, "gzip", ".gz", 1},
+    {get_bzip2_format, FORMAT_BZIP2, "bzip2", ".bz2", 0},
+    {get_xz_format, FORMAT_XZ, "xz", ".xz", 0},
+    {get_zstd_format, FORMAT_ZSTD, "zstd", ".zst", 0},
+    {get_lz4_format, FORMAT_LZ4, "lz4", ".lz4", 0},
 };
 
 // Every TEST_RANGE below must span exactly these rows
@@ -98,16 +53,6 @@ void test_descriptor(int index) {
   if (!c->stores_name) {
     TEST_ASSERT_NULL_MESSAGE(fmt->get_original_name("x"), c->name);
   }
-}
-
-TEST_RANGE([ 0, 4, 1 ])
-void test_is_format_needs_the_whole_magic(int index) {
-  const FormatCase *c = &FORMATS[index];
-  const StandaloneFormat *fmt = c->get();
-
-  TEST_ASSERT_TRUE_MESSAGE(fmt->is_format(c->magic, c->magic_size), c->name);
-  TEST_ASSERT_FALSE_MESSAGE(fmt->is_format(c->near_miss, c->near_miss_size),
-                            c->name);
 }
 
 TEST_RANGE([ 0, 4, 1 ])

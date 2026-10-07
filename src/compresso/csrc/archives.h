@@ -50,7 +50,6 @@ typedef struct CArchive {
   // Capability checks
   int (*is_available)(void);
   int (*supports_compression)(void);
-  int (*requires_external_compression)(void);
   int (*supports_streaming)(void);
 
   // Writing (Creating Archives)
@@ -69,7 +68,6 @@ typedef struct CArchive {
 
   // Reading (Extracting Archives)
   void *(*create_reader)(const char *input_path);
-  int (*get_entry_count)(void *reader);
   // `ctx` (NULL-tolerant) only receives warnings about a still-usable entry
   int (*get_next_entry)(void *reader, ArchiveEntry *entry, CoreContext *ctx);
 
@@ -79,7 +77,6 @@ typedef struct CArchive {
   int (*extract_entry_data)(void *reader, FILE *output, uint64_t max_bytes,
                             uint64_t *bytes_written, CoreContext *ctx);
   int (*skip_entry_data)(void *reader);
-  int (*reset_reader)(void *reader);
   // `discard` releases a reader whose pass already failed, raising nothing
   int (*close_reader)(void *reader, int discard);
 } CArchive;
@@ -89,9 +86,7 @@ typedef struct CArchive {
 typedef struct {
   int allow_symlinks; // 0 = deny (default), 1 = allow, 2 = rewrite to regular
                       // files
-  int allow_absolute_paths; // always 0; exists for documentation/future use
   int overwrite_existing;   // 0 = error, 1 = skip, 2 = overwrite, 3 = rename
-  int allow_special_files;  // 0 = reject device nodes, FIFOs, sockets (default)
   int preserve_permissions; // 1 = restore mode bits, 0 = apply umask
 
   // 1 = restore them exactly, setuid/setgid/sticky included; 0 = drop those
@@ -112,7 +107,6 @@ ExtractionPolicy extraction_policy_default(void); // returns safe defaults
 
 // ---- Archive Registry ----
 
-const CArchive *find_archive_by_name(const char *name);
 const CArchive *find_archive_by_id(uint8_t id);
 PyObject *get_archive_capabilities(void);
 
@@ -159,12 +153,6 @@ int format_is_archive(Format format);
 
 const char *format_name_string(Format format);
 Format format_from_name(const char *name);
-
-// ---- Operation Modes ----
-
-typedef enum { MODE_SINGLE_FILE = 0, MODE_ARCHIVE = 1 } OperationMode;
-
-OperationMode get_operation_mode(Format format);
 
 // ---- Compression Pipeline ----
 

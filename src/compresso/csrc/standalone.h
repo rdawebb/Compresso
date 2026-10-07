@@ -9,7 +9,6 @@
 #include <stdio.h>
 
 typedef struct {
-  Format format;
   const char *name;
   const char *extension; // Primary extension
   LevelRange levels;
@@ -26,9 +25,6 @@ typedef struct {
 
   // Get original filename from compressed file, or NULL if not stored
   char *(*get_original_name)(const char *compressed_path);
-
-  // Check if file is this format
-  int (*is_format)(const unsigned char *magic, size_t size);
 
 } StandaloneFormat;
 

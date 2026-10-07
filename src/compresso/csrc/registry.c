@@ -1,7 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "common.h"
 #include <Python.h>
-#include <string.h>
 
 #define BACKEND_ID_MAX 32
 
@@ -47,18 +46,6 @@ void init_backends(void) {
 }
 
 // ---- Backend Lookup ----
-
-const CBackend *find_backend_by_name(const char *name) {
-  if (!name)
-    return NULL;
-  init_backends();
-  for (size_t i = 0; i < num_registered_backends; i++) {
-    if (strcmp(registered_backends[i]->name, name) == 0) {
-      return registered_backends[i];
-    }
-  }
-  return NULL;
-}
 
 const CBackend *find_backend_by_id(uint8_t id) {
   init_backends();
@@ -172,12 +159,6 @@ PyObject *get_capabilities(void) {
 
   for (size_t i = 0; i < num_registered_backends; i++) {
     const CBackend *b = registered_backends[i];
-    if (!b) {
-      Py_INCREF(Py_None);
-      PyList_SetItem(list, (Py_ssize_t)i, Py_None);
-      continue;
-    }
-
     PyObject *dict = PyDict_New();
     if (!dict) {
       Py_DECREF(list);

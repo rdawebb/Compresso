@@ -1,8 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "../codec/codec.h"
-#include "../magics.h"
 #include "../standalone.h"
-#include <string.h>
 
 static int zstd_compress_file(const char *input_path, const OutputTarget *out,
                               int level, CoreContext *ctx) {
@@ -25,10 +23,6 @@ static char *zstd_get_original_name(const char *compressed_path) {
   return NULL;
 }
 
-static int zstd_is_format(const unsigned char *magic, size_t size) {
-  return magic_is_zstd(magic, size);
-}
-
 static const StandaloneFormat zstd_format = {
     .name = "zstd",
     .extension = ".zst",
@@ -36,7 +30,6 @@ static const StandaloneFormat zstd_format = {
     .compress_file = zstd_compress_file,
     .decompress_file = zstd_decompress_file,
     .get_original_name = zstd_get_original_name,
-    .is_format = zstd_is_format,
 };
 
 const StandaloneFormat *get_zstd_format(void) { return &zstd_format; }

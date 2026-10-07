@@ -1,22 +1,20 @@
-#include <errno.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
 #include "common.h"
 #include "fsutil.h"
 #include "standalone.h"
 #include <Python.h>
+#include <errno.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 // ---- Default Extraction Policies ----
 
 static const ExtractionPolicy EXTRACTION_POLICY_DEFAULT = {
     .allow_symlinks = 0,
-    .allow_absolute_paths = 0,
-    .allow_special_files = 0,
     .overwrite_existing = 0,
     .preserve_permissions = 1,
     .exact_permissions = 0,
@@ -490,7 +488,7 @@ static int check_entry_policy(const ArchiveEntry *entry,
     return -1;
   }
 
-  if (entry->type == ENTRY_SPECIAL && !policy->allow_special_files) {
+  if (entry->type == ENTRY_SPECIAL) {
     PyErr_Format(comp_ExtractionPolicyError,
                  "Archive contains special file, but policy denies it: %s",
                  entry->path);
@@ -940,8 +938,7 @@ static int deepest_first(const void *a, const void *b) {
 
 // Deepest first, so a parent made read-only or unsearchable can't block its
 // children; best-effort, like the metadata of files
-static void apply_deferred_dirs(DeferredDirs *d,
-                                const ExtractionPolicy *policy,
+static void apply_deferred_dirs(DeferredDirs *d, const ExtractionPolicy *policy,
                                 uint32_t mode_mask) {
   qsort(d->items, d->count, sizeof(*d->items), deepest_first);
 
@@ -1091,8 +1088,7 @@ static int extract_entries(const CArchive *archive, void *reader,
   DeferredDirs deferred = {0};
 
   // Read once, as fs_umask briefly changes it
-  uint32_t mode_mask =
-      policy->exact_permissions ? 07777 : 0777 & ~fs_umask();
+  uint32_t mode_mask = policy->exact_permissions ? 07777 : 0777 & ~fs_umask();
 
   while ((ret = archive->get_next_entry(reader, &entry, ctx)) == 1) {
     // Catches a cancel between entries; extract_entry_data catches one during

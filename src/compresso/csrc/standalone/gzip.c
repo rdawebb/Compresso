@@ -2,7 +2,6 @@
 #include "../codec/codec.h"
 #include "../common.h"
 #include "../fsutil.h"
-#include "../magics.h"
 #include "../standalone.h"
 #include <Python.h>
 #include <stdio.h>
@@ -119,10 +118,6 @@ static char *gzip_get_original_name(const char *compressed_path) {
   return NULL;
 }
 
-static int gzip_is_format(const unsigned char *magic, size_t size) {
-  return magic_is_gzip(magic, size);
-}
-
 static const StandaloneFormat gzip_format = {
     .name = "gzip",
     .extension = ".gz",
@@ -130,7 +125,6 @@ static const StandaloneFormat gzip_format = {
     .compress_file = gzip_compress_file,
     .decompress_file = gzip_decompress_file,
     .get_original_name = gzip_get_original_name,
-    .is_format = gzip_is_format,
 };
 
 const StandaloneFormat *get_gzip_format(void) { return &gzip_format; }

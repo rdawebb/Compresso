@@ -1,11 +1,11 @@
-#include <errno.h>
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
 #define PY_SSIZE_T_CLEAN
 #include "../archives.h"
 #include "../common.h"
 #include <Python.h>
+#include <errno.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <zip.h>
@@ -360,11 +360,6 @@ static void *zip_create_reader(const char *input_path) {
   return reader;
 }
 
-static int zip_get_entry_count(void *reader_ptr) {
-  ZipReader *reader = (ZipReader *)reader_ptr;
-  return (int)reader->num_entries;
-}
-
 static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
                               CoreContext *ctx) {
   (void)ctx; // libzip has no warnings to pass on
@@ -507,12 +502,6 @@ static int zip_skip_entry(void *reader_ptr) {
   return 0;
 }
 
-static int zip_reset_reader(void *reader_ptr) {
-  ZipReader *reader = (ZipReader *)reader_ptr;
-  reader->current_index = 0;
-  return 0;
-}
-
 static int zip_close_reader(void *reader_ptr, int discard) {
   ZipReader *reader = (ZipReader *)reader_ptr;
 
@@ -546,8 +535,6 @@ static int zip_supports_compression(void) {
   return 1; // ZIP has built-in DEFLATE compression
 }
 
-static int zip_requires_external_compression(void) { return 0; }
-
 static int zip_supports_streaming(void) {
   return 0; // libzip requires seekable files
 }
@@ -560,17 +547,14 @@ static const CArchive zip_archive = {
     .levels = LEVELS_ZLIB,
     .is_available = zip_is_available,
     .supports_compression = zip_supports_compression,
-    .requires_external_compression = zip_requires_external_compression,
     .supports_streaming = zip_supports_streaming,
     .create_writer = zip_create_writer,
     .add_entry = zip_add_entry,
     .close_writer = zip_close_writer,
     .create_reader = zip_create_reader,
-    .get_entry_count = zip_get_entry_count,
     .get_next_entry = zip_get_next_entry,
     .extract_entry_data = zip_extract_entry_data,
     .skip_entry_data = zip_skip_entry,
-    .reset_reader = zip_reset_reader,
     .close_reader = zip_close_reader,
 };
 

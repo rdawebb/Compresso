@@ -430,13 +430,3 @@ Format format_from_name(const char *name) {
 
   return FORMAT_UNKNOWN;
 }
-
-// ---- Operation Mode ----
-
-OperationMode get_operation_mode(Format format) {
-  if (format_is_archive(format)) {
-    return MODE_ARCHIVE;
-  } else {
-    return MODE_SINGLE_FILE;
-  }
-}
