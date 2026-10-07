@@ -14,6 +14,19 @@ project('compresso-c-tests', 'c',
 cc = meson.get_compiler('c')
 py = import('python').find_installation()
 
+# -Dfuzz=true builds the libFuzzer targets in fuzz/ instead of the suites, with
+# the code under test instrumented for coverage, so it needs its own build dir:
+#   CC=clang meson setup build/c-fuzz tests/c -Dfuzz=true \
+#     -Db_sanitize=address,undefined -Db_lundef=false
+#   build/c-fuzz/fuzz_gzip -max_total_time=60 CORPUS_DIR tests/fixtures/interop
+fuzz = get_option('fuzz')
+if fuzz
+  if cc.get_id() != 'clang'
+    error('-Dfuzz=true needs Clang for libFuzzer')
+  endif
+  add_project_arguments('-fsanitize=fuzzer-no-link', language: 'c')
+endif
+
 # Same fallbacks as the root meson.build
 bz2_dep = dependency('bzip2', required: false)
 if not bz2_dep.found()
@@ -82,6 +95,23 @@ compile_deps = []
 foreach dep : deps
   compile_deps += dep.partial_dependency(compile_args: true, includes: true)
 endforeach
+
+if fuzz
+  fuzz_kwargs = {
+    'link_args': '-fsanitize=fuzzer',
+    'include_directories': inc,
+    'link_with': under_test,
+    'dependencies': compile_deps,
+  }
+  foreach name : ['gzip', 'bzip2', 'xz', 'zstd', 'lz4']
+    executable('fuzz_' + name, 'fuzz/decode.c',
+      c_args: '-DFUZZ_' + name.to_upper(), kwargs: fuzz_kwargs)
+  endforeach
+  foreach name : ['detect', 'gzip_name']
+    executable('fuzz_' + name, 'fuzz' / name + '.c', kwargs: fuzz_kwargs)
+  endforeach
+  subdir_done()
+endif
 
 ruby = find_program('ruby')
 generate_runner = files('unity/generate_test_runner.rb')
