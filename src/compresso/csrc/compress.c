@@ -125,14 +125,14 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
   }
 
   fclose(src);
-  if (format == FORMAT_UNKNOWN) {
+  const FormatDesc *desc = format_by_id(format);
+  if (!desc) {
     PyErr_SetString(comp_Error, "Unknown or unsupported format");
-  } else if (format_is_archive(format)) {
+  } else if (desc->kind == KIND_ARCHIVE) {
     PyErr_SetString(comp_Error,
                     "Use archive decompression API for archive formats");
   } else {
-    PyErr_Format(comp_Error, "Unknown or unsupported format: %s",
-                 format_name_string(format));
+    PyErr_Format(comp_Error, "Unknown or unsupported format: %s", desc->name);
   }
   return -1;
 }

@@ -675,17 +675,17 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  Format format = format_from_name(format_name);
-  if (format == FORMAT_UNKNOWN) {
+  const FormatDesc *desc = format_by_name(format_name);
+  if (!desc) {
     PyErr_Format(PyExc_ValueError, "Unknown standalone format: %s",
                  format_name);
     return NULL;
   }
 
-  const StandaloneFormat *fmt = find_standalone_format(format);
+  const StandaloneFormat *fmt = find_standalone_format(desc->id);
   if (!fmt) {
     PyErr_Format(PyExc_ValueError, "Format cannot compress a single file: %s",
-                 format_name_string(format));
+                 desc->name);
     return NULL;
   }
 
@@ -770,12 +770,12 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
   }
 
   if (format_name) {
-    format = format_from_name(format_name);
-
-    if (format == FORMAT_UNKNOWN) {
+    const FormatDesc *desc = format_by_name(format_name);
+    if (!desc) {
       PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
       goto fail;
     }
+    format = desc->id;
   } else if (format == FORMAT_UNKNOWN) {
     PyErr_Format(PyExc_ValueError, "Could not detect format for: %s",
                  input_path);
@@ -786,7 +786,7 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
 
   if (!fmt) {
     PyErr_Format(PyExc_ValueError, "Format cannot decompress a single file: %s",
-                 format_name_string(format));
+                 format_by_id(format)->name);
     goto fail;
   }
 

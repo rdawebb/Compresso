@@ -19,7 +19,7 @@ typedef struct {
   int stores_name;
 } FormatCase;
 
-static const FormatCase FORMATS[] = {
+static const FormatCase CONTAINERS[] = {
     {get_gzip_format, FORMAT_GZIP, "gzip", ".gz", 1},
     {get_bzip2_format, FORMAT_BZIP2, "bzip2", ".bz2", 0},
     {get_xz_format, FORMAT_XZ, "xz", ".xz", 0},
@@ -28,7 +28,8 @@ static const FormatCase FORMATS[] = {
 };
 
 // Every TEST_RANGE below must span exactly these rows
-_Static_assert(sizeof(FORMATS) / sizeof(FORMATS[0]) == 5, "update TEST_RANGE");
+_Static_assert(sizeof(CONTAINERS) / sizeof(CONTAINERS[0]) == 5,
+               "update TEST_RANGE");
 
 void setUp(void) {
   if (!Py_IsInitialized()) {
@@ -44,7 +45,7 @@ void tearDown(void) {
 
 TEST_RANGE([ 0, 4, 1 ])
 void test_descriptor(int index) {
-  const FormatCase *c = &FORMATS[index];
+  const FormatCase *c = &CONTAINERS[index];
   const StandaloneFormat *fmt = c->get();
 
   TEST_ASSERT_NOT_NULL_MESSAGE(fmt, c->name);
@@ -57,7 +58,7 @@ void test_descriptor(int index) {
 
 TEST_RANGE([ 0, 4, 1 ])
 void test_registry_resolves_the_same_descriptor(int index) {
-  const FormatCase *c = &FORMATS[index];
+  const FormatCase *c = &CONTAINERS[index];
 
   TEST_ASSERT_EQUAL_PTR_MESSAGE(c->get(), find_standalone_format(c->format),
                                 c->name);
@@ -69,7 +70,7 @@ void test_registry_has_no_standalone_zip(void) {
 
 TEST_RANGE([ 0, 4, 1 ])
 void test_round_trip(int index) {
-  const StandaloneFormat *fmt = FORMATS[index].get();
+  const StandaloneFormat *fmt = CONTAINERS[index].get();
   char comp[256], out[256];
   snprintf(comp, sizeof(comp), "tmp_%s_rt.compressed", fmt->name);
   snprintf(out, sizeof(out), "tmp_%s_rt.out", fmt->name);
@@ -101,7 +102,7 @@ static void append_file(const char *dst, const char *src) {
 
 TEST_RANGE([ 0, 4, 1 ])
 void test_decodes_concatenated_streams(int index) {
-  const StandaloneFormat *fmt = FORMATS[index].get();
+  const StandaloneFormat *fmt = CONTAINERS[index].get();
   char comp[256], both[256], out[256];
   snprintf(comp, sizeof(comp), "tmp_%s_cat.compressed", fmt->name);
   snprintf(both, sizeof(both), "tmp_%s_cat.both", fmt->name);
@@ -126,7 +127,7 @@ void test_decodes_concatenated_streams(int index) {
 
 TEST_RANGE([ 0, 4, 1 ])
 void test_detects_corruption(int index) {
-  const StandaloneFormat *fmt = FORMATS[index].get();
+  const StandaloneFormat *fmt = CONTAINERS[index].get();
   char comp[256], out[256];
   snprintf(comp, sizeof(comp), "tmp_%s_cx.compressed", fmt->name);
   snprintf(out, sizeof(out), "tmp_%s_cx.out", fmt->name);

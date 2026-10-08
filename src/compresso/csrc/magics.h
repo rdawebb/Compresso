@@ -3,10 +3,6 @@
 #include <stddef.h>
 #include <string.h>
 
-// TAR stores its signature at an offset rather than at the start
-#define TAR_MAGIC_OFFSET 257
-#define TAR_MAGIC "ustar"
-
 static inline int magic_is_gzip(const unsigned char *m, size_t n) {
   return n >= 2 && m[0] == 0x1f && m[1] == 0x8b;
 }
@@ -39,6 +35,11 @@ static inline int magic_is_zip(const unsigned char *m, size_t n) {
 static inline int magic_is_7z(const unsigned char *m, size_t n) {
   static const unsigned char SEVEN_Z[] = {'7', 'z', 0xBC, 0xAF, 0x27, 0x1C};
   return n >= sizeof(SEVEN_Z) && memcmp(m, SEVEN_Z, sizeof(SEVEN_Z)) == 0;
+}
+
+// Tar stores its signature at an offset rather than at the start
+static inline int magic_is_tar(const unsigned char *m, size_t n) {
+  return n >= 257 + 5 && memcmp(m + 257, "ustar", 5) == 0;
 }
 
 // The Compresso header's own magic is C_MAGIC in common.h, which this matches

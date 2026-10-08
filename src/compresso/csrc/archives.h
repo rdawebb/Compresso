@@ -3,6 +3,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include "context.h"
+#include "formats.h"
 #include "levels.h"
 #include <Python.h>
 #include <stddef.h>
@@ -115,48 +116,13 @@ PyObject *get_archive_capabilities(void);
 const CArchive *get_tar_archive(void);
 const CArchive *get_zip_archive(void);
 
-// ---- Archive IDs ----
-
-typedef enum {
-  ARCHIVE_NONE = 0,
-  ARCHIVE_TAR = 1,
-  ARCHIVE_ZIP = 2,
-  ARCHIVE_7Z = 3
-} ArchiveID;
-
 // ---- Format Detection ----
 
-typedef enum {
-  FORMAT_UNKNOWN = 0,
-
-  // Single-file formats
-  FORMAT_COMPRESSO = 1,
-  FORMAT_GZIP = 2,
-  FORMAT_BZIP2 = 3,
-  FORMAT_XZ = 4,
-  FORMAT_ZSTD = 5,
-  FORMAT_LZ4 = 6,
-
-  // Multi-file formats with built-in compression
-  FORMAT_ZIP = 10,
-  FORMAT_7Z = 11,
-
-  // Multi-file formats without built-in compression
-  FORMAT_TAR = 20
-} Format;
-
-Format detect_format_from_magic_bytes(const unsigned char *magic, size_t size);
 Format detect_format_from_path(const char *path);
 
 // Opens `path` to read and detects its format as detect_format_from_path does;
 // returns the stream rewound to the start, or NULL with OSError set
 FILE *open_source(const char *path, Format *format);
-Format detect_format_from_extension(const char *path);
-
-int format_is_archive(Format format);
-
-const char *format_name_string(Format format);
-Format format_from_name(const char *name);
 
 // ---- Compression Pipeline ----
 
