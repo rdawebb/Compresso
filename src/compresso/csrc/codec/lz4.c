@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#include "../levels.h"
 #include "codec.h"
 #include <lz4frame.h>
 #include <stdio.h>
@@ -34,6 +35,7 @@ static int lz4_begin(void *state, const CodecParams *params, int decompress,
   }
 
   memset(&s->prefs, 0, sizeof(s->prefs));
+  assert(level_in_range((LevelRange)LEVELS_LZ4, params->level));
   s->prefs.compressionLevel = params->level < 0 ? 0 : params->level;
 
   // The standalone container embeds an xxHash content checksum

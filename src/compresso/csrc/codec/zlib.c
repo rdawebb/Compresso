@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#include "../levels.h"
 #include "codec.h"
 #include <stdio.h>
 #include <zlib.h>
@@ -35,9 +36,8 @@ static int zlib_begin(void *state, const CodecParams *params, int decompress,
     return 0;
   }
 
-  int level = (params->level >= 0 && params->level <= 9)
-                  ? params->level
-                  : Z_DEFAULT_COMPRESSION;
+  assert(level_in_range((LevelRange)LEVELS_ZLIB, params->level));
+  int level = params->level < 0 ? Z_DEFAULT_COMPRESSION : params->level;
 
   s->code =
       deflateInit2(&s->strm, level, Z_DEFLATED, bits, 8, Z_DEFAULT_STRATEGY);

@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#include "../levels.h"
 #include "codec.h"
 #include <stdio.h>
 #include <zstd.h>
@@ -10,14 +11,6 @@ typedef struct {
   size_t code; // The failing call's result; 0 when begin() failed
   char message[128];
 } ZstdState;
-
-static int zstd_level_from_generic(int level) {
-  if (level < ZSTD_minCLevel())
-    return ZSTD_CLEVEL_DEFAULT;
-  if (level > ZSTD_maxCLevel())
-    return ZSTD_maxCLevel();
-  return level;
-}
 
 static int zstd_begin(void *state, const CodecParams *params, int decompress,
                       CoreContext *ctx) {
@@ -37,8 +30,8 @@ static int zstd_begin(void *state, const CodecParams *params, int decompress,
     return -1;
   }
 
-  int zlevel = (params->level >= 0) ? zstd_level_from_generic(params->level)
-                                    : ZSTD_CLEVEL_DEFAULT;
+  assert(level_in_range((LevelRange)LEVELS_ZSTD, params->level));
+  int zlevel = params->level < 0 ? ZSTD_CLEVEL_DEFAULT : params->level;
   if (ZSTD_isError(
           ZSTD_CCtx_setParameter(s->cctx, ZSTD_c_compressionLevel, zlevel))) {
     return -1;

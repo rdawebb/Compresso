@@ -17,4 +17,8 @@ typedef struct {
 
 static inline int level_range_is_empty(LevelRange r) { return r.min < 0; }
 
+static inline int level_in_range(LevelRange r, int level) {
+  return level == -1 || (level >= r.min && level <= r.max);
+}
+
 #endif // LEVELS_H

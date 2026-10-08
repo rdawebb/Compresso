@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#include "../levels.h"
 #include "codec.h"
 #include <bzlib.h>
 #include <stdio.h>
@@ -11,26 +12,19 @@ typedef struct {
   char message[128];
 } BzipState;
 
-static int bzip2_block_size_from_level(int level) {
-  if (level <= 0)
-    return 9; // Default: max compression
-  if (level > 9)
-    return 9;
-  return level;
-}
-
 static int bzip2_begin(void *state, const CodecParams *params, int decompress,
                        CoreContext *ctx) {
   (void)ctx;
   BzipState *s = (BzipState *)state;
   s->decompress = decompress;
+  assert(decompress || level_in_range((LevelRange)LEVELS_BZIP2, params->level));
 
-  // Verbosity 0, and the recommended workFactor of 30
+  // libbzip2 has no default level, so -1 uses bzip2(1)'s 9
+  // Verbosity of 0, and the recommended workFactor of 30
   s->code = decompress
                 ? BZ2_bzDecompressInit(&s->strm, 0, 0)
-                : BZ2_bzCompressInit(&s->strm,
-                                     bzip2_block_size_from_level(params->level),
-                                     0, 30);
+                : BZ2_bzCompressInit(
+                      &s->strm, params->level < 0 ? 9 : params->level, 0, 30);
 
   if (s->code != BZ_OK) {
     return -1;
