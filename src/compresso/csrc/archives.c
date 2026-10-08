@@ -1370,48 +1370,67 @@ cleanup:
   return result;
 }
 
+// Detects the pipeline and decodes any codec stage from the same open stream
+// into a temp file at *tmp_path (NULL if uncompressed); `seed_job` sizes the
+// job by the compressed file; may also return COMP_CANCELLED
+static int open_archive_input(const char *archive_path, int seed_job,
+                              const CArchive **archive, char **tmp_path,
+                              CoreContext *ctx) {
+  *archive = NULL;
+  *tmp_path = NULL;
+
+  Format format;
+  FILE *src = open_source(archive_path, &format);
+  if (!src)
+    return -1;
+
+  CompressionPipeline pipe = pipeline_from_format(format, archive_path);
+  if (pipeline_is_valid(&pipe) && pipe.archive != ARCHIVE_NONE)
+    *archive = archive_for_pipeline(&pipe);
+  else
+    PyErr_SetString(PyExc_ValueError, "Not an archive format");
+
+  if (!*archive || pipe.codec == FORMAT_UNKNOWN) {
+    fclose(src);
+    return *archive ? 0 : -1;
+  }
+
+  *tmp_path = make_temp_path(archive_path);
+  if (!*tmp_path) {
+    fclose(src);
+    return -1;
+  }
+
+  // The extraction stage extends this once prevalidation knows how much the
+  // entries declare
+  if (seed_job) {
+    fs_stat st;
+    ctx_begin_job(ctx, fs_stat_path(archive_path, &st) == 0 ? st.size : 0);
+  }
+
+  OutputTarget out = {.path = *tmp_path, .overwrite = 2, .owner_only = 1};
+  int rc = find_standalone_format(pipe.codec)
+               ->decompress_file(archive_path, src, &out, ctx);
+  if (rc != 0) {
+    fs_unlink(*tmp_path);
+    free(*tmp_path);
+    *tmp_path = NULL;
+  }
+  return rc;
+}
+
 int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files,
                     const ExtractionPolicy *policy, CoreContext *ctx) {
   if (!policy)
     policy = &EXTRACTION_POLICY_DEFAULT;
 
-  if (check_source_readable(archive_path) != 0)
-    return -1;
-
-  CompressionPipeline pipe = detect_pipeline_from_path(archive_path);
-  if (!pipeline_is_valid(&pipe) || pipe.archive == ARCHIVE_NONE) {
-    PyErr_SetString(PyExc_ValueError, "Not an archive format");
-    return -1;
-  }
-
-  const CArchive *archive = archive_for_pipeline(&pipe);
-  if (!archive)
-    return -1;
-
-  // Decode the codec stage to a temporary archive first, if present
-  char *tmp_path = NULL;
-  const char *read_path = archive_path;
-  if (pipe.codec != FORMAT_UNKNOWN) {
-    const StandaloneFormat *codec = find_standalone_format(pipe.codec);
-    tmp_path = make_temp_path(archive_path);
-    if (!tmp_path)
-      return -1;
-
-    // Seeded with the compressed size; the extraction stage extends it once
-    // prevalidation knows how much the entries declare
-    fs_stat st;
-    ctx_begin_job(ctx, fs_stat_path(archive_path, &st) == 0 ? st.size : 0);
-
-    OutputTarget out = {.path = tmp_path, .overwrite = 2, .owner_only = 1};
-    int codec_ret = codec->decompress_file(archive_path, NULL, &out, ctx);
-    if (codec_ret != 0) {
-      fs_unlink(tmp_path);
-      free(tmp_path);
-      return codec_ret;
-    }
-    read_path = tmp_path;
-  }
+  const CArchive *archive;
+  char *tmp_path;
+  int opened = open_archive_input(archive_path, 1, &archive, &tmp_path, ctx);
+  if (opened != 0)
+    return opened;
+  const char *read_path = tmp_path ? tmp_path : archive_path;
 
   // Canonicalised once rather than per entry, and after the directory exists;
   // fs_mkdir_p accepts an existing file, so the resolved root is checked too
@@ -1575,35 +1594,11 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader,
 }
 
 PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
-  if (check_source_readable(archive_path) != 0)
+  const CArchive *archive;
+  char *tmp_path;
+  if (open_archive_input(archive_path, 0, &archive, &tmp_path, ctx) != 0)
     return NULL;
-
-  CompressionPipeline pipe = detect_pipeline_from_path(archive_path);
-  if (!pipeline_is_valid(&pipe) || pipe.archive == ARCHIVE_NONE) {
-    PyErr_SetString(PyExc_ValueError, "Not an archive format");
-    return NULL;
-  }
-
-  const CArchive *archive = archive_for_pipeline(&pipe);
-  if (!archive)
-    return NULL;
-
-  // Decode the codec stage to a temporary archive first, if present
-  char *tmp_path = NULL;
-  const char *read_path = archive_path;
-  if (pipe.codec != FORMAT_UNKNOWN) {
-    const StandaloneFormat *codec = find_standalone_format(pipe.codec);
-    tmp_path = make_temp_path(archive_path);
-    if (!tmp_path)
-      return NULL;
-    OutputTarget out = {.path = tmp_path, .overwrite = 2, .owner_only = 1};
-    if (codec->decompress_file(archive_path, NULL, &out, ctx) != 0) {
-      fs_unlink(tmp_path);
-      free(tmp_path);
-      return NULL;
-    }
-    read_path = tmp_path;
-  }
+  const char *read_path = tmp_path ? tmp_path : archive_path;
 
   void *reader = archive->create_reader(read_path);
   if (!reader) {

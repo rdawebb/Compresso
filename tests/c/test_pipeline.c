@@ -2,9 +2,7 @@
 #define UNITY_SUPPORT_TEST_CASES
 
 #include "archives.h"
-#include "fsutil.h"
 #include "unity.h"
-#include <stdio.h>
 
 #define COUNT(array) (sizeof(array) / sizeof((array)[0]))
 
@@ -56,10 +54,7 @@ _Static_assert(COUNT(COMBINED_NAMES) == 5, "update TEST_RANGE");
 _Static_assert(COUNT(VALIDITY) == 7, "update TEST_RANGE");
 
 void setUp(void) {}
-void tearDown(void) {
-  remove("tmp_pipe.tar.gz/inner");
-  remove("tmp_pipe.tar.gz");
-}
+void tearDown(void) {}
 
 TEST_RANGE([ 0, 5, 1 ])
 void test_pipeline_from_name(int index) {
@@ -109,30 +104,17 @@ void test_null_pipeline_is_invalid(void) {
   TEST_ASSERT_FALSE(pipeline_is_valid(NULL));
 }
 
-// ---- detect_pipeline_from_path ----
-
-// A full 10-byte header: detection reads nothing from a file under 4 bytes
-static void write_gzip_magic(const char *path) {
-  static const unsigned char header[10] = {0x1f, 0x8b, 0x08};
-  FILE *f = fopen(path, "wb");
-  TEST_ASSERT_NOT_NULL(f);
-  fwrite(header, 1, sizeof(header), f);
-  fclose(f);
-}
+// ---- pipeline_from_format ----
 
 void test_tar_shorthand_needs_it_in_the_file_name(void) {
-  write_gzip_magic("tmp_pipe.tar.gz");
-
-  CompressionPipeline p = detect_pipeline_from_path("tmp_pipe.tar.gz");
+  CompressionPipeline p = pipeline_from_format(FORMAT_GZIP, "tmp_pipe.tar.gz");
   TEST_ASSERT_EQUAL(ARCHIVE_TAR, p.archive);
   TEST_ASSERT_EQUAL(FORMAT_GZIP, p.codec);
 }
 
 void test_tar_shorthand_in_a_directory_name_is_ignored(void) {
-  TEST_ASSERT_EQUAL_INT(0, fs_mkdir_p("tmp_pipe.tar.gz", 0755));
-  write_gzip_magic("tmp_pipe.tar.gz/inner");
-
-  CompressionPipeline p = detect_pipeline_from_path("tmp_pipe.tar.gz/inner");
+  CompressionPipeline p =
+      pipeline_from_format(FORMAT_GZIP, "tmp_pipe.tar.gz/inner");
   TEST_ASSERT_EQUAL(ARCHIVE_NONE, p.archive);
   TEST_ASSERT_EQUAL(FORMAT_GZIP, p.codec);
 }

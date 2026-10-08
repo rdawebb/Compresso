@@ -477,6 +477,16 @@ class TestArchiveErrorTypes:
             else:
                 _core.list_archive_contents(missing)
 
+    @pytest.mark.parametrize("call", ["extract", "list"])
+    def test_directory_archive_is_unreadable(self, temp_dir: Path, call: str) -> None:
+        """Test that a directory is refused as unreadable, not as unrecognised."""
+        # Windows refuses to open a directory at all, so it reports EACCES
+        with pytest.raises((IsADirectoryError, PermissionError)):
+            if call == "extract":
+                _core.extract_archive(str(temp_dir), str(temp_dir / "out"), [])
+            else:
+                _core.list_archive_contents(str(temp_dir))
+
     # libzip refuses a name that isn't UTF-8, which only Linux allows
     @pytest.mark.skipif(sys.platform != "linux", reason="needs non-UTF-8 names")
     @pytest.mark.parametrize("kind", ["directory", "symlink"])

@@ -837,7 +837,8 @@ static PyObject *py_detect_format(PyObject *self UNUSED, PyObject *args) {
     return NULL; // Error already set
   }
 
-  CompressionPipeline pipe = detect_pipeline_from_path(file_path);
+  CompressionPipeline pipe =
+      pipeline_from_format(detect_format_from_path(file_path), file_path);
   char name[32];
   pipeline_display_name(&pipe, name, sizeof(name));
 

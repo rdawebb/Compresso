@@ -173,8 +173,9 @@ ArchiveID archive_id_from_format(Format format);
 // Parse a format name into a pipeline
 CompressionPipeline pipeline_from_name(const char *name, int level);
 
-// Detect an on-disk file's format into a pipeline (level defaults to -1)
-CompressionPipeline detect_pipeline_from_path(const char *path);
+// The pipeline for a file already detected as `f`; `path`'s extension says
+// whether a standalone codec wraps a tar
+CompressionPipeline pipeline_from_format(Format f, const char *path);
 
 // Compose a pipeline's display name into buf
 void pipeline_display_name(const CompressionPipeline *p, char *buf,

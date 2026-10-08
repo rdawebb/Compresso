@@ -329,16 +329,15 @@ CompressionPipeline pipeline_from_name(const char *name, int level) {
   return p;
 }
 
-CompressionPipeline detect_pipeline_from_path(const char *path) {
+CompressionPipeline pipeline_from_format(Format f, const char *path) {
   CompressionPipeline p;
   p.archive = ARCHIVE_NONE;
   p.codec = FORMAT_UNKNOWN;
   p.compression_level = -1;
 
-  if (!path)
+  if (f == FORMAT_UNKNOWN)
     return p;
 
-  Format f = detect_format_from_path(path);
   ArchiveID arch = archive_id_from_format(f);
   if (arch != ARCHIVE_NONE) {
     // A plain archive container
