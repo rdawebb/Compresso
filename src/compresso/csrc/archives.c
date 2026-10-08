@@ -1404,7 +1404,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
     ctx_begin_job(ctx, fs_stat_path(archive_path, &st) == 0 ? st.size : 0);
 
     OutputTarget out = {.path = tmp_path, .overwrite = 2, .owner_only = 1};
-    int codec_ret = codec->decompress_file(archive_path, &out, ctx);
+    int codec_ret = codec->decompress_file(archive_path, NULL, &out, ctx);
     if (codec_ret != 0) {
       fs_unlink(tmp_path);
       free(tmp_path);
@@ -1597,7 +1597,7 @@ PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
     if (!tmp_path)
       return NULL;
     OutputTarget out = {.path = tmp_path, .overwrite = 2, .owner_only = 1};
-    if (codec->decompress_file(archive_path, &out, ctx) != 0) {
+    if (codec->decompress_file(archive_path, NULL, &out, ctx) != 0) {
       fs_unlink(tmp_path);
       free(tmp_path);
       return NULL;

@@ -55,6 +55,26 @@ Format detect_format_from_magic_bytes(const unsigned char *magic, size_t size) {
   return FORMAT_UNKNOWN;
 }
 
+static Format detect_format_from_stream(FILE *f, const char *path) {
+  unsigned char magic[512];
+  size_t bytes_read = fread(magic, 1, sizeof(magic), f);
+  if (bytes_read < 4) {
+    return FORMAT_UNKNOWN;
+  }
+
+  Format format = detect_format_from_magic_bytes(magic, bytes_read);
+  if (format != FORMAT_UNKNOWN) {
+    return format;
+  }
+  if (bytes_read >= TAR_MAGIC_OFFSET + 5 &&
+      memcmp(magic + TAR_MAGIC_OFFSET, TAR_MAGIC, 5) == 0) {
+    return FORMAT_TAR;
+  }
+
+  // Try extension-based detection if magic bytes detection fails
+  return detect_format_from_extension(path);
+}
+
 Format detect_format_from_path(const char *path) {
   if (!path) {
     return FORMAT_UNKNOWN;
@@ -64,32 +84,27 @@ Format detect_format_from_path(const char *path) {
   if (!f) {
     return FORMAT_UNKNOWN;
   }
-
-  // Magic bytes detection
-  unsigned char magic[512];
-  size_t bytes_read = fread(magic, 1, sizeof(magic), f);
-  if (bytes_read < 4) {
-    fclose(f);
-    return FORMAT_UNKNOWN;
-  }
-
-  Format format = detect_format_from_magic_bytes(magic, bytes_read);
-  if (format != FORMAT_UNKNOWN) {
-    fclose(f);
-    // Single/base format
-    return format;
-  }
-  // Check for TAR format
-  if (bytes_read >= TAR_MAGIC_OFFSET + 5) {
-    if (memcmp(magic + TAR_MAGIC_OFFSET, TAR_MAGIC, 5) == 0) {
-      fclose(f);
-      return FORMAT_TAR;
-    }
-  }
+  Format format = detect_format_from_stream(f, path);
   fclose(f);
+  return format;
+}
 
-  // If magic bytes detection fails, try extension-based detection
-  return detect_format_from_extension(path);
+FILE *open_source(const char *path, Format *format) {
+  FILE *f = fs_fopen(path, "rb");
+  if (!f) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+    return NULL;
+  }
+
+  // A directory opens fine on POSIX and only fails on read, with EISDIR
+  *format = detect_format_from_stream(f, path);
+  if (ferror(f)) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+    fclose(f);
+    return NULL;
+  }
+  rewind(f);
+  return f;
 }
 
 // The dot starting the final extension of `path`'s last component, or NULL;

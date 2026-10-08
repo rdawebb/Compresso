@@ -269,13 +269,23 @@ int codec_run_file(const CodecOps *ops, const CodecParams *params,
                    int decompress, const char *input_path,
                    const OutputTarget *out, CoreContext *ctx,
                    const char *failure_message) {
+  return codec_run_source(ops, params, decompress, input_path, NULL, out, ctx,
+                          failure_message);
+}
+
+int codec_run_source(const CodecOps *ops, const CodecParams *params,
+                     int decompress, const char *input_path, FILE *input,
+                     const OutputTarget *out, CoreContext *ctx,
+                     const char *failure_message) {
   int checked = output_check(input_path, out);
   if (checked != 0) {
+    if (input) {
+      fclose(input);
+    }
     return checked < 0 ? -1 : 0;
   }
 
-  FILE *input = fs_fopen(input_path, "rb");
-  if (!input) {
+  if (!input && !(input = fs_fopen(input_path, "rb"))) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
     return -1;
   }

@@ -11,11 +11,11 @@ static int xz_compress_file(const char *input_path, const OutputTarget *out,
                         "xz compression failed");
 }
 
-static int xz_decompress_file(const char *input_path, const OutputTarget *out,
-                              CoreContext *ctx) {
+static int xz_decompress_file(const char *input_path, FILE *input,
+                              const OutputTarget *out, CoreContext *ctx) {
   CodecParams params = {.concatenated = 1, .label = "xz"};
-  return codec_run_file(codec_lzma_ops(), &params, 1, input_path, out, ctx,
-                        "xz decompression failed");
+  return codec_run_source(codec_lzma_ops(), &params, 1, input_path, input, out,
+                          ctx, "xz decompression failed");
 }
 
 static char *xz_get_original_name(const char *compressed_path) {

@@ -10,12 +10,13 @@ static int zstd_compress_file(const char *input_path, const OutputTarget *out,
                         "zstd compression failed");
 }
 
-static int zstd_decompress_file(const char *input_path, const OutputTarget *out,
-                                CoreContext *ctx) {
+static int zstd_decompress_file(const char *input_path, FILE *input,
+                                const OutputTarget *out, CoreContext *ctx) {
   CodecParams params = {.concatenated = 1};
-  return codec_run_file(codec_zstd_ops(), &params, 1, input_path, out, ctx,
-                        "zstd decompression failed: corrupted or invalid "
-                        "data");
+  return codec_run_source(codec_zstd_ops(), &params, 1, input_path, input, out,
+                          ctx,
+                          "zstd decompression failed: corrupted or invalid "
+                          "data");
 }
 
 static char *zstd_get_original_name(const char *compressed_path) {

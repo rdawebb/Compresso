@@ -20,16 +20,10 @@
 
 // zlib reports a bad container as a plain data error, so the header is checked
 // here first to keep saying which part of it was wrong
-static int gzip_check_header(const char *path) {
-  FILE *f = fs_fopen(path, "rb");
-  if (!f) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    return -1;
-  }
-
+static int gzip_check_header(FILE *f) {
   uint8_t header[3];
   size_t read = fread(header, 1, sizeof(header), f);
-  fclose(f);
+  rewind(f);
 
   if (read != sizeof(header)) {
     PyErr_SetString(comp_HeaderError, "Failed to read GZIP header");
@@ -57,9 +51,14 @@ static int gzip_compress_file(const char *input_path, const OutputTarget *out,
                         "gzip compression failed");
 }
 
-static int gzip_decompress_file(const char *input_path, const OutputTarget *out,
-                                CoreContext *ctx) {
-  if (gzip_check_header(input_path) != 0) {
+static int gzip_decompress_file(const char *input_path, FILE *input,
+                                const OutputTarget *out, CoreContext *ctx) {
+  if (!input && !(input = fs_fopen(input_path, "rb"))) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
+    return -1;
+  }
+  if (gzip_check_header(input) != 0) {
+    fclose(input);
     return -1;
   }
 
@@ -69,8 +68,8 @@ static int gzip_decompress_file(const char *input_path, const OutputTarget *out,
                         .concatenated = 1,
                         .ignore_trailing = 1,
                         .label = "gzip"};
-  return codec_run_file(codec_zlib_ops(), &params, 1, input_path, out, ctx,
-                        "gzip decompression failed");
+  return codec_run_source(codec_zlib_ops(), &params, 1, input_path, input, out,
+                          ctx, "gzip decompression failed");
 }
 
 static char *gzip_get_original_name(const char *compressed_path) {

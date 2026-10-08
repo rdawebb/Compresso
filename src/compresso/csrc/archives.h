@@ -147,6 +147,10 @@ typedef enum {
 
 Format detect_format_from_magic_bytes(const unsigned char *magic, size_t size);
 Format detect_format_from_path(const char *path);
+
+// Opens `path` to read and detects its format as detect_format_from_path does;
+// returns the stream rewound to the start, or NULL with OSError set
+FILE *open_source(const char *path, Format *format);
 Format detect_format_from_extension(const char *path);
 
 int format_is_archive(Format format);
