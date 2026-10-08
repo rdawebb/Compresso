@@ -16,8 +16,6 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
                   Strategy strategy, int level, int overwrite_existing,
                   char *out_actual_path, size_t out_actual_path_size,
                   CoreContext *ctx) {
-  init_backends();
-
   OutputTarget out = {.path = dst_path,
                       .overwrite = overwrite_existing,
                       .actual = out_actual_path,
@@ -72,7 +70,7 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   header.version = 1;
   header.algo = backend->id;
   header.level = (uint8_t)((level >= 0 && level <= 254) ? level : 255);
-  header.flags = backend->checksummed ? C_FLAG_CHECKSUMMED : 0;
+  header.flags = backend->enc.checksum ? C_FLAG_CHECKSUMMED : 0;
   header.orig_size = (uint64_t)len;
 
   uint8_t header_buf[C_HEADER_SIZE];
@@ -88,7 +86,7 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   // fs_stream_size left src at the start, so the stage covers the whole input
   ctx_begin_stage_stream(ctx, src);
 
-  return_code = backend->compress_stream(src, dst, level, ctx);
+  return_code = backend_compress(backend, src, dst, level, ctx);
   if (return_code != 0) {
     if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
       set_backend_error(backend, "compression", "streaming compression");
@@ -102,8 +100,6 @@ done:
 int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
                     int overwrite_existing, char *out_actual_path,
                     size_t out_actual_path_size, CoreContext *ctx) {
-  init_backends();
-
   Format format;
   FILE *src = open_source(src_path, &format);
   if (!src) {
@@ -141,8 +137,6 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
 static int decompress_compresso_file(const char *src_path, FILE *src,
                                      const OutputTarget *out, AlgoID algo,
                                      CoreContext *ctx) {
-  init_backends();
-
   int checked = output_check(src_path, out);
   if (checked != 0) {
     fclose(src);
@@ -203,7 +197,7 @@ static int decompress_compresso_file(const char *src_path, FILE *src,
   // Progress counts input bytes consumed
   ctx_begin_stage_stream(ctx, src);
 
-  return_code = backend->decompress_stream(src, dst, orig_size, ctx);
+  return_code = backend_decompress(backend, src, dst, orig_size, ctx);
   if (return_code != 0) {
     if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
       set_backend_error(backend, "decompression", "streaming decompression");

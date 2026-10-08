@@ -2,71 +2,13 @@
 #include "common.h"
 #include <Python.h>
 
-#define BACKEND_ID_MAX 32
-
-static const CBackend *backend_by_id[BACKEND_ID_MAX] = {NULL};
-static const CBackend *registered_backends[BACKEND_ID_MAX];
-static size_t num_registered_backends = 0;
-
-static void register_backend(const CBackend *b) {
-  if (!b) {
-    return;
-  }
-  if (!b->is_available || !b->compress_stream || !b->decompress_stream) {
-    return;
-  }
-  if (!b->is_available()) {
-    return;
-  }
-  if (num_registered_backends <
-      sizeof(registered_backends) / sizeof(registered_backends[0])) {
-    registered_backends[num_registered_backends++] = b;
-
-    if (b->id < BACKEND_ID_MAX) {
-      backend_by_id[b->id] = b;
-    }
-  }
-}
-
-// ---- Backend Registry ----
-
-static int backends_init = 0;
-
-void init_backends(void) {
-  if (backends_init)
-    return;
-  backends_init = 1;
-
-  register_backend(get_zlib_backend());
-  register_backend(get_bzip2_backend());
-  register_backend(get_lzma_backend());
-  register_backend(get_zstd_backend());
-  register_backend(get_lz4_backend());
-  register_backend(get_snappy_backend());
-}
-
-// ---- Backend Lookup ----
-
-const CBackend *find_backend_by_id(uint8_t id) {
-  init_backends();
-  if (id < BACKEND_ID_MAX) {
-    return backend_by_id[id];
-  }
-  return NULL;
-}
-
-// ---- Capability Check Helper ----
-
 // ---- Strategy Selection ----
 
 const CBackend *choose_backend(Strategy strat) {
-  init_backends();
-
   const CBackend *zlib = NULL, *bzip2 = NULL, *lzma = NULL;
   const CBackend *zstd = NULL, *lz4 = NULL, *snappy = NULL;
 
-  for (size_t i = 0; i < num_registered_backends; i++) {
-    const CBackend *b = registered_backends[i];
+  for (const CBackend *b = BACKENDS; b->name; b++) {
     switch (b->id) {
     case ALGO_ZLIB:
       zlib = b;
@@ -150,15 +92,12 @@ static PyObject *level_to_py(LevelRange levels, int level) {
 }
 
 PyObject *get_capabilities(void) {
-  init_backends();
-
-  PyObject *list = PyList_New((Py_ssize_t)num_registered_backends);
+  PyObject *list = PyList_New(0);
   if (!list) {
     return NULL;
   }
 
-  for (size_t i = 0; i < num_registered_backends; i++) {
-    const CBackend *b = registered_backends[i];
+  for (const CBackend *b = BACKENDS; b->name; b++) {
     PyObject *dict = PyDict_New();
     if (!dict) {
       Py_DECREF(list);
@@ -187,7 +126,12 @@ PyObject *get_capabilities(void) {
       return NULL;
     }
 
-    PyList_SetItem(list, (Py_ssize_t)i, dict);
+    int appended = PyList_Append(list, dict);
+    Py_DECREF(dict);
+    if (appended < 0) {
+      Py_DECREF(list);
+      return NULL;
+    }
   }
 
   return list;

@@ -12,13 +12,6 @@
 #include <zlib.h>
 #include <zstd.h>
 
-const CBackend *get_zlib_backend(void);
-const CBackend *get_bzip2_backend(void);
-const CBackend *get_lzma_backend(void);
-const CBackend *get_zstd_backend(void);
-const CBackend *get_lz4_backend(void);
-const CBackend *get_snappy_backend(void);
-
 typedef struct {
   const CBackend *backend;
   uint8_t id;
@@ -35,14 +28,16 @@ typedef struct {
 static BackendCase backend_case(int index) {
   // Built per call, because zstd only reports its maximum level at run time
   const BackendCase cases[] = {
-      {get_zlib_backend(), ALGO_ZLIB, "zlib", Z_NO_COMPRESSION,
+      {find_backend_by_id(ALGO_ZLIB), ALGO_ZLIB, "zlib", Z_NO_COMPRESSION,
        Z_BEST_COMPRESSION, 1, 9},
-      {get_bzip2_backend(), ALGO_BZIP2, "bzip2", 1, 9, 1, 9},
-      {get_lzma_backend(), ALGO_LZMA, "lzma", 0, 9, 0, 9},
+      {find_backend_by_id(ALGO_BZIP2), ALGO_BZIP2, "bzip2", 1, 9, 1, 9},
+      {find_backend_by_id(ALGO_LZMA), ALGO_LZMA, "lzma", 0, 9, 0, 9},
       // Levels past 19 allocate a large window, slow even on a small input
-      {get_zstd_backend(), ALGO_ZSTD, "zstd", 1, ZSTD_maxCLevel(), 1, 19},
-      {get_lz4_backend(), ALGO_LZ4, "lz4", 0, LZ4HC_CLEVEL_MAX, 1, 12},
-      {get_snappy_backend(), ALGO_SNAPPY, "snappy", -1, -1, -1, -1},
+      {find_backend_by_id(ALGO_ZSTD), ALGO_ZSTD, "zstd", 1, ZSTD_maxCLevel(), 1,
+       19},
+      {find_backend_by_id(ALGO_LZ4), ALGO_LZ4, "lz4", 0, LZ4HC_CLEVEL_MAX, 1,
+       12},
+      {find_backend_by_id(ALGO_SNAPPY), ALGO_SNAPPY, "snappy", -1, -1, -1, -1},
   };
 
   TEST_ASSERT_EQUAL_size_t(BACKEND_COUNT, sizeof(cases) / sizeof(cases[0]));
@@ -99,8 +94,6 @@ void test_backend_identifies_itself(int index) {
   BackendCase c = backend_case(index);
 
   TEST_ASSERT_NOT_NULL_MESSAGE(c.backend, c.name);
-  // Every backend is a hard link-time dependency, so none may be missing
-  TEST_ASSERT_TRUE_MESSAGE(c.backend->is_available(), c.name);
   TEST_ASSERT_EQUAL_UINT8_MESSAGE(c.id, c.backend->id, c.name);
   TEST_ASSERT_EQUAL_STRING(c.name, c.backend->name);
 }

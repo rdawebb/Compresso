@@ -4,18 +4,16 @@
 #include "common.h"
 #include "unity.h"
 
-const CBackend *find_backend_by_id(uint8_t id);
-
 static const struct {
   const char *name;
   uint8_t id;
-} BACKENDS[] = {
+} EXPECTED_BACKENDS[] = {
     {"zlib", ALGO_ZLIB}, {"bzip2", ALGO_BZIP2}, {"lzma", ALGO_LZMA},
     {"zstd", ALGO_ZSTD}, {"lz4", ALGO_LZ4},     {"snappy", ALGO_SNAPPY},
 };
 
-// The TEST_RANGEs over BACKENDS below must span exactly its rows
-_Static_assert(sizeof(BACKENDS) / sizeof(BACKENDS[0]) == 6,
+// The TEST_RANGEs over EXPECTED_BACKENDS below must span exactly its rows
+_Static_assert(sizeof(EXPECTED_BACKENDS) / sizeof(EXPECTED_BACKENDS[0]) == 6,
                "update TEST_RANGE");
 
 static const struct {
@@ -38,11 +36,11 @@ void tearDown(void) {}
 
 TEST_RANGE([ 0, 5, 1 ])
 void test_find_backend_by_id(int index) {
-  const CBackend *backend = find_backend_by_id(BACKENDS[index].id);
+  const CBackend *backend = find_backend_by_id(EXPECTED_BACKENDS[index].id);
 
-  TEST_ASSERT_NOT_NULL_MESSAGE(backend, BACKENDS[index].name);
-  TEST_ASSERT_EQUAL_UINT8(BACKENDS[index].id, backend->id);
-  TEST_ASSERT_EQUAL_STRING(BACKENDS[index].name, backend->name);
+  TEST_ASSERT_NOT_NULL_MESSAGE(backend, EXPECTED_BACKENDS[index].name);
+  TEST_ASSERT_EQUAL_UINT8(EXPECTED_BACKENDS[index].id, backend->id);
+  TEST_ASSERT_EQUAL_STRING(EXPECTED_BACKENDS[index].name, backend->name);
 }
 
 void test_find_backend_by_id_invalid(void) {

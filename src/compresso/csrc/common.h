@@ -3,6 +3,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
+#include "codec/codec.h"
 #include "context.h"
 #include "fsutil.h"
 #include "levels.h"
@@ -150,16 +151,32 @@ typedef struct CBackend {
   uint8_t id;
   LevelRange levels;
 
-  int (*is_available)(void);
+  // The engine, and the params it runs with each way; an `enc` checksum is
+  // recorded as C_FLAG_CHECKSUMMED
+  const CodecOps *(*engine)(void);
+  CodecParams enc, dec;
 
-  // Its payload carries a content checksum, recorded as C_FLAG_CHECKSUMMED
-  int checksummed;
-
-  // `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation
   int (*compress_stream)(FILE *src, FILE *dst, int level, CoreContext *ctx);
   int (*decompress_stream)(FILE *src, FILE *dst, uint64_t orig_size,
                            CoreContext *ctx);
 } CBackend;
+
+// Ends with a row whose name is NULL
+extern const CBackend BACKENDS[];
+
+// compression/snappy.c, the snappy row's stream loops
+int snappy_compress_stream(FILE *src, FILE *dst, int level, CoreContext *ctx);
+int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
+                             CoreContext *ctx);
+
+// `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation;
+// return 0, -1 or COMP_CANCELLED
+int backend_compress(const CBackend *backend, FILE *src, FILE *dst, int level,
+                     CoreContext *ctx);
+
+// Decoding must produce exactly `orig_size` bytes
+int backend_decompress(const CBackend *backend, FILE *src, FILE *dst,
+                       uint64_t orig_size, CoreContext *ctx);
 
 // ---- Strategy ----
 
@@ -172,17 +189,7 @@ typedef enum {
 
 // ---- Backend Registry ----
 
-void init_backends(void);
 const CBackend *choose_backend(Strategy strat);
-
-// ---- Backend Getters ----
-
-const CBackend *get_zlib_backend(void);
-const CBackend *get_bzip2_backend(void);
-const CBackend *get_lzma_backend(void);
-const CBackend *get_zstd_backend(void);
-const CBackend *get_lz4_backend(void);
-const CBackend *get_snappy_backend(void);
 
 // ---- Exception Objects ----
 

@@ -1,7 +1,7 @@
 #ifndef CODEC_H
 #define CODEC_H
 
-// One chunk loop shared by both framings: `compression/py_*.c` wraps these in
+// One chunk loop shared by both framings: `backends.c` wraps these in
 // the `.comp` header, `standalone.c` in each real-world container
 
 #include "../context.h"
