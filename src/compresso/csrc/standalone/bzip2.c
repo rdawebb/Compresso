@@ -1,6 +1,5 @@
 #define PY_SSIZE_T_CLEAN
 #include "../codec/codec.h"
-#include "../magics.h"
 #include "../standalone.h"
 
 // The .bz2 frame (BZh header + per-block CRC32s) is produced by libbz2, which
@@ -12,21 +11,17 @@ static int bzip2_compress_file(const char *input_path, const OutputTarget *out,
                         "bzip2 compression failed");
 }
 
-static int bzip2_decompress_file(const char *input_path,
+static int bzip2_decompress_file(const char *input_path, FILE *input,
                                  const OutputTarget *out, CoreContext *ctx) {
   // Trailing garbage is ignored with a warning
   CodecParams params = {.concatenated = 1, .ignore_trailing = 1};
-  return codec_run_file(codec_bzip2_ops(), &params, 1, input_path, out, ctx,
-                        "bzip2 decompression failed");
+  return codec_run_source(codec_bzip2_ops(), &params, 1, input_path, input, out,
+                          ctx, "bzip2 decompression failed");
 }
 
 static char *bzip2_get_original_name(const char *compressed_path) {
   (void)compressed_path; // .bz2 does not store the original filename
   return NULL;
-}
-
-static int bzip2_is_format(const unsigned char *magic, size_t size) {
-  return magic_is_bzip2(magic, size);
 }
 
 static const StandaloneFormat bzip2_format = {
@@ -36,7 +31,6 @@ static const StandaloneFormat bzip2_format = {
     .compress_file = bzip2_compress_file,
     .decompress_file = bzip2_decompress_file,
     .get_original_name = bzip2_get_original_name,
-    .is_format = bzip2_is_format,
 };
 
 const StandaloneFormat *get_bzip2_format(void) { return &bzip2_format; }

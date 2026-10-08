@@ -6,6 +6,7 @@
 
 #include "../context.h"
 #include "../fsutil.h"
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -37,7 +38,7 @@ typedef struct {
 // The standalone containers embed integrity checks `.comp` does not, and
 // `.comp`'s lzma asks for an extreme preset `.xz` does not
 typedef struct {
-  int level;           // -1 for the library default
+  int level;           // -1 for the library default; already validated
   int checksum;        // Embed the codec's own integrity check
   int extreme;         // lzma: LZMA_PRESET_EXTREME
   int wrap;            // deflate: a CodecWrap
@@ -93,6 +94,12 @@ int codec_run_file(const CodecOps *ops, const CodecParams *params,
                    int decompress, const char *input_path,
                    const OutputTarget *out, CoreContext *ctx,
                    const char *failure_message);
+
+// codec_run_file over `input`, already open on `input_path` (NULL to open it)
+int codec_run_source(const CodecOps *ops, const CodecParams *params,
+                     int decompress, const char *input_path, FILE *input,
+                     const OutputTarget *out, CoreContext *ctx,
+                     const char *failure_message);
 
 // ---- Engines ----
 

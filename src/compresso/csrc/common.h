@@ -17,27 +17,9 @@
 // Wrapper macros for compiler-specific attribute names
 #if defined(_MSC_VER)
 #define UNUSED
-#define PACKED
-#define PACKED_BEGIN __pragma(pack(push, 1))
-#define PACKED_END __pragma(pack(pop))
 #else
 #define UNUSED __attribute__((unused))
-#define PACKED __attribute__((packed))
-#define PACKED_BEGIN
-#define PACKED_END
 #endif
-
-// Checked size_t addition: stores a + b in *out, returning 1 if it overflowed
-// MSVC has no __builtin_add_overflow; unsigned wraparound is well defined, so
-// the fallback detects it by testing the wrapped sum against an operand
-static inline int add_overflow_size(size_t a, size_t b, size_t *out) {
-#if defined(_MSC_VER)
-  *out = a + b;
-  return *out < a;
-#else
-  return __builtin_add_overflow(a, b, out);
-#endif
-}
 
 // ---- Byte Order ----
 
@@ -158,8 +140,7 @@ typedef enum {
   ALGO_LZMA = 3,
   ALGO_ZSTD = 4,
   ALGO_LZ4 = 5,
-  ALGO_SNAPPY = 6,
-  ALGO_ZIP = 7
+  ALGO_SNAPPY = 6
 } AlgoID;
 
 // ---- Backend Interface ----
@@ -219,15 +200,11 @@ extern PyObject *comp_TrailingDataWarning;
 Strategy strategy_from_string(const char *str);
 AlgoID algo_from_string(const char *str);
 
-const CBackend *find_backend_by_name(const char *name);
 const CBackend *find_backend_by_id(uint8_t id);
 
 PyObject *get_capabilities(void);
 
 void *safe_malloc(size_t size);
-
-// Raises the errno-mapped OSError if `path` cannot be opened and read
-int check_source_readable(const char *path);
 
 // ---- Backend Error Helper ----
 

@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#include "../levels.h"
 #include "codec.h"
 #include <lzma.h>
 #include <stdio.h>
@@ -17,12 +18,9 @@ typedef struct {
 
 // Prefixed throughout: liblzma already exports lzma_end and lzma_code
 static uint32_t codec_lzma_preset(int level, int extreme) {
-  if (level < 0)
-    level = 6;
-  if (level > 9)
-    level = 9;
-
-  return extreme ? ((uint32_t)level | LZMA_PRESET_EXTREME) : (uint32_t)level;
+  assert(level_in_range((LevelRange)LEVELS_LZMA, level));
+  uint32_t preset = level < 0 ? LZMA_PRESET_DEFAULT : (uint32_t)level;
+  return extreme ? (preset | LZMA_PRESET_EXTREME) : preset;
 }
 
 static int codec_lzma_begin(void *state, const CodecParams *params,

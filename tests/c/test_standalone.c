@@ -17,59 +17,14 @@ typedef struct {
   const char *extension;
   // gzip reads a stored name back from the file; the rest never store one
   int stores_name;
-  unsigned char magic[6];
-  size_t magic_size;
-  // The magic with one byte wrong, which must not be taken for the format
-  unsigned char near_miss[6];
-  size_t near_miss_size;
 } FormatCase;
 
 static const FormatCase FORMATS[] = {
-    {get_gzip_format,
-     FORMAT_GZIP,
-     "gzip",
-     ".gz",
-     1,
-     {0x1f, 0x8b, 0x08},
-     3,
-     {0x1f, 0x8c, 0x08},
-     3},
-    {get_bzip2_format,
-     FORMAT_BZIP2,
-     "bzip2",
-     ".bz2",
-     0,
-     {'B', 'Z', 'h', '9'},
-     4,
-     {'B', 'Z', 'x', '9'},
-     4},
-    {get_xz_format,
-     FORMAT_XZ,
-     "xz",
-     ".xz",
-     0,
-     {0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00},
-     6,
-     {0xFD, 0x37, 0x7A, 0x00, 0x00, 0x00},
-     6},
-    {get_zstd_format,
-     FORMAT_ZSTD,
-     "zstd",
-     ".zst",
-     0,
-     {0x28, 0xB5, 0x2F, 0xFD},
-     4,
-     {0x28, 0xB5, 0x2F, 0x00},
-     4},
-    {get_lz4_format,
-     FORMAT_LZ4,
-     "lz4",
-     ".lz4",
-     0,
-     {0x04, 0x22, 0x4D, 0x18},
-     4,
-     {0x04, 0x22, 0x4D, 0x00},
-     4},
+    {get_gzip_format, FORMAT_GZIP, "gzip", ".gz", 1},
+    {get_bzip2_format, FORMAT_BZIP2, "bzip2", ".bz2", 0},
+    {get_xz_format, FORMAT_XZ, "xz", ".xz", 0},
+    {get_zstd_format, FORMAT_ZSTD, "zstd", ".zst", 0},
+    {get_lz4_format, FORMAT_LZ4, "lz4", ".lz4", 0},
 };
 
 // Every TEST_RANGE below must span exactly these rows
@@ -101,16 +56,6 @@ void test_descriptor(int index) {
 }
 
 TEST_RANGE([ 0, 4, 1 ])
-void test_is_format_needs_the_whole_magic(int index) {
-  const FormatCase *c = &FORMATS[index];
-  const StandaloneFormat *fmt = c->get();
-
-  TEST_ASSERT_TRUE_MESSAGE(fmt->is_format(c->magic, c->magic_size), c->name);
-  TEST_ASSERT_FALSE_MESSAGE(fmt->is_format(c->near_miss, c->near_miss_size),
-                            c->name);
-}
-
-TEST_RANGE([ 0, 4, 1 ])
 void test_registry_resolves_the_same_descriptor(int index) {
   const FormatCase *c = &FORMATS[index];
 
@@ -133,7 +78,7 @@ void test_round_trip(int index) {
       0, fmt->compress_file(TEST_INPUT, OVERWRITE_TO(comp), 6, NULL),
       fmt->name);
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      0, fmt->decompress_file(comp, OVERWRITE_TO(out), NULL), fmt->name);
+      0, fmt->decompress_file(comp, NULL, OVERWRITE_TO(out), NULL), fmt->name);
   TEST_ASSERT_TRUE_MESSAGE(files_equal(TEST_INPUT, out), fmt->name);
 
   remove(comp);
@@ -170,7 +115,7 @@ void test_decodes_concatenated_streams(int index) {
   append_file(both, comp);
 
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      0, fmt->decompress_file(both, OVERWRITE_TO(out), NULL), fmt->name);
+      0, fmt->decompress_file(both, NULL, OVERWRITE_TO(out), NULL), fmt->name);
   TEST_ASSERT_EQUAL_INT_MESSAGE(2 * file_size(TEST_INPUT), file_size(out),
                                 fmt->name);
 
@@ -203,9 +148,41 @@ void test_detects_corruption(int index) {
 
   // Decompression must fail (CRC/checksum or structural error)
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      -1, fmt->decompress_file(comp, OVERWRITE_TO(out), NULL), fmt->name);
+      -1, fmt->decompress_file(comp, NULL, OVERWRITE_TO(out), NULL), fmt->name);
   TEST_ASSERT_TRUE_MESSAGE(PyErr_ExceptionMatches(comp_CorruptDataError),
                            fmt->name);
+
+  remove(comp);
+  remove(out);
+}
+
+static const struct {
+  const char *name;
+  unsigned char bytes[10];
+  size_t size;
+} BAD_GZIP_HEADERS[] = {
+    {"bad magic", {0x1f, 0x8c, 0x08, 0, 0, 0, 0, 0, 0, 0xff}, 10},
+    {"unknown method", {0x1f, 0x8b, 0x07, 0, 0, 0, 0, 0, 0, 0xff}, 10},
+    {"truncated", {0x1f, 0x8b}, 2},
+};
+
+_Static_assert(sizeof(BAD_GZIP_HEADERS) / sizeof(BAD_GZIP_HEADERS[0]) == 3,
+               "update TEST_RANGE");
+
+TEST_RANGE([ 0, 2, 1 ])
+void test_gzip_bad_header_is_corrupt_data(int index) {
+  const char *comp = "tmp_gzip_hdr.gz", *out = "tmp_gzip_hdr.out";
+  FILE *f = fopen(comp, "wb");
+  TEST_ASSERT_NOT_NULL(f);
+  fwrite(BAD_GZIP_HEADERS[index].bytes, 1, BAD_GZIP_HEADERS[index].size, f);
+  fclose(f);
+
+  TEST_ASSERT_EQUAL_INT_MESSAGE(
+      -1,
+      get_gzip_format()->decompress_file(comp, NULL, OVERWRITE_TO(out), NULL),
+      BAD_GZIP_HEADERS[index].name);
+  TEST_ASSERT_TRUE_MESSAGE(PyErr_ExceptionMatches(comp_CorruptDataError),
+                           BAD_GZIP_HEADERS[index].name);
 
   remove(comp);
   remove(out);

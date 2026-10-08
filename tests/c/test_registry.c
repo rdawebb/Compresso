@@ -4,7 +4,6 @@
 #include "common.h"
 #include "unity.h"
 
-const CBackend *find_backend_by_name(const char *name);
 const CBackend *find_backend_by_id(uint8_t id);
 
 static const struct {
@@ -38,29 +37,12 @@ void setUp(void) {}
 void tearDown(void) {}
 
 TEST_RANGE([ 0, 5, 1 ])
-void test_find_backend_by_name(int index) {
-  const CBackend *backend = find_backend_by_name(BACKENDS[index].name);
-
-  TEST_ASSERT_NOT_NULL_MESSAGE(backend, BACKENDS[index].name);
-  TEST_ASSERT_EQUAL_STRING(BACKENDS[index].name, backend->name);
-  TEST_ASSERT_EQUAL_UINT8(BACKENDS[index].id, backend->id);
-}
-
-TEST_RANGE([ 0, 5, 1 ])
 void test_find_backend_by_id(int index) {
   const CBackend *backend = find_backend_by_id(BACKENDS[index].id);
 
   TEST_ASSERT_NOT_NULL_MESSAGE(backend, BACKENDS[index].name);
   TEST_ASSERT_EQUAL_UINT8(BACKENDS[index].id, backend->id);
   TEST_ASSERT_EQUAL_STRING(BACKENDS[index].name, backend->name);
-}
-
-void test_find_backend_by_name_invalid(void) {
-  TEST_ASSERT_NULL(find_backend_by_name("invalid_backend"));
-}
-
-void test_find_backend_by_name_null(void) {
-  TEST_ASSERT_NULL(find_backend_by_name(NULL));
 }
 
 void test_find_backend_by_id_invalid(void) {

@@ -1,8 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "../codec/codec.h"
-#include "../magics.h"
 #include "../standalone.h"
-#include <string.h>
 
 // lzma_easy_encoder emits the complete .xz container with an embedded CRC64
 // integrity check, verified by the decoder
@@ -13,20 +11,16 @@ static int xz_compress_file(const char *input_path, const OutputTarget *out,
                         "xz compression failed");
 }
 
-static int xz_decompress_file(const char *input_path, const OutputTarget *out,
-                              CoreContext *ctx) {
+static int xz_decompress_file(const char *input_path, FILE *input,
+                              const OutputTarget *out, CoreContext *ctx) {
   CodecParams params = {.concatenated = 1, .label = "xz"};
-  return codec_run_file(codec_lzma_ops(), &params, 1, input_path, out, ctx,
-                        "xz decompression failed");
+  return codec_run_source(codec_lzma_ops(), &params, 1, input_path, input, out,
+                          ctx, "xz decompression failed");
 }
 
 static char *xz_get_original_name(const char *compressed_path) {
   (void)compressed_path; // .xz does not store the original filename
   return NULL;
-}
-
-static int xz_is_format(const unsigned char *magic, size_t size) {
-  return magic_is_xz(magic, size);
 }
 
 static const StandaloneFormat xz_format = {
@@ -36,7 +30,6 @@ static const StandaloneFormat xz_format = {
     .compress_file = xz_compress_file,
     .decompress_file = xz_decompress_file,
     .get_original_name = xz_get_original_name,
-    .is_format = xz_is_format,
 };
 
 const StandaloneFormat *get_xz_format(void) { return &xz_format; }

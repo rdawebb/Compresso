@@ -50,7 +50,6 @@ typedef struct CArchive {
   // Capability checks
   int (*is_available)(void);
   int (*supports_compression)(void);
-  int (*requires_external_compression)(void);
   int (*supports_streaming)(void);
 
   // Writing (Creating Archives)
@@ -69,7 +68,6 @@ typedef struct CArchive {
 
   // Reading (Extracting Archives)
   void *(*create_reader)(const char *input_path);
-  int (*get_entry_count)(void *reader);
   // `ctx` (NULL-tolerant) only receives warnings about a still-usable entry
   int (*get_next_entry)(void *reader, ArchiveEntry *entry, CoreContext *ctx);
 
@@ -79,7 +77,6 @@ typedef struct CArchive {
   int (*extract_entry_data)(void *reader, FILE *output, uint64_t max_bytes,
                             uint64_t *bytes_written, CoreContext *ctx);
   int (*skip_entry_data)(void *reader);
-  int (*reset_reader)(void *reader);
   // `discard` releases a reader whose pass already failed, raising nothing
   int (*close_reader)(void *reader, int discard);
 } CArchive;
@@ -89,9 +86,7 @@ typedef struct CArchive {
 typedef struct {
   int allow_symlinks; // 0 = deny (default), 1 = allow, 2 = rewrite to regular
                       // files
-  int allow_absolute_paths; // always 0; exists for documentation/future use
   int overwrite_existing;   // 0 = error, 1 = skip, 2 = overwrite, 3 = rename
-  int allow_special_files;  // 0 = reject device nodes, FIFOs, sockets (default)
   int preserve_permissions; // 1 = restore mode bits, 0 = apply umask
 
   // 1 = restore them exactly, setuid/setgid/sticky included; 0 = drop those
@@ -112,7 +107,6 @@ ExtractionPolicy extraction_policy_default(void); // returns safe defaults
 
 // ---- Archive Registry ----
 
-const CArchive *find_archive_by_name(const char *name);
 const CArchive *find_archive_by_id(uint8_t id);
 PyObject *get_archive_capabilities(void);
 
@@ -153,18 +147,16 @@ typedef enum {
 
 Format detect_format_from_magic_bytes(const unsigned char *magic, size_t size);
 Format detect_format_from_path(const char *path);
+
+// Opens `path` to read and detects its format as detect_format_from_path does;
+// returns the stream rewound to the start, or NULL with OSError set
+FILE *open_source(const char *path, Format *format);
 Format detect_format_from_extension(const char *path);
 
 int format_is_archive(Format format);
 
 const char *format_name_string(Format format);
 Format format_from_name(const char *name);
-
-// ---- Operation Modes ----
-
-typedef enum { MODE_SINGLE_FILE = 0, MODE_ARCHIVE = 1 } OperationMode;
-
-OperationMode get_operation_mode(Format format);
 
 // ---- Compression Pipeline ----
 
@@ -181,8 +173,9 @@ ArchiveID archive_id_from_format(Format format);
 // Parse a format name into a pipeline
 CompressionPipeline pipeline_from_name(const char *name, int level);
 
-// Detect an on-disk file's format into a pipeline (level defaults to -1)
-CompressionPipeline detect_pipeline_from_path(const char *path);
+// The pipeline for a file already detected as `f`; `path`'s extension says
+// whether a standalone codec wraps a tar
+CompressionPipeline pipeline_from_format(Format f, const char *path);
 
 // Compose a pipeline's display name into buf
 void pipeline_display_name(const CompressionPipeline *p, char *buf,

@@ -739,6 +739,7 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
   PyObject *cancel = NULL;
 
   Format format = FORMAT_UNKNOWN;
+  FILE *src = NULL;
 
   if (!PyArg_ParseTupleAndKeywords(
           args, kwargs, "OO|s$iOO", kwlist, &input_path_obj, &output_path_obj,
@@ -763,7 +764,8 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
     goto fail; // Error already set
   }
 
-  if (check_source_readable(input_path) != 0) {
+  src = open_source(input_path, &format);
+  if (!src) {
     goto fail;
   }
 
@@ -774,14 +776,10 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
       PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
       goto fail;
     }
-  } else {
-    format = detect_format_from_path(input_path);
-
-    if (format == FORMAT_UNKNOWN) {
-      PyErr_Format(PyExc_ValueError, "Could not detect format for: %s",
-                   input_path);
-      goto fail;
-    }
+  } else if (format == FORMAT_UNKNOWN) {
+    PyErr_Format(PyExc_ValueError, "Could not detect format for: %s",
+                 input_path);
+    goto fail;
   }
 
   const StandaloneFormat *fmt = find_standalone_format(format);
@@ -798,7 +796,8 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
                       .actual = actual_path,
                       .actual_size = sizeof(actual_path),
                       .keep_source_metadata = 1};
-  int rc = fmt->decompress_file(input_path, &out, &ctx);
+  int rc = fmt->decompress_file(input_path, src, &out, &ctx);
+  src = NULL;
   if (rc != 0) {
     set_cancelled_error(rc);
     goto fail; // Error already set
@@ -815,6 +814,9 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
   return PyUnicode_DecodeFSDefault(actual_path);
 
 fail:
+  if (src) {
+    fclose(src);
+  }
   Py_XDECREF(input_path_bytes);
   Py_XDECREF(output_path_bytes);
   return NULL;
@@ -835,7 +837,8 @@ static PyObject *py_detect_format(PyObject *self UNUSED, PyObject *args) {
     return NULL; // Error already set
   }
 
-  CompressionPipeline pipe = detect_pipeline_from_path(file_path);
+  CompressionPipeline pipe =
+      pipeline_from_format(detect_format_from_path(file_path), file_path);
   char name[32];
   pipeline_display_name(&pipe, name, sizeof(name));
 

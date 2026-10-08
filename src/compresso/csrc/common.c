@@ -25,27 +25,6 @@ void *safe_malloc(size_t size) {
   return ptr;
 }
 
-int check_source_readable(const char *path) {
-  FILE *f = fs_fopen(path, "rb");
-  if (!f) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    return -1;
-  }
-
-  // A directory opens fine on POSIX and only fails on read, with EISDIR
-  (void)fgetc(f);
-  int read_failed = ferror(f);
-  int saved_errno = errno;
-  fclose(f);
-
-  if (read_failed) {
-    errno = saved_errno;
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    return -1;
-  }
-  return 0;
-}
-
 void set_backend_error(const CBackend *backend, const char *op,
                        const char *context) {
   PyErr_Format(comp_BackendError, "Backend '%s' %s failed (%s)",

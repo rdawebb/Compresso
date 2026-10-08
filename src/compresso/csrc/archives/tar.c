@@ -241,12 +241,6 @@ static void *tar_create_reader(const char *input_path) {
   return reader;
 }
 
-static int tar_get_entry_count(void *reader_ptr) {
-  (void)reader_ptr;
-  // libarchive doesn't provide a direct way to get entry count
-  return -1;
-}
-
 static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
                               CoreContext *ctx) {
   TarReader *reader = (TarReader *)reader_ptr;
@@ -394,13 +388,6 @@ static int tar_skip_entry(void *reader_ptr) {
   return 0;
 }
 
-static int tar_reset_reader(void *reader_ptr) {
-  (void)reader_ptr;
-  // TAR archives don't support seeking/resetting
-  PyErr_SetString(PyExc_NotImplementedError, "TAR reader cannot be reset");
-  return -1;
-}
-
 static int tar_close_reader(void *reader_ptr, int discard) {
   TarReader *reader = (TarReader *)reader_ptr;
 
@@ -435,10 +422,6 @@ static int tar_supports_compression(void) {
   return 0; // TAR itself doesn't have compression
 }
 
-static int tar_requires_external_compression(void) {
-  return 1; // TAR needs external compression
-}
-
 static int tar_supports_streaming(void) {
   return 1; // TAR supports streaming
 }
@@ -451,17 +434,14 @@ static const CArchive tar_archive = {
     .levels = LEVELS_NONE,
     .is_available = tar_is_available,
     .supports_compression = tar_supports_compression,
-    .requires_external_compression = tar_requires_external_compression,
     .supports_streaming = tar_supports_streaming,
     .create_writer = tar_create_writer,
     .add_entry = tar_add_entry,
     .close_writer = tar_close_writer,
     .create_reader = tar_create_reader,
-    .get_entry_count = tar_get_entry_count,
     .get_next_entry = tar_get_next_entry,
     .extract_entry_data = tar_extract_entry_data,
     .skip_entry_data = tar_skip_entry,
-    .reset_reader = tar_reset_reader,
     .close_reader = tar_close_reader,
 };
 

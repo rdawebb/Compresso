@@ -9,7 +9,6 @@
 #include <stdio.h>
 
 typedef struct {
-  Format format;
   const char *name;
   const char *extension; // Primary extension
   LevelRange levels;
@@ -20,15 +19,13 @@ typedef struct {
   int (*compress_file)(const char *input_path, const OutputTarget *out,
                        int level, CoreContext *ctx);
 
-  // Decompress a standalone format file through `out`
-  int (*decompress_file)(const char *input_path, const OutputTarget *out,
-                         CoreContext *ctx);
+  // Decompress a standalone format file through `out`; `input` is already
+  // open on `input_path` (NULL to open it)
+  int (*decompress_file)(const char *input_path, FILE *input,
+                         const OutputTarget *out, CoreContext *ctx);
 
   // Get original filename from compressed file, or NULL if not stored
   char *(*get_original_name)(const char *compressed_path);
-
-  // Check if file is this format
-  int (*is_format)(const unsigned char *magic, size_t size);
 
 } StandaloneFormat;
 

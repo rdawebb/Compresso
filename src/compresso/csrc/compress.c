@@ -6,7 +6,7 @@
 #include <Python.h>
 #include <string.h>
 
-static int decompress_compresso_file(const char *src_path,
+static int decompress_compresso_file(const char *src_path, FILE *src,
                                      const OutputTarget *out, AlgoID algo,
                                      CoreContext *ctx);
 
@@ -104,13 +104,9 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
                     size_t out_actual_path_size, CoreContext *ctx) {
   init_backends();
 
-  if (check_source_readable(src_path) != 0) {
-    return -1;
-  }
-
-  Format format = detect_format_from_path(src_path);
-  if (format == FORMAT_UNKNOWN) {
-    PyErr_SetString(comp_Error, "Unknown or unsupported format");
+  Format format;
+  FILE *src = open_source(src_path, &format);
+  if (!src) {
     return -1;
   }
 
@@ -120,46 +116,42 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
                       .actual_size = out_actual_path_size,
                       .keep_source_metadata = 1};
 
-  // The standalone formats each open and size their own input
   const StandaloneFormat *standalone = find_standalone_format(format);
   if (standalone) {
-    return standalone->decompress_file(src_path, &out, ctx);
+    return standalone->decompress_file(src_path, src, &out, ctx);
+  }
+  if (format == FORMAT_COMPRESSO) {
+    return decompress_compresso_file(src_path, src, &out, algo, ctx);
   }
 
-  if (format_is_archive(format)) {
+  fclose(src);
+  if (format == FORMAT_UNKNOWN) {
+    PyErr_SetString(comp_Error, "Unknown or unsupported format");
+  } else if (format_is_archive(format)) {
     PyErr_SetString(comp_Error,
                     "Use archive decompression API for archive formats");
-    return -1;
+  } else {
+    PyErr_Format(comp_Error, "Unknown or unsupported format: %s",
+                 format_name_string(format));
   }
-
-  if (format == FORMAT_COMPRESSO) {
-    return decompress_compresso_file(src_path, &out, algo, ctx);
-  }
-
-  PyErr_Format(comp_Error, "Unknown or unsupported format: %s",
-               format_name_string(format));
   return -1;
 }
 
-static int decompress_compresso_file(const char *src_path,
+// `src` is open on `src_path` at its start; closed either way
+static int decompress_compresso_file(const char *src_path, FILE *src,
                                      const OutputTarget *out, AlgoID algo,
                                      CoreContext *ctx) {
   init_backends();
 
   int checked = output_check(src_path, out);
   if (checked != 0) {
+    fclose(src);
     return checked < 0 ? -1 : 0;
   }
 
   int return_code = 0;
   FILE *dst = NULL;
   char temp[FS_PATH_MAX] = "";
-
-  FILE *src = fs_fopen(src_path, "rb");
-  if (!src) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, src_path);
-    return -1;
-  }
 
   uint8_t header_buf[C_HEADER_SIZE];
   if (fread(header_buf, 1, sizeof(header_buf), src) != sizeof(header_buf)) {
