@@ -1,6 +1,8 @@
 #ifndef FORMATS_H
 #define FORMATS_H
 
+#include "codec/codec.h"
+#include "levels.h"
 #include <stddef.h>
 
 typedef enum {
@@ -46,6 +48,12 @@ typedef struct {
   const char *tar_short;  // Extension and name for tar wrapped in this, or NULL
   int (*magic)(const unsigned char *m, size_t n);
   ArchiveID archive; // KIND_ARCHIVE only
+
+  // KIND_CONTAINER only: the engine, and the params it runs with each way;
+  // compression takes its level from the caller
+  const CodecOps *(*engine)(void);
+  CodecParams enc, dec;
+  LevelRange levels;
 } FormatDesc;
 
 // Ends with a row whose name is NULL; magic detection takes the rows in order

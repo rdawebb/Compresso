@@ -246,7 +246,7 @@ class TestDecompressFile:
         assert decompressed_file.read_text(encoding="utf-8") == content
 
 
-class TestStandaloneFormatErrors:
+class TestStandaloneErrors:
     """Test refusing a format the single-file entry points cannot use.
 
     An archive format resolves to a real `Format` but has no standalone

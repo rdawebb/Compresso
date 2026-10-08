@@ -63,6 +63,7 @@ under_test = static_library('under_test',
   csrc / 'common.c',
   csrc / 'compress.c',
   csrc / 'formats.c',
+  csrc / 'standalone.c',
   csrc / 'fsutil.c',
   csrc / 'pipeline.c',
   csrc / 'registry.c',
@@ -80,12 +81,6 @@ under_test = static_library('under_test',
   csrc / 'compression/py_zstd.c',
   csrc / 'compression/py_lz4.c',
   csrc / 'compression/py_snappy.c',
-  csrc / 'standalone/gzip.c',
-  csrc / 'standalone/bzip2.c',
-  csrc / 'standalone/xz.c',
-  csrc / 'standalone/zstd.c',
-  csrc / 'standalone/lz4.c',
-  csrc / 'standalone/registry.c',
   include_directories: inc,
   dependencies: deps,
 )
@@ -106,7 +101,7 @@ if fuzz
   }
   foreach name : ['gzip', 'bzip2', 'xz', 'zstd', 'lz4']
     executable('fuzz_' + name, 'fuzz/decode.c',
-      c_args: '-DFUZZ_' + name.to_upper(), kwargs: fuzz_kwargs)
+      c_args: '-DFORMAT=FORMAT_' + name.to_upper(), kwargs: fuzz_kwargs)
   endforeach
   foreach name : ['detect', 'gzip_name']
     executable('fuzz_' + name, 'fuzz' / name + '.c', kwargs: fuzz_kwargs)

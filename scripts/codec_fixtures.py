@@ -42,7 +42,7 @@ LEVELS = (-1, 1, 6, 9)
 # `.comp` framing, via the CBackend stream ops
 COMP_ALGOS = ("zlib", "bzip2", "lzma", "zstd", "lz4", "snappy")
 
-# Standalone containers, via the StandaloneFormat ops
+# Standalone containers via the format table's engines
 STANDALONE_FORMATS = ("gzip", "bzip2", "xz", "zstd", "lz4")
 
 # Deterministic, so reproducible without committing 2 MB of noise

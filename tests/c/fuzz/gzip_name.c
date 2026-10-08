@@ -30,6 +30,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   }
   fwrite(data, 1, size, f);
   fclose(f);
-  free(find_standalone_format(FORMAT_GZIP)->get_original_name(path));
+  free(gzip_original_name(path));
   return 0;
 }

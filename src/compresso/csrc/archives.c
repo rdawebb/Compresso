@@ -732,8 +732,8 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
     return output_commit(tmp_path, &out);
 
   if (ret == 0) {
-    const StandaloneFormat *codec = find_standalone_format(pipeline->codec);
-    ret = codec->compress_file(tmp_path, &out, level, ctx);
+    ret = standalone_compress(find_standalone_format(pipeline->codec), tmp_path,
+                              &out, level, ctx);
   }
   fs_unlink(tmp_path);
   return ret;
@@ -1409,8 +1409,8 @@ static int open_archive_input(const char *archive_path, int seed_job,
   }
 
   OutputTarget out = {.path = *tmp_path, .overwrite = 2, .owner_only = 1};
-  int rc = find_standalone_format(pipe.codec)
-               ->decompress_file(archive_path, src, &out, ctx);
+  int rc = standalone_decompress(find_standalone_format(pipe.codec),
+                                 archive_path, src, &out, ctx);
   if (rc != 0) {
     fs_unlink(*tmp_path);
     free(*tmp_path);

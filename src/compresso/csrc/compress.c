@@ -116,9 +116,9 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
                       .actual_size = out_actual_path_size,
                       .keep_source_metadata = 1};
 
-  const StandaloneFormat *standalone = find_standalone_format(format);
+  const FormatDesc *standalone = find_standalone_format(format);
   if (standalone) {
-    return standalone->decompress_file(src_path, src, &out, ctx);
+    return standalone_decompress(standalone, src_path, src, &out, ctx);
   }
   if (format == FORMAT_COMPRESSO) {
     return decompress_compresso_file(src_path, src, &out, algo, ctx);
