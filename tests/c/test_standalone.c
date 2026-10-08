@@ -155,3 +155,35 @@ void test_detects_corruption(int index) {
   remove(comp);
   remove(out);
 }
+
+static const struct {
+  const char *name;
+  unsigned char bytes[10];
+  size_t size;
+} BAD_GZIP_HEADERS[] = {
+    {"bad magic", {0x1f, 0x8c, 0x08, 0, 0, 0, 0, 0, 0, 0xff}, 10},
+    {"unknown method", {0x1f, 0x8b, 0x07, 0, 0, 0, 0, 0, 0, 0xff}, 10},
+    {"truncated", {0x1f, 0x8b}, 2},
+};
+
+_Static_assert(sizeof(BAD_GZIP_HEADERS) / sizeof(BAD_GZIP_HEADERS[0]) == 3,
+               "update TEST_RANGE");
+
+TEST_RANGE([ 0, 2, 1 ])
+void test_gzip_bad_header_is_corrupt_data(int index) {
+  const char *comp = "tmp_gzip_hdr.gz", *out = "tmp_gzip_hdr.out";
+  FILE *f = fopen(comp, "wb");
+  TEST_ASSERT_NOT_NULL(f);
+  fwrite(BAD_GZIP_HEADERS[index].bytes, 1, BAD_GZIP_HEADERS[index].size, f);
+  fclose(f);
+
+  TEST_ASSERT_EQUAL_INT_MESSAGE(
+      -1,
+      get_gzip_format()->decompress_file(comp, NULL, OVERWRITE_TO(out), NULL),
+      BAD_GZIP_HEADERS[index].name);
+  TEST_ASSERT_TRUE_MESSAGE(PyErr_ExceptionMatches(comp_CorruptDataError),
+                           BAD_GZIP_HEADERS[index].name);
+
+  remove(comp);
+  remove(out);
+}

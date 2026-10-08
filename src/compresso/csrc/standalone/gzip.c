@@ -10,38 +10,10 @@
 // GZIP header (RFC 1952): a fixed 10-byte record, addressed by byte offset
 // rather than declared as a struct so that padding can't reach the file
 #define GZIP_HEADER_SIZE 10
-#define GZIP_OFF_MAGIC0 0
-#define GZIP_OFF_MAGIC1 1
-#define GZIP_OFF_METHOD 2
 #define GZIP_OFF_FLAGS 3
 
 #define FEXTRA 0x04
 #define FNAME 0x08
-
-// zlib reports a bad container as a plain data error, so the header is checked
-// here first to keep saying which part of it was wrong
-static int gzip_check_header(FILE *f) {
-  uint8_t header[3];
-  size_t read = fread(header, 1, sizeof(header), f);
-  rewind(f);
-
-  if (read != sizeof(header)) {
-    PyErr_SetString(comp_HeaderError, "Failed to read GZIP header");
-    return -1;
-  }
-
-  if (header[GZIP_OFF_MAGIC0] != 0x1f || header[GZIP_OFF_MAGIC1] != 0x8b) {
-    PyErr_SetString(comp_HeaderError, "Invalid GZIP magic number");
-    return -1;
-  }
-
-  if (header[GZIP_OFF_METHOD] != 0x08) {
-    PyErr_SetString(comp_HeaderError, "Unsupported compression method");
-    return -1;
-  }
-
-  return 0;
-}
 
 static int gzip_compress_file(const char *input_path, const OutputTarget *out,
                               int level, CoreContext *ctx) {
@@ -53,17 +25,6 @@ static int gzip_compress_file(const char *input_path, const OutputTarget *out,
 
 static int gzip_decompress_file(const char *input_path, FILE *input,
                                 const OutputTarget *out, CoreContext *ctx) {
-  if (!input && !(input = fs_fopen(input_path, "rb"))) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_path);
-    return -1;
-  }
-  if (gzip_check_header(input) != 0) {
-    fclose(input);
-    return -1;
-  }
-
-  // zlib consumes the header's optional fields and checks the trailer's CRC32
-  // and ISIZE itself
   CodecParams params = {.wrap = CODEC_WRAP_GZIP,
                         .concatenated = 1,
                         .ignore_trailing = 1,
