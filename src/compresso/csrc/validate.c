@@ -32,7 +32,7 @@ int validate_level(const char *name, LevelRange levels, int level) {
 static int validate_pipeline_level(const CompressionPipeline *pipeline,
                                    int level) {
   if (pipeline->codec != FORMAT_UNKNOWN) {
-    const StandaloneFormat *fmt = find_standalone_format(pipeline->codec);
+    const FormatDesc *fmt = find_standalone_format(pipeline->codec);
     return fmt ? validate_level(fmt->name, fmt->levels, level) : 0;
   }
 

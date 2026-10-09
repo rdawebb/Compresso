@@ -209,6 +209,24 @@ class TestArchiveOverwrite:
         assert job.plan.output == sibling
         assert sibling.is_file()
 
+    def test_rename_keeps_an_uppercase_compound_extension_intact(
+        self, temp_dir: Path
+    ) -> None:
+        """Test that "OUT.TAR.GZ" renames as "out.tar.gz" does."""
+        source = temp_dir / "a.txt"
+        source.write_bytes(b"hello compresso")
+
+        archive_path = temp_dir / "OUT.TAR.GZ"
+        archive_path.write_bytes(b"stale")
+
+        job = ArchiveJob.from_paths(
+            [source], archive_path, options=ArchiveOptions(format="tar.gz")
+        )
+        result = job.run()
+
+        assert result.ok, result.error
+        assert job.plan.output == temp_dir / renamed("OUT.TAR.GZ")
+
     def test_rename_increments_through_repeated_conflicts(self, temp_dir: Path) -> None:
         """Test that a third clash gets " 3", not another " 2"."""
         source, archive_path = self._source_and_stale_output(temp_dir)

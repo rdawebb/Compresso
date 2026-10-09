@@ -515,8 +515,9 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
           args, kwargs, "OOO|$iKIpppipOO", kwlist, &archive_path_obj,
           &output_dir_obj, &files_obj, &policy.overwrite_existing,
           &max_total_size, &max_depth, &policy.preserve_permissions,
-          &policy.exact_permissions, &policy.preserve_timestamps, &policy.allow_symlinks,
-          &policy.overwrite_dir_metadata, &progress, &cancel)) {
+          &policy.exact_permissions, &policy.preserve_timestamps,
+          &policy.allow_symlinks, &policy.overwrite_dir_metadata, &progress,
+          &cancel)) {
     return NULL; // Error already set
   }
 
@@ -675,17 +676,17 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
     return NULL;
   }
 
-  Format format = format_from_name(format_name);
-  if (format == FORMAT_UNKNOWN) {
+  const FormatDesc *desc = format_by_name(format_name);
+  if (!desc) {
     PyErr_Format(PyExc_ValueError, "Unknown standalone format: %s",
                  format_name);
     return NULL;
   }
 
-  const StandaloneFormat *fmt = find_standalone_format(format);
+  const FormatDesc *fmt = find_standalone_format(desc->id);
   if (!fmt) {
     PyErr_Format(PyExc_ValueError, "Format cannot compress a single file: %s",
-                 format_name_string(format));
+                 desc->name);
     return NULL;
   }
 
@@ -709,7 +710,7 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
                       .actual = actual_path,
                       .actual_size = sizeof(actual_path),
                       .keep_source_metadata = 1};
-  int rc = fmt->compress_file(input_path, &out, compression_level, &ctx);
+  int rc = standalone_compress(fmt, input_path, &out, compression_level, &ctx);
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
   if (rc != 0) {
@@ -770,23 +771,23 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
   }
 
   if (format_name) {
-    format = format_from_name(format_name);
-
-    if (format == FORMAT_UNKNOWN) {
+    const FormatDesc *desc = format_by_name(format_name);
+    if (!desc) {
       PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
       goto fail;
     }
+    format = desc->id;
   } else if (format == FORMAT_UNKNOWN) {
     PyErr_Format(PyExc_ValueError, "Could not detect format for: %s",
                  input_path);
     goto fail;
   }
 
-  const StandaloneFormat *fmt = find_standalone_format(format);
+  const FormatDesc *fmt = find_standalone_format(format);
 
   if (!fmt) {
     PyErr_Format(PyExc_ValueError, "Format cannot decompress a single file: %s",
-                 format_name_string(format));
+                 format_by_id(format)->name);
     goto fail;
   }
 
@@ -796,7 +797,7 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
                       .actual = actual_path,
                       .actual_size = sizeof(actual_path),
                       .keep_source_metadata = 1};
-  int rc = fmt->decompress_file(input_path, src, &out, &ctx);
+  int rc = standalone_decompress(fmt, input_path, src, &out, &ctx);
   src = NULL;
   if (rc != 0) {
     set_cancelled_error(rc);

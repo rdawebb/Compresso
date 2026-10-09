@@ -4,10 +4,6 @@
 #include <Python.h>
 #include <snappy-c.h>
 
-static int snappy_is_available(void) {
-  return 1; // snappy is always available if this code is compiled
-}
-
 // ---- Helpers ----
 
 static void write_u32_le(uint32_t value, unsigned char buffer[4]) {
@@ -24,8 +20,7 @@ static uint32_t read_u32_le(const unsigned char buffer[4]) {
 
 // ---- Stream Compression/Decompression ----
 
-static int snappy_compress_stream(FILE *src, FILE *dst, int level,
-                                  CoreContext *ctx) {
+int snappy_compress_stream(FILE *src, FILE *dst, int level, CoreContext *ctx) {
   (void)level; // snappy ignores compression level
 
   size_t max_comp_len = snappy_max_compressed_length(SNAPPY_CHUNK);
@@ -99,8 +94,8 @@ static int snappy_compress_stream(FILE *src, FILE *dst, int level,
   return return_code;
 }
 
-static int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
-                                    CoreContext *ctx) {
+int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
+                             CoreContext *ctx) {
   size_t max_comp_len = snappy_max_compressed_length(SNAPPY_CHUNK);
 
   char *comp_buffer = (char *)safe_malloc(max_comp_len);
@@ -201,16 +196,3 @@ static int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
   free(output_buffer);
   return return_code;
 }
-
-// ---- Backend Definition ----
-
-static const CBackend snappy_backend = {
-    .name = "snappy",
-    .id = ALGO_SNAPPY,
-    .levels = LEVELS_NONE,
-    .is_available = snappy_is_available,
-    .compress_stream = snappy_compress_stream,
-    .decompress_stream = snappy_decompress_stream,
-};
-
-const CBackend *get_snappy_backend(void) { return &snappy_backend; }

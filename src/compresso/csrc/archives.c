@@ -512,19 +512,6 @@ static int entry_is_selected(const ArchiveEntry *entry, const char **files,
   return 0;
 }
 
-// ---- Archive Registry ----
-
-const CArchive *find_archive_by_id(uint8_t id) {
-  switch (id) {
-  case ARCHIVE_TAR:
-    return get_tar_archive();
-  case ARCHIVE_ZIP:
-    return get_zip_archive();
-  default:
-    return NULL;
-  }
-}
-
 // The backend for a pipeline's container, so a recognised format without a
 // backend (e.g. 7z) is identified
 static const CArchive *archive_for_pipeline(const CompressionPipeline *p) {
@@ -732,8 +719,8 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
     return output_commit(tmp_path, &out);
 
   if (ret == 0) {
-    const StandaloneFormat *codec = find_standalone_format(pipeline->codec);
-    ret = codec->compress_file(tmp_path, &out, level, ctx);
+    ret = standalone_compress(find_standalone_format(pipeline->codec), tmp_path,
+                              &out, level, ctx);
   }
   fs_unlink(tmp_path);
   return ret;
@@ -1409,8 +1396,8 @@ static int open_archive_input(const char *archive_path, int seed_job,
   }
 
   OutputTarget out = {.path = *tmp_path, .overwrite = 2, .owner_only = 1};
-  int rc = find_standalone_format(pipe.codec)
-               ->decompress_file(archive_path, src, &out, ctx);
+  int rc = standalone_decompress(find_standalone_format(pipe.codec),
+                                 archive_path, src, &out, ctx);
   if (rc != 0) {
     fs_unlink(*tmp_path);
     free(*tmp_path);
@@ -1630,11 +1617,8 @@ PyObject *get_archive_capabilities(void) {
   if (!list)
     return NULL;
 
-  const CArchive *backends[] = {get_tar_archive(), get_zip_archive()};
-  size_t n = sizeof(backends) / sizeof(backends[0]);
-
-  for (size_t i = 0; i < n; i++) {
-    const CArchive *a = backends[i];
+  for (const FormatDesc *d = FORMATS; d->name; d++) {
+    const CArchive *a = d->backend;
     if (!a || !a->is_available())
       continue;
 

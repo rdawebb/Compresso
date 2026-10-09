@@ -55,15 +55,17 @@ inc = include_directories('support', 'unity', csrc)
 unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 
 # _core.c and archives.c are left out: they reach libarchive/libzip;
-# support/test_stubs.c supplies the exception globals and archive lookup instead
+# support/test_stubs.c supplies the exception globals and archive backends instead
 under_test = static_library('under_test',
   'support/test_stubs.c',
   'support/backend_io.c',
   'support/files.c',
   csrc / 'common.c',
   csrc / 'compress.c',
-  csrc / 'format.c',
+  csrc / 'formats.c',
+  csrc / 'standalone.c',
   csrc / 'fsutil.c',
+  csrc / 'pipeline.c',
   csrc / 'registry.c',
   csrc / 'strategy.c',
   csrc / 'validate.c',
@@ -73,18 +75,8 @@ under_test = static_library('under_test',
   csrc / 'codec/lzma.c',
   csrc / 'codec/bzip2.c',
   csrc / 'codec/zlib.c',
-  csrc / 'compression/py_zlib.c',
-  csrc / 'compression/py_bzip2.c',
-  csrc / 'compression/py_lzma.c',
-  csrc / 'compression/py_zstd.c',
-  csrc / 'compression/py_lz4.c',
-  csrc / 'compression/py_snappy.c',
-  csrc / 'standalone/gzip.c',
-  csrc / 'standalone/bzip2.c',
-  csrc / 'standalone/xz.c',
-  csrc / 'standalone/zstd.c',
-  csrc / 'standalone/lz4.c',
-  csrc / 'standalone/registry.c',
+  csrc / 'backends.c',
+  csrc / 'compression/snappy.c',
   include_directories: inc,
   dependencies: deps,
 )
@@ -105,7 +97,7 @@ if fuzz
   }
   foreach name : ['gzip', 'bzip2', 'xz', 'zstd', 'lz4']
     executable('fuzz_' + name, 'fuzz/decode.c',
-      c_args: '-DFUZZ_' + name.to_upper(), kwargs: fuzz_kwargs)
+      c_args: '-DFORMAT=FORMAT_' + name.to_upper(), kwargs: fuzz_kwargs)
   endforeach
   foreach name : ['detect', 'gzip_name']
     executable('fuzz_' + name, 'fuzz' / name + '.c', kwargs: fuzz_kwargs)

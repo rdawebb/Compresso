@@ -428,7 +428,7 @@ static int tar_supports_streaming(void) {
 
 // ---- Backend Definition ----
 
-static const CArchive tar_archive = {
+const CArchive TAR_ARCHIVE = {
     .name = "tar",
     .id = ARCHIVE_TAR,
     .levels = LEVELS_NONE,
@@ -444,5 +444,3 @@ static const CArchive tar_archive = {
     .skip_entry_data = tar_skip_entry,
     .close_reader = tar_close_reader,
 };
-
-const CArchive *get_tar_archive(void) { return &tar_archive; }
