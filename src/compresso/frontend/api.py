@@ -38,6 +38,8 @@ STANDALONE_FORMATS: dict[str, str] = {
     "zst": "zstd",
     "zstd": "zstd",
     "lz4": "lz4",
+    "sz": "snappy",
+    "snappy": "snappy",
 }
 
 # Suffix each standalone format conventionally uses, for naming an output the
@@ -48,6 +50,7 @@ STANDALONE_SUFFIXES: dict[str, str] = {
     "xz": ".xz",
     "zstd": ".zst",
     "lz4": ".lz4",
+    "snappy": ".sz",
 }
 
 

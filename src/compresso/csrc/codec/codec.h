@@ -108,5 +108,6 @@ const CodecOps *codec_lz4_ops(void);
 const CodecOps *codec_lzma_ops(void);
 const CodecOps *codec_bzip2_ops(void);
 const CodecOps *codec_zlib_ops(void);
+const CodecOps *codec_snappy_ops(void);
 
 #endif // CODEC_H

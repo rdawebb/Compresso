@@ -64,10 +64,6 @@ def _load_capabilities() -> None:
     by_id: dict[int, BackendCapabilities] = {}
 
     for item in _core.get_capabilities():
-        # Unregistered backend slots come back as None
-        if item is None:
-            continue
-
         cap = BackendCapabilities(
             name=item["name"],
             id=item["id"],

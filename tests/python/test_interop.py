@@ -50,6 +50,7 @@ class TestStandaloneDecoding:
             _case("xz_single.xz", PART1),
             _case("lz4_single.lz4", PART1),
             _case("zstd_single.zst", PART1),
+            _case("sz_single.sz", PART1),
             _case("gzip_multi_member.gz", PART1 + PART2),
             _case("gzip_bgzf.gz", ALICE),
             _case("bzip2_pbzip2.bz2", ALICE),
@@ -58,6 +59,10 @@ class TestStandaloneDecoding:
             _case("lz4_skippable.lz4", PART1 + PART2),
             _case("zstd_concat.zst", PART1 + PART2),
             _case("zstd_skippable.zst", PART1 + PART2),
+            # The gzip file doesn't compress, so it's stored as is
+            _case("sz_uncompressed.sz", (INTEROP / "gzip_single.gz").read_bytes()),
+            _case("sz_padding.sz", PART1),
+            _case("sz_concat.sz", PART1 + PART2),
         ],
     )
     def test_decodes_every_stream(

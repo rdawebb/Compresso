@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         # Mirrors the targets in tests/c/meson.build
-        target: [gzip, bzip2, xz, zstd, lz4, detect, gzip_name]
+        target: [gzip, bzip2, xz, zstd, lz4, snappy, detect, gzip_name]
     env:
       # Short on pushes and PRs, longer on nightly and manual runs
       FUZZ_SECONDS: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 60 || 1800 }}

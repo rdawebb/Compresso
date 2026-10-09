@@ -414,10 +414,6 @@ static int tar_close_reader(void *reader_ptr, int discard) {
 
 // ---- Capability Functions ----
 
-static int tar_is_available(void) {
-  return 1; // TAR is always available if libarchive is compiled
-}
-
 static int tar_supports_compression(void) {
   return 0; // TAR itself doesn't have compression
 }
@@ -430,9 +426,7 @@ static int tar_supports_streaming(void) {
 
 const CArchive TAR_ARCHIVE = {
     .name = "tar",
-    .id = ARCHIVE_TAR,
     .levels = LEVELS_NONE,
-    .is_available = tar_is_available,
     .supports_compression = tar_supports_compression,
     .supports_streaming = tar_supports_streaming,
     .create_writer = tar_create_writer,

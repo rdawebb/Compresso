@@ -101,11 +101,8 @@ class _CapabilityDict(TypedDict):
     # the lowest built one is that strategy's default
     rank: dict[str, int]
 
-def get_capabilities() -> list[_CapabilityDict | None]:
-    """Get list of available compression backends.
-
-    A slot is None when its backend is not registered.
-    """
+def get_capabilities() -> list[_CapabilityDict]:
+    """Get list of available compression backends."""
 
 class _ArchiveCapabilityDict(TypedDict):
     name: str
@@ -226,7 +223,7 @@ def compress_standalone(
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
 ) -> str:
-    """Compress a file into a standalone container (.gz, .bz2, .xz, .zst, .lz4).
+    """Compress a file into a standalone container (.gz, .bz2, .xz, .zst, .lz4, .sz).
 
     `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
     applied to the destination file.

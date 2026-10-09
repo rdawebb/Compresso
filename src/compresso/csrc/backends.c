@@ -1,6 +1,4 @@
-#define PY_SSIZE_T_CLEAN
 #include "common.h"
-#include <Python.h>
 
 // `.comp` payloads: get_capabilities lists the rows in this order
 const CBackend BACKENDS[] = {
@@ -32,8 +30,8 @@ const CBackend BACKENDS[] = {
     {.name = "snappy",
      .id = ALGO_SNAPPY,
      .levels = LEVELS_NONE,
-     .compress_stream = snappy_compress_stream,
-     .decompress_stream = snappy_decompress_stream},
+     .engine = codec_snappy_ops,
+     .enc = {.checksum = 1}}, // The framing's CRC-32C, which it always writes
     {.name = NULL},
 };
 
@@ -46,9 +44,6 @@ const CBackend *find_backend_by_id(uint8_t id) {
 
 int backend_compress(const CBackend *backend, FILE *src, FILE *dst, int level,
                      CoreContext *ctx) {
-  if (!backend->engine)
-    return backend->compress_stream(src, dst, level, ctx);
-
   CodecParams params = backend->enc;
   params.level = level;
   return codec_run_stream(backend->engine(), &params, 0, src, dst, ctx);
@@ -56,9 +51,6 @@ int backend_compress(const CBackend *backend, FILE *src, FILE *dst, int level,
 
 int backend_decompress(const CBackend *backend, FILE *src, FILE *dst,
                        uint64_t orig_size, CoreContext *ctx) {
-  if (!backend->engine)
-    return backend->decompress_stream(src, dst, orig_size, ctx);
-
   CodecParams params = backend->dec;
   params.exact_size = 1;
   params.orig_size = orig_size;

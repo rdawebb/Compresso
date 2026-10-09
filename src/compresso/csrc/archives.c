@@ -516,19 +516,15 @@ static int entry_is_selected(const ArchiveEntry *entry, const char **files,
 // backend (e.g. 7z) is identified
 static const CArchive *archive_for_pipeline(const CompressionPipeline *p) {
   const CArchive *archive = find_archive_by_id(p->archive);
-  if (archive && archive->is_available())
+  if (archive)
     return archive;
 
   CompressionPipeline container = {.archive = p->archive,
                                    .codec = FORMAT_UNKNOWN};
   char name[32];
   pipeline_display_name(&container, name, sizeof(name));
-
-  if (!archive)
-    PyErr_Format(comp_BackendError,
-                 "%s archives are recognised but not supported yet", name);
-  else
-    PyErr_Format(comp_BackendError, "%s archive backend not available", name);
+  PyErr_Format(comp_BackendError,
+               "%s archives are recognised but not supported yet", name);
   return NULL;
 }
 
@@ -1619,7 +1615,7 @@ PyObject *get_archive_capabilities(void) {
 
   for (const FormatDesc *d = FORMATS; d->name; d++) {
     const CArchive *a = d->backend;
-    if (!a || !a->is_available())
+    if (!a)
       continue;
 
     PyObject *dict = PyDict_New();

@@ -1,6 +1,7 @@
 // Makes Unity define TEST_RANGE; the runner generator expands each one
 #define UNITY_SUPPORT_TEST_CASES
 
+#include "codec/crc32c.h"
 #include "common.h"
 #include "files.h"
 #include "standalone.h"
@@ -11,11 +12,11 @@
 #define TEST_INPUT FIXTURE_DIR "/alice29.txt"
 
 static const Format CONTAINERS[] = {
-    FORMAT_GZIP, FORMAT_BZIP2, FORMAT_XZ, FORMAT_ZSTD, FORMAT_LZ4,
+    FORMAT_GZIP, FORMAT_BZIP2, FORMAT_XZ, FORMAT_ZSTD, FORMAT_LZ4, FORMAT_SNAPPY,
 };
 
 // Every TEST_RANGE below must span exactly these rows
-_Static_assert(sizeof(CONTAINERS) / sizeof(CONTAINERS[0]) == 5,
+_Static_assert(sizeof(CONTAINERS) / sizeof(CONTAINERS[0]) == 6,
                "update TEST_RANGE");
 
 void setUp(void) {
@@ -23,6 +24,7 @@ void setUp(void) {
     Py_Initialize();
   }
   ensure_comp_exceptions();
+  crc32c_init();
 }
 
 void tearDown(void) {
@@ -30,7 +32,7 @@ void tearDown(void) {
   PyErr_Clear();
 }
 
-TEST_RANGE([ 0, 4, 1 ])
+TEST_RANGE([ 0, 5, 1 ])
 void test_container_has_an_engine(int index) {
   const FormatDesc *fmt = find_standalone_format(CONTAINERS[index]);
 
@@ -46,7 +48,7 @@ void test_only_containers_are_standalone(void) {
   TEST_ASSERT_NULL(find_standalone_format(FORMAT_UNKNOWN));
 }
 
-TEST_RANGE([ 0, 4, 1 ])
+TEST_RANGE([ 0, 5, 1 ])
 void test_round_trip(int index) {
   const FormatDesc *fmt = find_standalone_format(CONTAINERS[index]);
   char comp[256], out[256];
@@ -79,7 +81,7 @@ static void append_file(const char *dst, const char *src) {
   fclose(out);
 }
 
-TEST_RANGE([ 0, 4, 1 ])
+TEST_RANGE([ 0, 5, 1 ])
 void test_decodes_concatenated_streams(int index) {
   const FormatDesc *fmt = find_standalone_format(CONTAINERS[index]);
   char comp[256], both[256], out[256];
@@ -105,7 +107,7 @@ void test_decodes_concatenated_streams(int index) {
   remove(out);
 }
 
-TEST_RANGE([ 0, 4, 1 ])
+TEST_RANGE([ 0, 5, 1 ])
 void test_detects_corruption(int index) {
   const FormatDesc *fmt = find_standalone_format(CONTAINERS[index]);
   char comp[256], out[256];

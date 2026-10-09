@@ -20,7 +20,18 @@ from .._levels import to_core_level
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 
 # Formats whose container cannot hold multiple entries
-_NON_ARCHIVE_FORMATS = {"gz", "gzip", "bz2", "bzip2", "xz", "zst", "zstd", "lz4"}
+_NON_ARCHIVE_FORMATS = {
+    "gz",
+    "gzip",
+    "bz2",
+    "bzip2",
+    "xz",
+    "zst",
+    "zstd",
+    "lz4",
+    "sz",
+    "snappy",
+}
 
 
 @dataclass(frozen=True)

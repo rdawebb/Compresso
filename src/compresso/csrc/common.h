@@ -155,19 +155,10 @@ typedef struct CBackend {
   // recorded as C_FLAG_CHECKSUMMED
   const CodecOps *(*engine)(void);
   CodecParams enc, dec;
-
-  int (*compress_stream)(FILE *src, FILE *dst, int level, CoreContext *ctx);
-  int (*decompress_stream)(FILE *src, FILE *dst, uint64_t orig_size,
-                           CoreContext *ctx);
 } CBackend;
 
 // Ends with a row whose name is NULL
 extern const CBackend BACKENDS[];
-
-// compression/snappy.c, the snappy row's stream loops
-int snappy_compress_stream(FILE *src, FILE *dst, int level, CoreContext *ctx);
-int snappy_decompress_stream(FILE *src, FILE *dst, uint64_t orig_size,
-                             CoreContext *ctx);
 
 // `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation;
 // return 0, -1 or COMP_CANCELLED

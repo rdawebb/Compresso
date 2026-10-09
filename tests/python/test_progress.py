@@ -30,10 +30,10 @@ BACKENDS = [
 
 
 def fast_level(algo: str) -> int:
-    """The quickest level a backend accepts, for tests where the level is moot.
+    """The quickest level a backend or format accepts, where the level is moot.
 
     Args:
-        algo: The backend's name.
+        algo: The backend's or standalone format's name.
 
     Returns:
         Level 1, or the default for snappy, which has no levels.
@@ -160,7 +160,7 @@ class TestDecompressionProgress:
 
 
 class TestStandaloneProgress:
-    """Test progress reporting from the standalone (.gz/.bz2/.xz/.zst/.lz4) codecs."""
+    """Test progress reporting from the standalone (.gz/.bz2/.xz/.zst/.lz4/.sz) codecs."""
 
     @pytest.mark.parametrize(
         ("fmt", "ext"),
@@ -170,6 +170,7 @@ class TestStandaloneProgress:
             pytest.param("xz", ".xz", marks=pytest.mark.slow),
             ("zstd", ".zst"),
             ("lz4", ".lz4"),
+            ("snappy", ".sz"),
         ],
     )
     def test_round_trip_reports_progress(
@@ -184,7 +185,7 @@ class TestStandaloneProgress:
             str(big_incompressible_file),
             str(compressed),
             fmt,
-            1,
+            fast_level(fmt),
             progress=compressing,
         )
 

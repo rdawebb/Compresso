@@ -5,6 +5,7 @@
 
 #include "backend_io.h"
 #include "codec/codec.h"
+#include "codec/crc32c.h"
 #include "unity.h"
 #include <lz4hc.h>
 #include <stdlib.h>
@@ -52,6 +53,7 @@ void setUp(void) {
   if (!Py_IsInitialized()) {
     Py_Initialize();
   }
+  crc32c_init();
 
   alice = read_fixture(FIXTURE_DIR "/alice29.txt", &alice_size);
   TEST_ASSERT_NOT_NULL(alice);

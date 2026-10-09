@@ -74,6 +74,14 @@ const FormatDesc FORMATS[] = {
      .enc = {.checksum = 1}, // xxHash32, verified as each frame ends
      .dec = {.concatenated = 1},
      .levels = LEVELS_LZ4},
+    {.id = FORMAT_SNAPPY,
+     .kind = KIND_CONTAINER,
+     .name = "snappy",
+     .aliases = {"sz"},
+     .exts = {"sz"},
+     .magic = magic_is_snappy,
+     .engine = codec_snappy_ops, // Masked CRC-32C per chunk
+     .levels = LEVELS_NONE},
     {.id = FORMAT_ZIP,
      .kind = KIND_ARCHIVE,
      .name = "zip",

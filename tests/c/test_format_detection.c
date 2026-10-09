@@ -15,6 +15,8 @@ static const unsigned char BZIP2[] = {'B', 'Z', 'h', '9'};
 static const unsigned char XZ[] = {0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00};
 static const unsigned char ZSTD[] = {0x28, 0xb5, 0x2f, 0xfd};
 static const unsigned char LZ4[] = {0x04, 0x22, 0x4d, 0x18};
+static const unsigned char SNAPPY[] = {0xff, 0x06, 0x00, 0x00, 's',
+                                       'N',  'a',  'P',  'p',  'Y'};
 static const unsigned char ZIP[] = {'P', 'K', 0x03, 0x04};
 static const unsigned char COMPRESSO[] = {'C', 'O', 'M', 'P'};
 static const unsigned char SEVEN_Z[] = {'7', 'z', 0xbc, 0xaf, 0x27, 0x1c};
@@ -45,6 +47,8 @@ static const struct {
     {"xz", XZ, sizeof(XZ), FORMAT_XZ},
     {"zstd", ZSTD, sizeof(ZSTD), FORMAT_ZSTD},
     {"lz4", LZ4, sizeof(LZ4), FORMAT_LZ4},
+    {"snappy", SNAPPY, sizeof(SNAPPY), FORMAT_SNAPPY},
+    {"snappy cut short", SNAPPY, sizeof(SNAPPY) - 1, FORMAT_UNKNOWN},
     {"zstd after a skippable frame", SKIP_ZSTD, sizeof(SKIP_ZSTD), FORMAT_ZSTD},
     {"lz4 after a skippable frame", SKIP_LZ4, sizeof(SKIP_LZ4), FORMAT_LZ4},
     {"unknown after a skippable frame", SKIP_UNKNOWN, sizeof(SKIP_UNKNOWN),
@@ -68,12 +72,12 @@ static const struct {
 };
 
 // The TEST_RANGE below must span exactly these rows
-_Static_assert(sizeof(CASES) / sizeof(CASES[0]) == 21, "update TEST_RANGE");
+_Static_assert(sizeof(CASES) / sizeof(CASES[0]) == 23, "update TEST_RANGE");
 
 void setUp(void) {}
 void tearDown(void) {}
 
-TEST_RANGE([ 0, 20, 1 ])
+TEST_RANGE([ 0, 22, 1 ])
 void test_format_by_magic(int index) {
   TEST_ASSERT_EQUAL_MESSAGE(
       CASES[index].expected,
@@ -91,6 +95,7 @@ static const struct {
     {"dir/a.tar", FORMAT_TAR, 0},
     {"a.tgz", FORMAT_GZIP, 1},
     {"a.tar.zstd", FORMAT_ZSTD, 1},
+    {"a.sz", FORMAT_SNAPPY, 0},
     {"A.TAR.GZ", FORMAT_GZIP, 1},
     // Tar inside something unknown is still tar inside
     {"a.tar.foo", FORMAT_UNKNOWN, 1},
@@ -107,10 +112,10 @@ static const struct {
 };
 
 // The TEST_RANGE below must span exactly these rows
-_Static_assert(sizeof(EXTENSIONS) / sizeof(EXTENSIONS[0]) == 14,
+_Static_assert(sizeof(EXTENSIONS) / sizeof(EXTENSIONS[0]) == 15,
                "update TEST_RANGE");
 
-TEST_RANGE([ 0, 13, 1 ])
+TEST_RANGE([ 0, 14, 1 ])
 void test_format_by_ext(int index) {
   int in_tar = -1;
   TEST_ASSERT_EQUAL_MESSAGE(

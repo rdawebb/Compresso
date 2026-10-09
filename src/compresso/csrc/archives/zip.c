@@ -529,8 +529,6 @@ static int zip_close_reader(void *reader_ptr, int discard) {
 
 // ---- Capability Functions ----
 
-static int zip_is_available(void) { return 1; }
-
 static int zip_supports_compression(void) {
   return 1; // ZIP has built-in DEFLATE compression
 }
@@ -543,9 +541,7 @@ static int zip_supports_streaming(void) {
 
 const CArchive ZIP_ARCHIVE = {
     .name = "zip",
-    .id = ARCHIVE_ZIP,
     .levels = LEVELS_ZLIB,
-    .is_available = zip_is_available,
     .supports_compression = zip_supports_compression,
     .supports_streaming = zip_supports_streaming,
     .create_writer = zip_create_writer,

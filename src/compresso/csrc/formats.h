@@ -24,6 +24,7 @@ typedef enum {
   FORMAT_XZ = 4,
   FORMAT_ZSTD = 5,
   FORMAT_LZ4 = 6,
+  FORMAT_SNAPPY = 7,
 
   // Multi-file formats with built-in compression
   FORMAT_ZIP = 10,

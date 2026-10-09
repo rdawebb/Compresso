@@ -75,8 +75,9 @@ under_test = static_library('under_test',
   csrc / 'codec/lzma.c',
   csrc / 'codec/bzip2.c',
   csrc / 'codec/zlib.c',
+  csrc / 'codec/snappy.c',
+  csrc / 'codec/crc32c.c',
   csrc / 'backends.c',
-  csrc / 'compression/snappy.c',
   include_directories: inc,
   dependencies: deps,
 )
@@ -95,7 +96,7 @@ if fuzz
     'link_with': under_test,
     'dependencies': compile_deps,
   }
-  foreach name : ['gzip', 'bzip2', 'xz', 'zstd', 'lz4']
+  foreach name : ['gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'snappy']
     executable('fuzz_' + name, 'fuzz/decode.c',
       c_args: '-DFORMAT=FORMAT_' + name.to_upper(), kwargs: fuzz_kwargs)
   endforeach
@@ -122,6 +123,8 @@ suites = {
   'test_registry.c': 'core',
   'test_validate.c': 'core',
   'test_codec.c': 'codec',
+  'test_crc32c.c': 'codec',
+  'test_snappy.c': 'codec',
   'test_backends.c': 'compression',
   'test_compress.c': 'compression',
   'test_standalone.c': 'standalone',
