@@ -57,3 +57,24 @@ void test_strategy_from_string(int index) {
 void test_strategy_from_string_null_is_balanced(void) {
   TEST_ASSERT_EQUAL(STRAT_BALANCED, strategy_from_string(NULL));
 }
+
+TEST_RANGE([ 0, 5, 1 ])
+void test_algo_from_string(int index) {
+  TEST_ASSERT_EQUAL_MESSAGE(EXPECTED_BACKENDS[index].id,
+                            algo_from_string(EXPECTED_BACKENDS[index].name),
+                            EXPECTED_BACKENDS[index].name);
+}
+
+void test_algo_from_string_unknown(void) {
+  TEST_ASSERT_EQUAL(ALGO_NONE, algo_from_string(NULL));
+  TEST_ASSERT_EQUAL(ALGO_NONE, algo_from_string(""));
+  TEST_ASSERT_EQUAL(ALGO_NONE, algo_from_string("ZLIB"));
+  TEST_ASSERT_EQUAL(ALGO_NONE, algo_from_string("xz"));
+}
+
+void test_choose_backend(void) {
+  TEST_ASSERT_EQUAL_UINT8(ALGO_ZSTD, choose_backend(STRAT_BALANCED)->id);
+  TEST_ASSERT_EQUAL_UINT8(ALGO_LZ4, choose_backend(STRAT_FAST)->id);
+  TEST_ASSERT_EQUAL_UINT8(ALGO_LZMA, choose_backend(STRAT_MAX_RATIO)->id);
+  TEST_ASSERT_EQUAL_UINT8(ALGO_ZSTD, choose_backend(STRAT_UNKNOWN)->id);
+}

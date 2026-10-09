@@ -185,7 +185,10 @@ typedef enum {
   STRAT_BALANCED = 0,
   STRAT_FAST = 1,
   STRAT_MAX_RATIO = 2,
+  STRAT_COUNT // Not a strategy
 } Strategy;
+
+extern const char *const STRATEGY_NAMES[STRAT_COUNT];
 
 // ---- Backend Registry ----
 

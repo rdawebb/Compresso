@@ -97,6 +97,9 @@ class _CapabilityDict(TypedDict):
     # Both None for a backend without levels, which accepts only -1
     min_level: int | None
     max_level: int | None
+    # Each strategy's name mapped to this backend's place in its priorities;
+    # the lowest built one is that strategy's default
+    rank: dict[str, int]
 
 def get_capabilities() -> list[_CapabilityDict | None]:
     """Get list of available compression backends.

@@ -5,31 +5,27 @@
 
 // ---- Backend Strategy ----
 
+const char *const STRATEGY_NAMES[STRAT_COUNT] = {
+    [STRAT_BALANCED] = "balanced",
+    [STRAT_FAST] = "fast",
+    [STRAT_MAX_RATIO] = "max_ratio",
+};
+
 Strategy strategy_from_string(const char *str) {
-  if (!str || str[0] == '\0' || strcmp(str, "balanced") == 0)
+  if (!str || str[0] == '\0')
     return STRAT_BALANCED;
-  if (strcmp(str, "fast") == 0)
-    return STRAT_FAST;
-  if (strcmp(str, "max_ratio") == 0)
-    return STRAT_MAX_RATIO;
+  for (int s = 0; s < STRAT_COUNT; s++)
+    if (strcmp(str, STRATEGY_NAMES[s]) == 0)
+      return (Strategy)s;
   return STRAT_UNKNOWN;
 }
 
 AlgoID algo_from_string(const char *str) {
-  if (!str || str[0] == '\0')
+  if (!str)
     return ALGO_NONE;
-  if (strcmp(str, "zlib") == 0)
-    return ALGO_ZLIB;
-  if (strcmp(str, "bzip2") == 0)
-    return ALGO_BZIP2;
-  if (strcmp(str, "lzma") == 0)
-    return ALGO_LZMA;
-  if (strcmp(str, "zstd") == 0)
-    return ALGO_ZSTD;
-  if (strcmp(str, "lz4") == 0)
-    return ALGO_LZ4;
-  if (strcmp(str, "snappy") == 0)
-    return ALGO_SNAPPY;
+  for (const CBackend *b = BACKENDS; b->name; b++)
+    if (strcmp(str, b->name) == 0)
+      return (AlgoID)b->id;
   return ALGO_NONE;
 }
 

@@ -82,6 +82,14 @@ class TestCapabilities:
             "snappy": (None, None),
         }
 
+    @pytest.mark.parametrize("strategy", ["balanced", "fast", "max_ratio"])
+    def test_lowest_rank_is_the_strategy_default(self, strategy: str) -> None:
+        """Test that the rank explains which backend a strategy picks."""
+        caps = [cap for cap in get_capabilities() if cap is not None]
+        best = min(caps, key=lambda cap: cap["rank"][strategy])
+        assert best["name"] == _core.get_default_backend_for_strategy(strategy)
+        assert sorted(cap["rank"][strategy] for cap in caps) == list(range(6))
+
 
 class TestArchiveCapabilities:
     """Test the archive_capabilities function."""
