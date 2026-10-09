@@ -78,7 +78,6 @@ under_test = static_library('under_test',
   csrc / 'codec/snappy.c',
   csrc / 'codec/crc32c.c',
   csrc / 'backends.c',
-  csrc / 'compression/snappy.c',
   include_directories: inc,
   dependencies: deps,
 )

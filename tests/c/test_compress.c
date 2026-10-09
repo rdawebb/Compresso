@@ -5,6 +5,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include "codec/codec.h"
+#include "codec/crc32c.h"
 #include "common.h"
 #include "files.h"
 #include "fsutil.h"
@@ -29,6 +30,7 @@ void setUp(void) {
     Py_Initialize();
   }
   ensure_comp_exceptions();
+  crc32c_init();
 }
 
 void tearDown(void) { PyErr_Clear(); }
@@ -361,10 +363,11 @@ void test_decompress_rejects_an_overstated_size(int index) {
 
 // ---- Payload checksum ----
 
-static const AlgoID CHECKSUMMED[] = {ALGO_ZSTD, ALGO_LZ4};
+// Snappy last: its framing has always checksummed, so it has no payload
+// written without one
+static const AlgoID CHECKSUMMED[] = {ALGO_ZSTD, ALGO_LZ4, ALGO_SNAPPY};
 
-// Every TEST_RANGE over CHECKSUMMED must span exactly these rows
-_Static_assert(sizeof(CHECKSUMMED) / sizeof(CHECKSUMMED[0]) == 2,
+_Static_assert(sizeof(CHECKSUMMED) / sizeof(CHECKSUMMED[0]) == 3,
                "update TEST_RANGE");
 
 TEST_RANGE([ 0, 5, 1 ])
@@ -375,14 +378,15 @@ void test_header_flags_a_checksummed_payload(int index) {
   TEST_ASSERT_EQUAL_INT(
       0, compress(TEST_INPUT, comp, algo, -1, OW_OVERWRITE, NULL, 0));
 
-  int checksummed = algo == ALGO_ZSTD || algo == ALGO_LZ4;
+  int checksummed =
+      algo == ALGO_ZSTD || algo == ALGO_LZ4 || algo == ALGO_SNAPPY;
   TEST_ASSERT_EQUAL_UINT8(checksummed ? C_FLAG_CHECKSUMMED : 0,
                           read_header(comp).flags);
 
   remove(comp);
 }
 
-// Incompressible, so both codecs store it raw and a changed byte alters the
+// Incompressible, so each codec stores it raw and a changed byte alters the
 // content without breaking the frame's structure
 static void write_noise(const char *path, size_t size) {
   FILE *f = fopen(path, "wb");
@@ -397,7 +401,7 @@ static void write_noise(const char *path, size_t size) {
   fclose(f);
 }
 
-TEST_RANGE([ 0, 1, 1 ])
+TEST_RANGE([ 0, 2, 1 ])
 void test_checksum_catches_a_changed_byte(int index) {
   AlgoID algo = CHECKSUMMED[index];
   const char *comp = "tmp_cmp_noise.comp";

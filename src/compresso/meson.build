@@ -20,9 +20,7 @@ py.extension_module('_core',
     'csrc/codec/zlib.c',
     'csrc/codec/snappy.c',
     'csrc/codec/crc32c.c',
-    # Compression algorithms
     'csrc/backends.c',
-    'csrc/compression/snappy.c',
     # Archive backends
     'csrc/archives/tar.c',
     'csrc/archives/zip.c',

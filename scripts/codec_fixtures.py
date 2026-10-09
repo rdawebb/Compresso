@@ -39,7 +39,7 @@ WORK_DIR = REPO_ROOT / "build" / "codec-fixtures"
 # but -1 (refusals are recorded)
 LEVELS = (-1, 1, 6, 9)
 
-# `.comp` framing, via the CBackend stream ops
+# `.comp` framing, via the backend table's engines
 COMP_ALGOS = ("zlib", "bzip2", "lzma", "zstd", "lz4", "snappy")
 
 # Standalone containers via the format table's engines
