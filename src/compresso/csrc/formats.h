@@ -5,6 +5,8 @@
 #include "levels.h"
 #include <stddef.h>
 
+struct CArchive; // archives.h
+
 typedef enum {
   ARCHIVE_NONE = 0,
   ARCHIVE_TAR = 1,
@@ -47,7 +49,9 @@ typedef struct {
   const char *exts[2];    // Lowercase, without the dot; the first is primary
   const char *tar_short;  // Extension and name for tar wrapped in this, or NULL
   int (*magic)(const unsigned char *m, size_t n);
-  ArchiveID archive; // KIND_ARCHIVE only
+  // KIND_ARCHIVE only; `backend` is NULL for one recognised but unsupported
+  ArchiveID archive;
+  const struct CArchive *backend;
 
   // KIND_CONTAINER only: the engine, and the params it runs with each way;
   // compression takes its level from the caller
@@ -67,5 +71,11 @@ const FormatDesc *format_by_name(const char *name);
 // if given, says if it's a shorthand or follows ".tar", match or not
 const FormatDesc *format_by_ext(const char *path, int *in_tar);
 const FormatDesc *format_by_magic(const unsigned char *m, size_t n);
+
+// archives/{tar,zip}.c
+extern const struct CArchive TAR_ARCHIVE, ZIP_ARCHIVE;
+
+// The backend of `id`'s KIND_ARCHIVE row, or NULL
+const struct CArchive *find_archive_by_id(ArchiveID id);
 
 #endif // FORMATS_H

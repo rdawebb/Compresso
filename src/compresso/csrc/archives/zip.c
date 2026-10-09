@@ -541,7 +541,7 @@ static int zip_supports_streaming(void) {
 
 // ---- Backend Definition ----
 
-static const CArchive zip_archive = {
+const CArchive ZIP_ARCHIVE = {
     .name = "zip",
     .id = ARCHIVE_ZIP,
     .levels = LEVELS_ZLIB,
@@ -557,5 +557,3 @@ static const CArchive zip_archive = {
     .skip_entry_data = zip_skip_entry,
     .close_reader = zip_close_reader,
 };
-
-const CArchive *get_zip_archive(void) { return &zip_archive; }

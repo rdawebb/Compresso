@@ -102,3 +102,10 @@ void test_format_by_ext(int index) {
   TEST_ASSERT_EQUAL_MESSAGE(EXTENSIONS[index].in_tar, in_tar,
                             EXTENSIONS[index].path);
 }
+
+void test_find_archive_by_id(void) {
+  TEST_ASSERT_EQUAL_PTR(&TAR_ARCHIVE, find_archive_by_id(ARCHIVE_TAR));
+  TEST_ASSERT_EQUAL_PTR(&ZIP_ARCHIVE, find_archive_by_id(ARCHIVE_ZIP));
+  TEST_ASSERT_NULL(find_archive_by_id(ARCHIVE_7Z));
+  TEST_ASSERT_NULL(find_archive_by_id(ARCHIVE_NONE));
+}

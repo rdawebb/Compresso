@@ -55,7 +55,7 @@ inc = include_directories('support', 'unity', csrc)
 unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 
 # _core.c and archives.c are left out: they reach libarchive/libzip;
-# support/test_stubs.c supplies the exception globals and archive lookup instead
+# support/test_stubs.c supplies the exception globals and archive backends instead
 under_test = static_library('under_test',
   'support/test_stubs.c',
   'support/backend_io.c',

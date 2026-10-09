@@ -79,7 +79,8 @@ const FormatDesc FORMATS[] = {
      .name = "zip",
      .exts = {"zip"},
      .magic = magic_is_zip,
-     .archive = ARCHIVE_ZIP},
+     .archive = ARCHIVE_ZIP,
+     .backend = &ZIP_ARCHIVE},
     {.id = FORMAT_7Z,
      .kind = KIND_ARCHIVE,
      .name = "7z",
@@ -91,7 +92,8 @@ const FormatDesc FORMATS[] = {
      .name = "tar",
      .exts = {"tar"},
      .magic = magic_is_tar,
-     .archive = ARCHIVE_TAR},
+     .archive = ARCHIVE_TAR,
+     .backend = &TAR_ARCHIVE},
     {.name = NULL},
 };
 
@@ -180,5 +182,12 @@ const FormatDesc *format_by_magic(const unsigned char *m, size_t n) {
   for (const FormatDesc *d = FORMATS; d->name; d++)
     if (d->magic(m, n))
       return d;
+  return NULL;
+}
+
+const struct CArchive *find_archive_by_id(ArchiveID id) {
+  for (const FormatDesc *d = FORMATS; d->name; d++)
+    if (d->kind == KIND_ARCHIVE && d->archive == id)
+      return d->backend;
   return NULL;
 }

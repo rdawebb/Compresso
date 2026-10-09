@@ -106,15 +106,7 @@ typedef struct {
 
 ExtractionPolicy extraction_policy_default(void); // returns safe defaults
 
-// ---- Archive Registry ----
-
-const CArchive *find_archive_by_id(uint8_t id);
 PyObject *get_archive_capabilities(void);
-
-// ---- Archive Backend Getters ----
-
-const CArchive *get_tar_archive(void);
-const CArchive *get_zip_archive(void);
 
 // ---- Format Detection ----
 
