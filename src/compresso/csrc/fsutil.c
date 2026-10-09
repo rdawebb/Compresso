@@ -4,6 +4,7 @@
 
 #include "fsutil.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,7 +122,10 @@ int fs_conflict_path(const char *path, int n, char *out, size_t out_size) {
   const char *dot = strrchr(scan, '.');
 
   // Handle tarball double-extension
-  if (dot && (size_t)(dot - scan) >= 4 && strncmp(dot - 4, ".tar", 4) == 0)
+  if (dot && (size_t)(dot - scan) >= 4 && dot[-4] == '.' &&
+      tolower((unsigned char)dot[-3]) == 't' &&
+      tolower((unsigned char)dot[-2]) == 'a' &&
+      tolower((unsigned char)dot[-1]) == 'r')
     dot -= 4;
 
   size_t stem_len = dot ? (size_t)(dot - path) : strlen(path);
