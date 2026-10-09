@@ -43,7 +43,7 @@ LEVELS = (-1, 1, 6, 9)
 COMP_ALGOS = ("zlib", "bzip2", "lzma", "zstd", "lz4", "snappy")
 
 # Standalone containers via the format table's engines
-STANDALONE_FORMATS = ("gzip", "bzip2", "xz", "zstd", "lz4")
+STANDALONE_FORMATS = ("gzip", "bzip2", "xz", "zstd", "lz4", "snappy")
 
 # Deterministic, so reproducible without committing 2 MB of noise
 RANDOM_SEED = 20260922

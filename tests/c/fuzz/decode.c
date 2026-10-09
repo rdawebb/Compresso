@@ -1,6 +1,7 @@
 // libFuzzer target for one standalone decoder, chosen by FORMAT
 
 #define PY_SSIZE_T_CLEAN
+#include "codec/crc32c.h"
 #include "standalone.h"
 #include "test_stubs.h"
 #include <Python.h>
@@ -18,6 +19,7 @@ int LLVMFuzzerInitialize(int *argc, char ***argv) {
   (void)argv;
   Py_Initialize();
   ensure_comp_exceptions();
+  crc32c_init();
   // Each TrailingDataWarning names a different offset, so none would repeat
   PyRun_SimpleString("import warnings; warnings.simplefilter('ignore')");
   sink = fopen("/dev/null", "wb");

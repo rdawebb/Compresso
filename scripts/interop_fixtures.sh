@@ -3,8 +3,8 @@
 # than by Compresso, so the tests catch formats only other producers emit
 #
 # Needs gzip, bgzip (htslib), bzip2, pbzip2, xz, lz4, zstd, GNU tar, Info-ZIP
-# zip and python3; GNU tar is looked up as `gtar` then `tar`, or set GNU_TAR to
-# override
+# zip and python3 with python-snappy; GNU tar is looked up as `gtar` then `tar`,
+# or set GNU_TAR to override
 #
 # Usage: scripts/interop_fixtures.sh
 
@@ -29,6 +29,10 @@ fi
 for tool in gzip bgzip bzip2 pbzip2 xz lz4 zstd "$GNU_TAR" zip python3; do
   command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }
 done
+python3 -c "import snappy" 2>/dev/null || {
+  echo "missing: python-snappy for python3" >&2
+  exit 1
+}
 "$GNU_TAR" --version | grep -q "GNU tar" || {
   echo "$GNU_TAR is not GNU tar; set GNU_TAR" >&2
   exit 1
@@ -87,6 +91,20 @@ PY
 { lz4 -q -c part1.txt; skippable; lz4 -q -c part2.txt; } >lz4_skippable.lz4
 { zstd -q -c part1.txt; zstd -q -c part2.txt; } >zstd_concat.zst
 { zstd -q -c part1.txt; skippable; zstd -q -c part2.txt; } >zstd_skippable.zst
+
+# snappy's framing format, from python-snappy: an input that doesn't compress
+# (a gzip file) is stored as an uncompressed chunk, and a padding chunk, which
+# no encoder writes, is spliced in after the stream identifier
+python3 -m snappy -c part1.txt >sz_single.sz
+python3 -m snappy -c gzip_single.gz >sz_uncompressed.sz
+{ python3 -m snappy -c part1.txt; python3 -m snappy -c part2.txt; } >sz_concat.sz
+python3 - sz_single.sz sz_uncompressed.sz sz_padding.sz <<'PY'
+import sys
+single, stored, padded = sys.argv[1:]
+assert open(stored, "rb").read()[10] == 0x01, "expected an uncompressed chunk"
+data = open(single, "rb").read()
+open(padded, "wb").write(data[:10] + b"\xfe\x04\x00\x00PADS" + data[10:])
+PY
 
 TAR_FLAGS=(--format=gnu --sort=name --owner=0 --group=0 --numeric-owner
   --mtime=2024-01-01T00:00:00Z)

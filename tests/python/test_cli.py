@@ -925,6 +925,7 @@ class TestSmartCompress:
             ("xz", ".xz"),
             ("zst", ".zst"),
             ("lz4", ".lz4"),
+            ("sz", ".sz"),
         ],
     )
     def test_one_file_into_a_standalone_container(
@@ -1029,7 +1030,7 @@ class TestSmartCompress:
 class TestSmartExtract:
     """Test `extract` picks the job from each file's own bytes."""
 
-    @pytest.mark.parametrize("fmt", ["gz", "bz2", "xz", "zst", "lz4"])
+    @pytest.mark.parametrize("fmt", ["gz", "bz2", "xz", "zst", "lz4", "sz"])
     def test_standalone_round_trip(
         self, payload: Path, temp_dir: Path, fmt: str
     ) -> None:

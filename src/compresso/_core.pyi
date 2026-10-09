@@ -226,7 +226,7 @@ def compress_standalone(
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
 ) -> str:
-    """Compress a file into a standalone container (.gz, .bz2, .xz, .zst, .lz4).
+    """Compress a file into a standalone container (.gz, .bz2, .xz, .zst, .lz4, .sz).
 
     `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
     applied to the destination file.

@@ -96,7 +96,7 @@ if fuzz
     'link_with': under_test,
     'dependencies': compile_deps,
   }
-  foreach name : ['gzip', 'bzip2', 'xz', 'zstd', 'lz4']
+  foreach name : ['gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'snappy']
     executable('fuzz_' + name, 'fuzz/decode.c',
       c_args: '-DFORMAT=FORMAT_' + name.to_upper(), kwargs: fuzz_kwargs)
   endforeach

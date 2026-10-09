@@ -251,8 +251,8 @@ def extract(
 
     Each input is identified by its own magic bytes rather than its name: an
     archive is unpacked into a directory, and a single-file container, a
-    Compresso `.comp`, or a standalone `.gz`/`.bz2`/`.xz`/`.zst`/`.lz4`, is
-    decompressed to one file.
+    Compresso `.comp`, or a standalone `.gz`/`.bz2`/`.xz`/`.zst`/`.lz4`/`.sz`,
+    is decompressed to one file.
 
     The result is written beside its input unless `-o` is provided.
 

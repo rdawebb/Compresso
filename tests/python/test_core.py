@@ -1154,6 +1154,7 @@ class TestLevelValidation:
         [
             ("gz", 10, r"gzip compression level 10 out of range \(0-9"),
             ("zst", 23, r"zstd compression level 23 out of range \(1-22"),
+            ("sz", 1, "snappy has no compression levels"),
         ],
     )
     def test_compress_standalone_refuses_out_of_range(

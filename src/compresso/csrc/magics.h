@@ -50,6 +50,13 @@ static inline int magic_is_lz4(const unsigned char *m, size_t n) {
   return n - off >= sizeof(LZ4) && memcmp(m + off, LZ4, sizeof(LZ4)) == 0;
 }
 
+// The framing format's stream identifier chunk, which must come first
+static inline int magic_is_snappy(const unsigned char *m, size_t n) {
+  static const unsigned char SNAPPY[] = {0xFF, 0x06, 0x00, 0x00, 's',
+                                         'N',  'a',  'P',  'p',  'Y'};
+  return n >= sizeof(SNAPPY) && memcmp(m, SNAPPY, sizeof(SNAPPY)) == 0;
+}
+
 static inline int magic_is_zip(const unsigned char *m, size_t n) {
   return n >= 4 && m[0] == 'P' && m[1] == 'K' && m[2] == 0x03 && m[3] == 0x04;
 }
