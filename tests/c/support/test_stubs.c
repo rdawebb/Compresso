@@ -34,6 +34,6 @@ void ensure_comp_exceptions(void) {
 // archives/{tar,zip}.c need libarchive/libzip, so the format table points at
 // these instead, with just the fields validate.c reads, copied from there
 const CArchive TAR_ARCHIVE = {
-    .name = "tar", .id = ARCHIVE_TAR, .levels = LEVELS_NONE};
+    .name = "tar", .levels = LEVELS_NONE};
 const CArchive ZIP_ARCHIVE = {
-    .name = "zip", .id = ARCHIVE_ZIP, .levels = LEVELS_ZLIB};
+    .name = "zip", .levels = LEVELS_ZLIB};

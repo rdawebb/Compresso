@@ -1,6 +1,4 @@
-#define PY_SSIZE_T_CLEAN
 #include "common.h"
-#include <Python.h>
 
 // `.comp` payloads: get_capabilities lists the rows in this order
 const CBackend BACKENDS[] = {

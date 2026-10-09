@@ -101,11 +101,8 @@ class _CapabilityDict(TypedDict):
     # the lowest built one is that strategy's default
     rank: dict[str, int]
 
-def get_capabilities() -> list[_CapabilityDict | None]:
-    """Get list of available compression backends.
-
-    A slot is None when its backend is not registered.
-    """
+def get_capabilities() -> list[_CapabilityDict]:
+    """Get list of available compression backends."""
 
 class _ArchiveCapabilityDict(TypedDict):
     name: str

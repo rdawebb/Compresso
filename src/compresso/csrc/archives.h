@@ -45,11 +45,9 @@ typedef struct {
 
 typedef struct CArchive {
   const char *name;
-  uint8_t id;
   LevelRange levels; // Applies when no external codec stage is present
 
   // Capability checks
-  int (*is_available)(void);
   int (*supports_compression)(void);
   int (*supports_streaming)(void);
 
