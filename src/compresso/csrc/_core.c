@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#include "codec/crc32c.h"
 #include "common.h"
 #include "fsutil.h"
 #include "standalone.h"
@@ -1006,6 +1007,8 @@ static struct PyModuleDef coremodule = {
 // ---- Module Initialisation ----
 
 PyMODINIT_FUNC PyInit__core(void) {
+  crc32c_init();
+
   PyObject *module = PyModule_Create(&coremodule);
   if (module == NULL) {
     return NULL;
