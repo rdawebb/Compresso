@@ -103,6 +103,11 @@ cp part1.txt "$WORK/readonly/file.txt"
 chmod 0555 "$WORK/readonly"
 "$GNU_TAR" "${TAR_FLAGS[@]}" -cf tar_readonly_dir.tar -C "$WORK" readonly
 
+# A pre-POSIX header has no "ustar" signature, only its checksum
+mkdir "$WORK/v7"
+cp part1.txt "$WORK/v7/file.txt"
+"$GNU_TAR" "${TAR_FLAGS[@]}" --format=v7 -cf tar_v7.tar -C "$WORK" v7
+
 # Info-ZIP with -y stores a symlink as its target text, marked by S_IFLNK in
 # the external attributes
 mkdir "$WORK/symlink"

@@ -170,8 +170,10 @@ const FormatDesc *format_by_ext(const char *path, int *in_tar) {
     const char *prev = ext - 1;
     while (prev > base && *prev != '.')
       prev--;
-    *in_tar = shorthand ||
-              (prev > base && strncmp(prev, ".tar", 4) == 0 && prev[4] == '.');
+    char prev_lower[5];
+    lowercase_into(prev_lower, sizeof(prev_lower), prev);
+    *in_tar = shorthand || (prev > base && strcmp(prev_lower, ".tar") == 0 &&
+                            prev[4] == '.');
   }
   return match;
 }

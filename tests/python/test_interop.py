@@ -3,6 +3,7 @@
 The fixtures come from scripts/interop_fixtures.sh.
 """
 
+import gzip
 import logging
 import os
 import stat
@@ -193,6 +194,43 @@ class TestStandaloneDecoding:
             _core.decompress_file(str(compressed), str(restored), "")
 
         assert not restored.exists()
+
+
+class TestDetection:
+    """Test detecting formats whose first bytes aren't their usual magic."""
+
+    @pytest.mark.parametrize(
+        ("fixture", "expected"),
+        [("zstd_single.zst", "zstd"), ("lz4_single.lz4", "lz4")],
+    )
+    def test_frame_after_a_leading_skippable_frame_decides(
+        self, temp_dir: Path, fixture: str, expected: str
+    ) -> None:
+        """Test that zstd and lz4, which share skippable frames, are told apart."""
+        source = temp_dir / "data"  # No extension, so only the bytes can tell
+        source.write_bytes(SKIPPABLE + (INTEROP / fixture).read_bytes())
+        restored = temp_dir / "restored"
+
+        assert _core.detect_format(str(source)) == expected
+        _core.decompress_standalone(str(source), str(restored))
+        assert restored.read_bytes() == PART1
+
+    def test_v7_tar_is_detected_and_extracted(self, temp_dir: Path) -> None:
+        """Test that GNU tar's --format=v7, which has no ustar magic, is a tar."""
+        source = temp_dir / "data"
+        source.write_bytes((INTEROP / "tar_v7.tar").read_bytes())
+
+        assert _core.detect_format(str(source)) == "tar"
+        _core.extract_archive(str(source), str(temp_dir), [])
+        assert (temp_dir / "v7" / "file.txt").read_bytes() == PART1
+
+    def test_uppercase_tar_gz_is_a_compressed_tar(self, temp_dir: Path) -> None:
+        """Test that .TAR.GZ is read as tar in gzip, as .tar.gz is."""
+        source = temp_dir / "A.TAR.GZ"
+        source.write_bytes(gzip.compress((INTEROP / "tar_v7.tar").read_bytes()))
+
+        _core.extract_archive(str(source), str(temp_dir), [])
+        assert (temp_dir / "v7" / "file.txt").read_bytes() == PART1
 
 
 class TestTarExtraction:
