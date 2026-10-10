@@ -45,6 +45,8 @@ static int stub_end_calls;
 static int stub_reset_calls;
 static int stub_last_finish;
 static const char *stub_last_label;
+static int stub_calls;
+static size_t stub_max_in; // Most input any one process() call was given
 
 static int stub_begin(void *state, const CodecParams *params, int decompress,
                       CoreContext *ctx) {
@@ -59,7 +61,11 @@ static int stub_begin(void *state, const CodecParams *params, int decompress,
 static int stub_process(void *state, CodecBuf *buf, int finish) {
   StubState *s = (StubState *)state;
   s->process_calls++;
+  stub_calls++;
   stub_last_finish = finish;
+  if (buf->avail_in > stub_max_in) {
+    stub_max_in = buf->avail_in;
+  }
 
   if (s->mode == STUB_FAIL_PROCESS && s->process_calls > 1) {
     return CODEC_ERR;
@@ -190,6 +196,8 @@ void setUp(void) {
   stub_reset_calls = 0;
   stub_last_finish = -1;
   stub_last_label = NULL;
+  stub_calls = 0;
+  stub_max_in = 0;
   cancel_flag = 0;
   memset(&progress_log, 0, sizeof(progress_log));
   memset(&ctx, 0, sizeof(ctx));
@@ -494,6 +502,133 @@ void test_driver_still_fails_a_truncated_member_when_ignoring(void) {
 
   TEST_ASSERT_EQUAL_INT(-1, run_members_ignoring("abc|de", 1));
   TEST_ASSERT_TRUE(error_says("Truncated or incomplete stub stream"));
+}
+
+// ---- Streams driven directly ----
+
+static CodecStream *open_writer(FILE **sink) {
+  *sink = fopen(TMP_OUT, "wb");
+  TEST_ASSERT_NOT_NULL(*sink);
+  CodecParams params = {.level = STUB_COPY};
+  CodecStream *s = codec_writer_open(&stub_ops, &params, *sink, &ctx);
+  TEST_ASSERT_NOT_NULL(s);
+  return s;
+}
+
+// The sink isn't the stream's to close
+static int close_writer(CodecStream *s, int discard, FILE *sink) {
+  int rc = codec_writer_close(s, discard);
+  fclose(sink);
+  return rc;
+}
+
+void test_writer_hands_the_engine_whole_chunks(void) {
+  FILE *sink;
+  CodecStream *s = open_writer(&sink);
+
+  // Pieces that straddle every chunk boundary
+  FILE *src = fopen(TEST_INPUT, "rb");
+  char piece[1000];
+  size_t n;
+  while ((n = fread(piece, 1, sizeof(piece), src)) > 0) {
+    TEST_ASSERT_EQUAL_INT(0, codec_write(s, piece, n));
+  }
+  fclose(src);
+
+  TEST_ASSERT_EQUAL_INT(0, close_writer(s, 0, sink));
+  TEST_ASSERT_TRUE(files_equal(TEST_INPUT, TMP_OUT));
+  // lz4's output bound assumes at most a chunk per call
+  TEST_ASSERT_EQUAL_size_t(CODEC_CHUNK, stub_max_in);
+}
+
+void test_writer_sends_the_last_data_with_the_finish_flag(void) {
+  FILE *sink;
+  CodecStream *s = open_writer(&sink);
+
+  TEST_ASSERT_EQUAL_INT(0, codec_write(s, "ab", 2));
+  TEST_ASSERT_EQUAL_INT(0, codec_write(s, "cd", 2));
+  TEST_ASSERT_EQUAL_INT(0, stub_calls);
+
+  // zstd only records the content size when all the input comes in one call
+  TEST_ASSERT_EQUAL_INT(0, close_writer(s, 0, sink));
+  TEST_ASSERT_EQUAL_INT(1, stub_calls);
+  TEST_ASSERT_EQUAL_INT(1, stub_last_finish);
+  TEST_ASSERT_EQUAL_size_t(4, stub_max_in);
+}
+
+void test_writer_discards_without_finishing(void) {
+  FILE *sink;
+  CodecStream *s = open_writer(&sink);
+
+  TEST_ASSERT_EQUAL_INT(0, codec_write(s, "abcd", 4));
+  TEST_ASSERT_EQUAL_INT(0, close_writer(s, 1, sink));
+  TEST_ASSERT_EQUAL_INT(0, stub_calls);
+  TEST_ASSERT_EQUAL_INT(1, stub_end_calls);
+  TEST_ASSERT_FALSE(PyErr_Occurred());
+}
+
+void test_writer_keeps_returning_a_cancellation(void) {
+  FILE *sink;
+  CodecStream *s = open_writer(&sink);
+  cancel_flag = 1;
+
+  TEST_ASSERT_EQUAL_INT(COMP_CANCELLED, codec_write(s, "ab", 2));
+  TEST_ASSERT_EQUAL_INT(COMP_CANCELLED, codec_write(s, "cd", 2));
+  TEST_ASSERT_EQUAL_INT(COMP_CANCELLED, close_writer(s, 0, sink));
+  TEST_ASSERT_FALSE(PyErr_Occurred());
+  TEST_ASSERT_EQUAL_INT(1, stub_end_calls);
+}
+
+static CodecStream *open_reader(const char *input, FILE **source) {
+  write_file(TMP_IN, input);
+  *source = fopen(TMP_IN, "rb");
+  TEST_ASSERT_NOT_NULL(*source);
+  CodecParams params = {.level = STUB_MEMBERS, .concatenated = 1};
+  CodecStream *s = codec_reader_open(&stub_ops, &params, *source, &ctx);
+  TEST_ASSERT_NOT_NULL(s);
+  return s;
+}
+
+void test_reader_serves_small_reads_across_members(void) {
+  FILE *source;
+  CodecStream *s = open_reader("abc|def|ghi|", &source);
+
+  char out[16] = {0};
+  size_t len = 0, got;
+  do {
+    TEST_ASSERT_EQUAL_INT(0, codec_read(s, out + len, 2, &got));
+    TEST_ASSERT_LESS_OR_EQUAL_size_t(2, got);
+    len += got;
+  } while (got > 0);
+
+  TEST_ASSERT_EQUAL_STRING("abcdefghi", out);
+  // The end stays the end
+  TEST_ASSERT_EQUAL_INT(0, codec_read(s, out, 2, &got));
+  TEST_ASSERT_EQUAL_size_t(0, got);
+
+  TEST_ASSERT_EQUAL_INT(0, codec_reader_close(s));
+  fclose(source);
+}
+
+void test_reader_raises_its_failure_at_close(void) {
+  FILE *source;
+  CodecStream *s = open_reader("abc|!junk", &source);
+
+  char out[16];
+  size_t got;
+  int rc;
+  while ((rc = codec_read(s, out, sizeof(out), &got)) == 0 && got > 0) {
+  }
+
+  // Read may run without the GIL, so the exception waits for close
+  TEST_ASSERT_EQUAL_INT(-1, rc);
+  TEST_ASSERT_FALSE(PyErr_Occurred());
+  TEST_ASSERT_EQUAL_INT(-1, codec_read(s, out, sizeof(out), &got));
+
+  TEST_ASSERT_EQUAL_INT(-1, codec_reader_close(s));
+  TEST_ASSERT_TRUE(error_says("Invalid data after the end of a stub stream"));
+  TEST_ASSERT_EQUAL_INT(1, stub_end_calls);
+  fclose(source);
 }
 
 // ---- Without a context ----
