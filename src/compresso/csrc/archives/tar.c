@@ -46,9 +46,7 @@ typedef struct {
   const char *output_path;
 } TarWriter;
 
-static void *tar_create_writer(const char *output_path, int compression_level) {
-  (void)compression_level; // TAR doesn't have compression
-
+static TarWriter *tar_writer_new(const char *output_path) {
   TarWriter *writer = safe_malloc(sizeof(TarWriter));
   if (!writer) {
     return NULL;
@@ -61,20 +59,53 @@ static void *tar_create_writer(const char *output_path, int compression_level) {
     return NULL;
   }
 
-  // Use PAX format
   archive_write_set_format_pax_restricted(writer->archive);
+  writer->output_path = output_path;
+  return writer;
+}
 
-  // Open file for writing
-  int r = archive_write_open_filename(writer->archive, output_path);
+static void *tar_writer_opened(TarWriter *writer, int r) {
   if (r != ARCHIVE_OK) {
-    set_tar_error(writer->archive, "Failed to open archive", output_path, 0);
+    set_tar_error(writer->archive, "Failed to open archive",
+                  writer->output_path, 0);
     archive_write_free(writer->archive);
     free(writer);
     return NULL;
   }
-
-  writer->output_path = output_path;
   return writer;
+}
+
+static void *tar_create_writer(const char *output_path, int compression_level) {
+  (void)compression_level; // TAR doesn't have compression
+
+  TarWriter *writer = tar_writer_new(output_path);
+  if (!writer) {
+    return NULL;
+  }
+  return tar_writer_opened(
+      writer, archive_write_open_filename(writer->archive, output_path));
+}
+
+static la_ssize_t tar_codec_write(struct archive *a, void *stream,
+                                  const void *buf, size_t n) {
+  (void)a;
+  // The stream keeps its own failure, for the caller to raise at close
+  return codec_write((CodecStream *)stream, buf, n) == 0 ? (la_ssize_t)n : -1;
+}
+
+static void *tar_create_codec_writer(CodecStream *stream,
+                                     const char *output_path) {
+  TarWriter *writer = tar_writer_new(output_path);
+  if (!writer) {
+    return NULL;
+  }
+
+  // As archive_write_open_filename does for a regular file: no padding after
+  // the end-of-archive records, so the tar inside matches a plain one
+  archive_write_set_bytes_in_last_block(writer->archive, 1);
+  return tar_writer_opened(writer,
+                           archive_write_open2(writer->archive, stream, NULL,
+                                               tar_codec_write, NULL, NULL));
 }
 
 static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
@@ -430,6 +461,7 @@ const CArchive TAR_ARCHIVE = {
     .supports_compression = tar_supports_compression,
     .supports_streaming = tar_supports_streaming,
     .create_writer = tar_create_writer,
+    .create_codec_writer = tar_create_codec_writer,
     .add_entry = tar_add_entry,
     .close_writer = tar_close_writer,
     .create_reader = tar_create_reader,

@@ -672,29 +672,39 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   if (checked != 0)
     return checked < 0 ? -1 : 0;
 
-  // Written to a temp beside the output; with a codec it is an intermediate
-  // that the codec's own output replaces, so owner-only
-  int has_codec = pipeline->codec != FORMAT_UNKNOWN;
+  // Written to a temp beside the output, then committed over it
   char tmp_path[FS_PATH_MAX];
-  OutputTarget tmp_out = {.path = output_path, .owner_only = has_codec};
-  FILE *tmp = output_open(&tmp_out, tmp_path);
+  FILE *tmp = output_open(&out, tmp_path);
   if (!tmp)
     return -1;
-  fclose(tmp);
 
-  void *writer = archive->create_writer(tmp_path, level);
+  // A codec compresses the tar as libarchive writes it
+  const FormatDesc *fmt = NULL;
+  CodecStream *stream = NULL;
+  void *writer = NULL;
+  if (pipeline->codec != FORMAT_UNKNOWN) {
+    fmt = find_standalone_format(pipeline->codec);
+    CodecParams params = fmt->enc;
+    params.level = level;
+    // No context: progress counts the source bytes, which add_entry reports
+    stream = codec_writer_open(fmt->engine(), &params, tmp, NULL);
+    if (stream)
+      writer = archive->create_codec_writer(stream, output_path);
+  } else {
+    fclose(tmp);
+    tmp = NULL;
+    writer = archive->create_writer(tmp_path, level);
+  }
   if (!writer) {
+    if (stream)
+      codec_writer_close(stream, 1);
+    if (tmp)
+      fclose(tmp);
     fs_unlink(tmp_path);
     return -1;
   }
 
-  // With a codec, the temp archive is read a second time, so the two reads are
-  // stages of one job
-  uint64_t input_total = sum_input_size(input_paths, num_paths);
-  if (has_codec) {
-    ctx_begin_job(ctx, input_total);
-  }
-  ctx_begin_stage(ctx, input_total);
+  ctx_begin_stage(ctx, sum_input_size(input_paths, num_paths));
 
   // Once the writer has opened its output, so a tar's identity is known; an
   // existing output is skipped too, as the commit replaces it
@@ -711,15 +721,25 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   if (ret == 0 && close_ret != 0)
     ret = close_ret;
 
-  if (ret == 0 && !has_codec)
-    return output_commit(tmp_path, &out);
-
-  if (ret == 0) {
-    ret = standalone_compress(find_standalone_format(pipeline->codec), tmp_path,
-                              &out, level, ctx);
+  if (!stream) {
+    if (ret == 0)
+      return output_commit(tmp_path, &out);
+    fs_unlink(tmp_path);
+    return ret;
   }
-  fs_unlink(tmp_path);
-  return ret;
+
+  // libarchive only saw its write callback fail; the stream raises the cause,
+  // and a failed stream returns its failure to every later write
+  if (ret != 0 && codec_write(stream, NULL, 0) == -1)
+    PyErr_Clear();
+
+  int codec_ret = codec_writer_close(stream, ret != 0);
+  if (ret == 0)
+    ret = codec_ret;
+
+  char failure[64];
+  snprintf(failure, sizeof(failure), "%s compression failed", fmt->name);
+  return output_finish(ret, NULL, tmp, tmp_path, &out, failure);
 }
 
 // Walk every entry without writing anything, so an archive holding a refused

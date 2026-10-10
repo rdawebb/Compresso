@@ -54,6 +54,10 @@ typedef struct CArchive {
   // Writing (Creating Archives)
   void *(*create_writer)(const char *output_path, int compression_level);
 
+  // As create_writer, but writing through `stream`, which the caller closes
+  // after close_writer; NULL for a backend that takes no codec stage
+  void *(*create_codec_writer)(CodecStream *stream, const char *output_path);
+
   // `ctx` is NULL-tolerant and covers this entry's data only
   // `source_path` is the entry's original filesystem path, valid for the
   // duration of this call only

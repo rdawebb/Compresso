@@ -68,25 +68,25 @@ class TestArchiveCreationProgress:
         recorder.assert_monotonic()
         recorder.assert_finished()
 
-    def test_two_stage_total_covers_both_passes(
+    def test_compressed_tar_is_never_on_disk_uncompressed(
         self, source_tree: Path, temp_dir: Path
     ) -> None:
-        """Test that tar.zst reads the data twice, and tracks progress correctly.
+        """Test that tar.zst is compressed as it is written."""
+        temps: list[int] = []
 
-        The tar is built first and then compressed, so the honest denominator is
-        roughly twice the input rather than the input alone.
-        """
-        recorder = Recorder()
+        def count_temps(done: int, total: int) -> None:
+            """Record how many temps exist at this report."""
+            temps.append(len(list(temp_dir.glob(".compresso-*"))))
+
         create_archive(
             str(temp_dir / "out.tar.zst"),
             "tar.zst",
             [str(source_tree)],
-            progress=recorder,
+            progress=count_temps,
         )
 
-        input_total = ENTRY_COUNT * ENTRY_SIZE
-        final_total = recorder.calls[-1][1]
-        assert final_total > input_total * 1.5
+        assert temps
+        assert max(temps) == 1
 
     def test_single_stage_total_matches_the_input(
         self, source_tree: Path, temp_dir: Path
