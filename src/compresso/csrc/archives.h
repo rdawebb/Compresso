@@ -71,6 +71,11 @@ typedef struct CArchive {
 
   // Reading (Extracting Archives)
   void *(*create_reader)(const char *input_path);
+
+  // As create_reader, through `stream`; the caller closes it after
+  // close_reader, and it raises any failure it caused
+  void *(*create_codec_reader)(CodecStream *stream, const char *input_path);
+
   // `ctx` (NULL-tolerant) only receives warnings about a still-usable entry
   int (*get_next_entry)(void *reader, ArchiveEntry *entry, CoreContext *ctx);
 

@@ -1373,29 +1373,46 @@ cleanup:
   return result;
 }
 
+// Opens `archive_path` and detects its pipeline and archive backend
+static FILE *open_archive_source(const char *archive_path,
+                                 const CArchive **archive,
+                                 CompressionPipeline *pipe) {
+  *archive = NULL;
+
+  Format format;
+  FILE *src = open_source(archive_path, &format);
+  if (!src)
+    return NULL;
+
+  *pipe = pipeline_from_format(format, archive_path);
+  if (pipeline_is_valid(pipe) && pipe->archive != ARCHIVE_NONE)
+    *archive = archive_for_pipeline(pipe);
+  else
+    PyErr_SetString(PyExc_ValueError, "Not an archive format");
+
+  if (!*archive) {
+    fclose(src);
+    return NULL;
+  }
+  return src;
+}
+
 // Detects the pipeline and decodes any codec stage from the same open stream
 // into a temp file at *tmp_path (NULL if uncompressed); `seed_job` sizes the
 // job by the compressed file; may also return COMP_CANCELLED
 static int open_archive_input(const char *archive_path, int seed_job,
                               const CArchive **archive, char **tmp_path,
                               CoreContext *ctx) {
-  *archive = NULL;
   *tmp_path = NULL;
 
-  Format format;
-  FILE *src = open_source(archive_path, &format);
+  CompressionPipeline pipe;
+  FILE *src = open_archive_source(archive_path, archive, &pipe);
   if (!src)
     return -1;
 
-  CompressionPipeline pipe = pipeline_from_format(format, archive_path);
-  if (pipeline_is_valid(&pipe) && pipe.archive != ARCHIVE_NONE)
-    *archive = archive_for_pipeline(&pipe);
-  else
-    PyErr_SetString(PyExc_ValueError, "Not an archive format");
-
-  if (!*archive || pipe.codec == FORMAT_UNKNOWN) {
+  if (pipe.codec == FORMAT_UNKNOWN) {
     fclose(src);
-    return *archive ? 0 : -1;
+    return 0;
   }
 
   *tmp_path = make_temp_path(archive_path);
@@ -1596,32 +1613,59 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader,
   return list;
 }
 
+// `drain` reads past libarchive's stop at the end-of-archive records, so the
+// stream's end checks (checksum, trailing data) still run
+static int close_codec_source(CodecStream *stream, FILE *src, int drain) {
+  if (drain) {
+    unsigned char rest[16384];
+    size_t got;
+    Py_BEGIN_ALLOW_THREADS
+    while (codec_read(stream, rest, sizeof(rest), &got) == 0 && got > 0) {
+    }
+    Py_END_ALLOW_THREADS
+  }
+
+  int rc = codec_reader_close(stream);
+  fclose(src);
+  return rc;
+}
+
 PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
   const CArchive *archive;
-  char *tmp_path;
-  if (open_archive_input(archive_path, 0, &archive, &tmp_path, ctx) != 0)
+  CompressionPipeline pipe;
+  FILE *src = open_archive_source(archive_path, &archive, &pipe);
+  if (!src)
     return NULL;
-  const char *read_path = tmp_path ? tmp_path : archive_path;
 
-  void *reader = archive->create_reader(read_path);
-  if (!reader) {
-    if (tmp_path) {
-      fs_unlink(tmp_path);
-      free(tmp_path);
-    }
-    return NULL;
+  // Decoded as libarchive reads
+  CodecStream *stream = NULL;
+  void *reader = NULL;
+  if (pipe.codec != FORMAT_UNKNOWN) {
+    const FormatDesc *fmt = find_standalone_format(pipe.codec);
+    ctx_begin_stage_stream(ctx, src);
+    stream = codec_reader_open(fmt->engine(), &fmt->dec, src, ctx);
+    if (stream)
+      reader = archive->create_codec_reader(stream, archive_path);
+  } else {
+    fclose(src);
+    src = NULL;
+    reader = archive->create_reader(archive_path);
   }
 
-  PyObject *list = read_archive_entries(archive, reader, ctx);
+  PyObject *list = reader ? read_archive_entries(archive, reader, ctx) : NULL;
+  int failed = list == NULL;
   // A close failure after a full listing would otherwise return the list
-  if (archive->close_reader(reader, list == NULL) != 0) {
-    Py_XDECREF(list);
-    list = NULL;
-  }
+  if (reader && archive->close_reader(reader, failed) != 0)
+    failed = 1;
 
-  if (tmp_path) {
-    fs_unlink(tmp_path);
-    free(tmp_path);
+  if (stream && close_codec_source(stream, src, !failed) != 0)
+    failed = 1;
+  else if (!stream && src)
+    fclose(src);
+
+  if (failed) {
+    Py_XDECREF(list);
+    return NULL;
   }
   return list;
 }

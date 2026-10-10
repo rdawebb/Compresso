@@ -378,7 +378,7 @@ static int reader_fill(CodecStream *s) {
 
 int codec_read(CodecStream *s, void *buf, size_t n, size_t *got) {
   *got = 0;
-  if (s->err) {
+  if (s->err || n == 0) {
     return s->err;
   }
 

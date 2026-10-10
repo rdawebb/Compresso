@@ -104,7 +104,7 @@ CodecStream *codec_reader_open(const CodecOps *ops, const CodecParams *params,
                                FILE *source, CoreContext *ctx);
 
 // Decodes up to `n` bytes into `buf`; *got is 0 only at the end of the stream;
-// returns as codec_write
+// returns as codec_write; `n` of 0 only reports a recorded failure
 int codec_read(CodecStream *s, void *buf, size_t n, size_t *got);
 
 // Frees `s`; returns as codec_writer_close, also failing if the trailing data

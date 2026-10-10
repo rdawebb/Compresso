@@ -1,5 +1,6 @@
 """Tests for the core compression/decompression functionality."""
 
+import gzip
 import io
 import logging
 import os
@@ -426,6 +427,55 @@ def _two_entry_tar(path: Path) -> bytes:
             tf.addfile(info, io.BytesIO(data))
 
     return path.read_bytes()
+
+
+class TestCompressedTarListing:
+    """Test listing a compressed tar, which decodes it as libarchive reads."""
+
+    def _tar_gz(self, temp_dir: Path) -> bytearray:
+        """Gzip a two-entry tar, padded past its end-of-archive records.
+
+        Args:
+            temp_dir: Pytest temporary path fixture.
+
+        Returns:
+            The compressed archive as a bytearray.
+        """
+        return bytearray(gzip.compress(_two_entry_tar(temp_dir / "plain.tar")))
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
+    def test_lists_from_a_read_only_directory(self, temp_dir: Path) -> None:
+        """Test that listing writes nothing beside the archive."""
+        read_only = temp_dir / "ro"
+        read_only.mkdir()
+        archive = read_only / "a.tar.gz"
+        archive.write_bytes(self._tar_gz(temp_dir))
+        read_only.chmod(0o555)
+
+        entries = _core.list_archive_contents(str(archive))
+
+        assert [e["path"] for e in entries] == ["a.bin", "b.bin"]
+
+    def test_checksum_after_the_last_entry_is_still_checked(
+        self, temp_dir: Path
+    ) -> None:
+        """Test that the stream is read to its end, past the tar's end records."""
+        damaged = self._tar_gz(temp_dir)
+        damaged[-8] ^= 0xFF  # The CRC-32 in the gzip trailer
+        archive = temp_dir / "damaged.tar.gz"
+        archive.write_bytes(damaged)
+
+        with pytest.raises(CorruptDataError, match="incorrect data check"):
+            _core.list_archive_contents(str(archive))
+
+    def test_damaged_stream_reports_the_codec_error(self, temp_dir: Path) -> None:
+        """Test that the codec's error wins over libarchive's failed read."""
+        damaged = self._tar_gz(temp_dir)
+        archive = temp_dir / "truncated.tar.gz"
+        archive.write_bytes(damaged[:600])
+
+        with pytest.raises(CorruptDataError, match="Truncated or incomplete gzip"):
+            _core.list_archive_contents(str(archive))
 
 
 class TestArchiveErrorTypes:
