@@ -244,13 +244,16 @@ typedef struct {
   unsigned char *block; // libarchive's read buffer
 } TarReader;
 
-// A failed stream raises its own cause when closed; libarchive only sees -1
-static void set_tar_read_error(TarReader *reader, const char *what) {
+// Prefers the stream's own failure (e.g. COMP_CANCELLED), raised when it is
+// closed, over libarchive's bare -1
+static int tar_read_failed(TarReader *reader, const char *what) {
   size_t got;
-  if (reader->stream && codec_read(reader->stream, NULL, 0, &got) != 0) {
-    return;
+  int err = reader->stream ? codec_read(reader->stream, NULL, 0, &got) : 0;
+  if (err != 0) {
+    return err;
   }
   set_tar_error(reader->archive, what, reader->input_path, 1);
+  return -1;
 }
 
 static TarReader *tar_reader_new(const char *input_path) {
@@ -285,7 +288,7 @@ static void tar_reader_free(TarReader *reader) {
 
 static void *tar_reader_opened(TarReader *reader, int r) {
   if (r != ARCHIVE_OK) {
-    set_tar_read_error(reader, "Failed to open archive");
+    tar_read_failed(reader, "Failed to open archive");
     tar_reader_free(reader);
     return NULL;
   }
@@ -326,9 +329,14 @@ static void *tar_create_codec_reader(CodecStream *stream,
     tar_reader_free(reader);
     return NULL;
   }
-  return tar_reader_opened(reader,
-                           archive_read_open2(reader->archive, reader, NULL,
-                                              tar_codec_read, NULL, NULL));
+
+  // Decodes the first block, hence no GIL
+  int r;
+  Py_BEGIN_ALLOW_THREADS
+  r = archive_read_open2(reader->archive, reader, NULL, tar_codec_read, NULL,
+                         NULL);
+  Py_END_ALLOW_THREADS
+  return tar_reader_opened(reader, r);
 }
 
 static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
@@ -355,8 +363,7 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
     ctx_log(ctx, CTX_LOG_WARNING, "Archive entry %s: %s", name ? name : "?",
             archive_error_string(reader->archive));
   } else if (r != ARCHIVE_OK) {
-    set_tar_read_error(reader, "Error reading archive");
-    return -1; // Error
+    return tar_read_failed(reader, "Error reading archive");
   }
 
   // Populate ArchiveEntry
@@ -468,8 +475,7 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
   }
 
   if (bytes_read < 0) {
-    set_tar_read_error(reader, "Error reading archive data");
-    return -1;
+    return tar_read_failed(reader, "Error reading archive data");
   }
 
   return 0;
@@ -485,7 +491,7 @@ static int tar_close_reader(void *reader_ptr, int discard) {
 
   int r = discard ? ARCHIVE_OK : archive_read_close(reader->archive);
   if (r != ARCHIVE_OK) {
-    set_tar_read_error(reader, "Failed to close archive");
+    tar_read_failed(reader, "Failed to close archive");
   }
   tar_reader_free(reader);
 

@@ -13,9 +13,6 @@
 // Split-and-create helper shared by both platforms
 static int fs_mkdir_one(const char *path, uint32_t mode);
 
-// Rename `from` to `to`, failing with EEXIST if `to` exists unless `replace`
-static int fs_rename(const char *from, const char *to, int replace);
-
 // Returns the current read/write offset in an open stream as a 64-bit value
 int64_t fs_ftell(FILE *stream) {
 #if defined(_WIN32) || defined(_WIN64)
@@ -681,7 +678,7 @@ FILE *fs_mkstemp(char *template_path) {
   return f;
 }
 
-static int fs_rename(const char *from, const char *to, int replace) {
+int fs_rename(const char *from, const char *to, int replace) {
   wchar_t wfrom[FS_PATH_MAX], wto[FS_PATH_MAX];
   if (fs_widen(from, wfrom, FS_PATH_MAX) != 0 ||
       fs_widen(to, wto, FS_PATH_MAX) != 0)
@@ -749,6 +746,14 @@ int fs_unlink(const char *path) {
     return -1;
 
   return _wremove(wpath);
+}
+
+int fs_rmdir(const char *path) {
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+
+  return _wrmdir(wpath);
 }
 
 int fs_link(const char *existing, const char *new_path) {
@@ -967,7 +972,7 @@ FILE *fs_mkstemp(char *template_path) {
   return NULL;
 }
 
-static int fs_rename(const char *from, const char *to, int replace) {
+int fs_rename(const char *from, const char *to, int replace) {
   if (replace)
     return rename(from, to);
 
@@ -1026,6 +1031,8 @@ uint32_t fs_umask(void) {
 }
 
 int fs_unlink(const char *path) { return unlink(path); }
+
+int fs_rmdir(const char *path) { return rmdir(path); }
 
 // linkat without AT_SYMLINK_FOLLOW, since link(2) follows a symlink on macOS
 int fs_link(const char *existing, const char *new_path) {

@@ -72,8 +72,8 @@ typedef struct CArchive {
   // Reading (Extracting Archives)
   void *(*create_reader)(const char *input_path);
 
-  // As create_reader, through `stream`; the caller closes it after
-  // close_reader, and it raises any failure it caused
+  // As create_reader, through `stream`, which the caller closes after
+  // close_reader; a stream failure is returned and raised by that close
   void *(*create_codec_reader)(CodecStream *stream, const char *input_path);
 
   // `ctx` (NULL-tolerant) only receives warnings about a still-usable entry
@@ -159,8 +159,9 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    int overwrite_existing, char *out_actual_path,
                    size_t out_actual_path_size, CoreContext *ctx);
 
-// Entries are validated against `policy` (NULL = extraction_policy_default())
-// in a first pass over the archive
+// Entries are checked against `policy` (NULL = extraction_policy_default());
+// any failure but a cancel undoes what the extraction wrote, restoring what
+// OVERWRITE replaced
 int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files,
                     const ExtractionPolicy *policy, CoreContext *ctx);

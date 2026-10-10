@@ -478,6 +478,91 @@ class TestCompressedTarListing:
             _core.list_archive_contents(str(archive))
 
 
+class TestExtractionUndo:
+    """Test that a failed extraction leaves the output as it found it."""
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
+    def test_compressed_tar_extracts_from_a_read_only_directory(
+        self, temp_dir: Path
+    ) -> None:
+        """Test that the archive is decoded as it is read, not into a temp."""
+        read_only = temp_dir / "ro"
+        read_only.mkdir()
+        archive = read_only / "a.tar.gz"
+        archive.write_bytes(gzip.compress(_two_entry_tar(temp_dir / "plain.tar")))
+        read_only.chmod(0o555)
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert sorted(p.name for p in out.iterdir()) == ["a.bin", "b.bin"]
+
+    def test_damaged_checksum_undoes_the_entries(self, temp_dir: Path) -> None:
+        """Test that a failure found only after the last entry removes them all."""
+        # Padding, so the trailer is only decoded after both entries are written
+        tar = _two_entry_tar(temp_dir / "plain.tar") + bytes(200_000)
+        damaged = bytearray(gzip.compress(tar))
+        damaged[-8] ^= 0xFF  # The CRC-32 in the gzip trailer
+        archive = temp_dir / "damaged.tar.gz"
+        archive.write_bytes(damaged)
+        out = temp_dir / "out"
+
+        with pytest.raises(CorruptDataError, match="incorrect data check"):
+            _core.extract_archive(str(archive), str(out), [])
+
+        assert list(out.iterdir()) == []
+
+    def test_refused_entry_restores_what_overwrite_replaced(
+        self, temp_dir: Path
+    ) -> None:
+        """Test that the file OVERWRITE moved aside is put back."""
+        plain = temp_dir / "plain.tar"
+        with tarfile.open(plain, "w", format=tarfile.GNU_FORMAT) as tf:
+            info = tarfile.TarInfo("d/a.txt")
+            info.size = 3
+            tf.addfile(info, io.BytesIO(b"new"))
+            link = tarfile.TarInfo("d/link")
+            link.type = tarfile.SYMTYPE
+            link.linkname = "a.txt"
+            tf.addfile(link)
+        archive = temp_dir / "a.tar.zst"
+        _core.compress_standalone(str(plain), str(archive), "zst")
+        out = temp_dir / "out"
+        (out / "d").mkdir(parents=True)
+        (out / "d" / "a.txt").write_text("original")
+
+        with pytest.raises(ExtractionPolicyError, match="symlink"):
+            _core.extract_archive(str(archive), str(out), [], overwrite=2)
+
+        assert os.listdir(out / "d") == ["a.txt"]
+        assert (out / "d" / "a.txt").read_text() == "original"
+
+    def test_overwrite_drops_the_originals_on_success(self, temp_dir: Path) -> None:
+        """Test that no moved-aside original outlives a finished extraction."""
+        archive = temp_dir / "a.tar"
+        _tar_with_hardlink(archive, "d/a")
+        out = temp_dir / "out"
+        (out / "d").mkdir(parents=True)
+        (out / "d" / "a").write_text("old a")
+        (out / "d" / "b").write_text("old b")
+
+        _core.extract_archive(str(archive), str(out), [], overwrite=2)
+
+        assert sorted(os.listdir(out / "d")) == ["a", "b"]
+        assert (out / "d" / "b").read_text() == "x"
+
+    def test_failure_after_validation_undoes_a_plain_tar(self, temp_dir: Path) -> None:
+        """Test that what only fails while writing is undone, directories too."""
+        archive = temp_dir / "links.tar"
+        _tar_with_hardlink(archive, "d/missing")
+        out = temp_dir / "out"
+
+        with pytest.raises(FileNotFoundError):
+            _core.extract_archive(str(archive), str(out), [])
+
+        assert list(out.iterdir()) == []
+
+
 class TestArchiveErrorTypes:
     """Test that archive failures say whether the input, the OS or policy failed."""
 

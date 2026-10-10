@@ -199,17 +199,18 @@ class TestArchiveCancellation:
                 cancel=token,
             )
 
+    # tar.zst counts compressed bytes; random data keeps them near the raw size
+    @pytest.mark.parametrize("fmt", ["tar", "tar.zst"])
     def test_cancelled_extraction_leaves_no_truncated_file(
-        self, source_tree: Path, temp_dir: Path
+        self, source_tree: Path, temp_dir: Path, fmt: str
     ) -> None:
         """Test that entries already extracted are kept, but a half-written one is not.
 
-        Per-entry rollback is deliberately not attempted, but the entry that was
-        in flight when the cancel landed is removed rather than left truncated.
+        Unlike a failure, a cancel undoes only the entry in flight.
         """
-        archive = temp_dir / "in.tar"
+        archive = temp_dir / f"in.{fmt}"
         dest = temp_dir / "out"
-        create_archive(str(archive), "tar", [str(source_tree)])
+        create_archive(str(archive), fmt, [str(source_tree)])
 
         # Stop midway through the second entry, so at least one has completed
         # and one is genuinely in flight
