@@ -159,6 +159,11 @@ uint32_t fs_umask(void);
 
 int fs_unlink(const char *path);
 
+int fs_rmdir(const char *path);
+
+// Rename `from` to `to`, failing with EEXIST if `to` exists unless `replace`
+int fs_rename(const char *from, const char *to, int replace);
+
 // Hardlink `new_path` to `existing`, which is never followed if it is a
 // symlink; -1 with errno set (EEXIST if `new_path` exists, EXDEV across
 // filesystems)

@@ -39,7 +39,11 @@ test-c:
 
 # Run every local check a change needs; see scripts/verify.py for the options
 verify *args:
-    uv run python scripts/verify.py {{args}}
+    uv run python scripts/verify.py {{ args }}
+
+# Time compress + decompress per format; see bench/run.py for the options
+bench *args:
+    uv run python bench/run.py {{ args }}
 
 # Run all pre-commit hooks
 pre:
@@ -49,6 +53,6 @@ pre:
 compdb:
     ln -sf "$(ls -td build/cp*/ | head -1)compile_commands.json" compile_commands.json
 
-# Clean up temporary files
-clean:
-    uv run python scripts/clean.py
+# Remove caches and the built extension; see scripts/clean.py for the build/ groups
+clean *args:
+    uv run python scripts/clean.py {{ args }}

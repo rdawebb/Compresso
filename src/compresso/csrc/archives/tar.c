@@ -46,9 +46,7 @@ typedef struct {
   const char *output_path;
 } TarWriter;
 
-static void *tar_create_writer(const char *output_path, int compression_level) {
-  (void)compression_level; // TAR doesn't have compression
-
+static TarWriter *tar_writer_new(const char *output_path) {
   TarWriter *writer = safe_malloc(sizeof(TarWriter));
   if (!writer) {
     return NULL;
@@ -61,20 +59,53 @@ static void *tar_create_writer(const char *output_path, int compression_level) {
     return NULL;
   }
 
-  // Use PAX format
   archive_write_set_format_pax_restricted(writer->archive);
+  writer->output_path = output_path;
+  return writer;
+}
 
-  // Open file for writing
-  int r = archive_write_open_filename(writer->archive, output_path);
+static void *tar_writer_opened(TarWriter *writer, int r) {
   if (r != ARCHIVE_OK) {
-    set_tar_error(writer->archive, "Failed to open archive", output_path, 0);
+    set_tar_error(writer->archive, "Failed to open archive",
+                  writer->output_path, 0);
     archive_write_free(writer->archive);
     free(writer);
     return NULL;
   }
-
-  writer->output_path = output_path;
   return writer;
+}
+
+static void *tar_create_writer(const char *output_path, int compression_level) {
+  (void)compression_level; // TAR doesn't have compression
+
+  TarWriter *writer = tar_writer_new(output_path);
+  if (!writer) {
+    return NULL;
+  }
+  return tar_writer_opened(
+      writer, archive_write_open_filename(writer->archive, output_path));
+}
+
+static la_ssize_t tar_codec_write(struct archive *a, void *stream,
+                                  const void *buf, size_t n) {
+  (void)a;
+  // The stream keeps its own failure, for the caller to raise at close
+  return codec_write((CodecStream *)stream, buf, n) == 0 ? (la_ssize_t)n : -1;
+}
+
+static void *tar_create_codec_writer(CodecStream *stream,
+                                     const char *output_path) {
+  TarWriter *writer = tar_writer_new(output_path);
+  if (!writer) {
+    return NULL;
+  }
+
+  // As archive_write_open_filename does for a regular file: no padding after
+  // the end-of-archive records, so the tar inside matches a plain one
+  archive_write_set_bytes_in_last_block(writer->archive, 1);
+  return tar_writer_opened(writer,
+                           archive_write_open2(writer->archive, stream, NULL,
+                                               tar_codec_write, NULL, NULL));
 }
 
 static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
@@ -209,9 +240,23 @@ typedef struct {
   struct archive *archive;
   struct archive_entry *current_entry;
   const char *input_path;
+  CodecStream *stream;  // Not owned; NULL without a codec stage
+  unsigned char *block; // libarchive's read buffer
 } TarReader;
 
-static void *tar_create_reader(const char *input_path) {
+// Prefers the stream's own failure (e.g. COMP_CANCELLED), raised when it is
+// closed, over libarchive's bare -1
+static int tar_read_failed(TarReader *reader, const char *what) {
+  size_t got;
+  int err = reader->stream ? codec_read(reader->stream, NULL, 0, &got) : 0;
+  if (err != 0) {
+    return err;
+  }
+  set_tar_error(reader->archive, what, reader->input_path, 1);
+  return -1;
+}
+
+static TarReader *tar_reader_new(const char *input_path) {
   TarReader *reader = safe_malloc(sizeof(TarReader));
   if (!reader) {
     return NULL;
@@ -228,17 +273,70 @@ static void *tar_create_reader(const char *input_path) {
   archive_read_support_format_tar(reader->archive);
   archive_read_support_filter_all(reader->archive);
 
-  int r = archive_read_open_filename(reader->archive, input_path, 10240);
+  reader->current_entry = NULL;
+  reader->input_path = input_path;
+  reader->stream = NULL;
+  reader->block = NULL;
+  return reader;
+}
+
+static void tar_reader_free(TarReader *reader) {
+  archive_read_free(reader->archive);
+  free(reader->block);
+  free(reader);
+}
+
+static void *tar_reader_opened(TarReader *reader, int r) {
   if (r != ARCHIVE_OK) {
-    set_tar_error(reader->archive, "Failed to open archive", input_path, 1);
-    archive_read_free(reader->archive);
-    free(reader);
+    tar_read_failed(reader, "Failed to open archive");
+    tar_reader_free(reader);
+    return NULL;
+  }
+  return reader;
+}
+
+static void *tar_create_reader(const char *input_path) {
+  TarReader *reader = tar_reader_new(input_path);
+  if (!reader) {
+    return NULL;
+  }
+  return tar_reader_opened(
+      reader, archive_read_open_filename(reader->archive, input_path, 10240));
+}
+
+static la_ssize_t tar_codec_read(struct archive *a, void *reader_ptr,
+                                 const void **buffer) {
+  (void)a;
+  TarReader *reader = (TarReader *)reader_ptr;
+  size_t got;
+  if (codec_read(reader->stream, reader->block, CODEC_CHUNK, &got) != 0) {
+    return -1;
+  }
+  *buffer = reader->block;
+  return (la_ssize_t)got;
+}
+
+static void *tar_create_codec_reader(CodecStream *stream,
+                                     const char *input_path) {
+  TarReader *reader = tar_reader_new(input_path);
+  if (!reader) {
     return NULL;
   }
 
-  reader->current_entry = NULL;
-  reader->input_path = input_path;
-  return reader;
+  reader->stream = stream;
+  reader->block = safe_malloc(CODEC_CHUNK);
+  if (!reader->block) {
+    tar_reader_free(reader);
+    return NULL;
+  }
+
+  // Decodes the first block, hence no GIL
+  int r;
+  Py_BEGIN_ALLOW_THREADS
+  r = archive_read_open2(reader->archive, reader, NULL, tar_codec_read, NULL,
+                         NULL);
+  Py_END_ALLOW_THREADS
+  return tar_reader_opened(reader, r);
 }
 
 static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
@@ -248,7 +346,11 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
   // Zero the caller's out-param, so unset fields are never freed
   memset(entry, 0, sizeof(*entry));
 
-  int r = archive_read_next_header(reader->archive, &reader->current_entry);
+  // Decodes any codec stage, hence no GIL
+  int r;
+  Py_BEGIN_ALLOW_THREADS
+  r = archive_read_next_header(reader->archive, &reader->current_entry);
+  Py_END_ALLOW_THREADS
 
   if (r == ARCHIVE_EOF) {
     return 0; // No more entries
@@ -261,9 +363,7 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
     ctx_log(ctx, CTX_LOG_WARNING, "Archive entry %s: %s", name ? name : "?",
             archive_error_string(reader->archive));
   } else if (r != ARCHIVE_OK) {
-    set_tar_error(reader->archive, "Error reading archive", reader->input_path,
-                  1);
-    return -1; // Error
+    return tar_read_failed(reader, "Error reading archive");
   }
 
   // Populate ArchiveEntry
@@ -375,9 +475,7 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
   }
 
   if (bytes_read < 0) {
-    set_tar_error(reader->archive, "Error reading archive data",
-                  reader->input_path, 1);
-    return -1;
+    return tar_read_failed(reader, "Error reading archive data");
   }
 
   return 0;
@@ -391,25 +489,13 @@ static int tar_skip_entry(void *reader_ptr) {
 static int tar_close_reader(void *reader_ptr, int discard) {
   TarReader *reader = (TarReader *)reader_ptr;
 
-  if (discard) {
-    archive_read_free(reader->archive);
-    free(reader);
-    return 0;
-  }
-
-  int r = archive_read_close(reader->archive);
+  int r = discard ? ARCHIVE_OK : archive_read_close(reader->archive);
   if (r != ARCHIVE_OK) {
-    set_tar_error(reader->archive, "Failed to close archive",
-                  reader->input_path, 1);
+    tar_read_failed(reader, "Failed to close archive");
   }
-  archive_read_free(reader->archive);
-  free(reader);
+  tar_reader_free(reader);
 
-  if (r != ARCHIVE_OK) {
-    return -1;
-  }
-
-  return 0;
+  return r == ARCHIVE_OK ? 0 : -1;
 }
 
 // ---- Capability Functions ----
@@ -430,9 +516,11 @@ const CArchive TAR_ARCHIVE = {
     .supports_compression = tar_supports_compression,
     .supports_streaming = tar_supports_streaming,
     .create_writer = tar_create_writer,
+    .create_codec_writer = tar_create_codec_writer,
     .add_entry = tar_add_entry,
     .close_writer = tar_close_writer,
     .create_reader = tar_create_reader,
+    .create_codec_reader = tar_create_codec_reader,
     .get_next_entry = tar_get_next_entry,
     .extract_entry_data = tar_extract_entry_data,
     .skip_entry_data = tar_skip_entry,

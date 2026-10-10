@@ -860,7 +860,7 @@ class TestExtractionSizeCap:
         assert result.ok is False
         assert "maximum extracted size" in str(result.error)
         assert isinstance(result.error, ExtractionPolicyError)
-        assert (out_dir / "big.bin").stat().st_size == 0
+        assert not (out_dir / "big.bin").exists()
 
 
 class TestExtractionDepthLimit:

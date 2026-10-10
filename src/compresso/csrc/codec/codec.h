@@ -83,6 +83,34 @@ typedef struct CodecOps {
                           int *corrupt);
 } CodecOps;
 
+// A codec run driven a call at a time: a writer compresses what is pushed to
+// `sink`, a reader decompresses `source` as it is pulled; open and close need
+// the GIL; write and read don't; `params` is copied; `ctx` is NULL-tolerant
+typedef struct CodecStream CodecStream;
+
+// NULL with a Python exception set on failure
+CodecStream *codec_writer_open(const CodecOps *ops, const CodecParams *params,
+                               FILE *sink, CoreContext *ctx);
+
+// Returns 0, -1 or COMP_CANCELLED; a failure sticks, and close sets the
+// exception
+int codec_write(CodecStream *s, const void *data, size_t n);
+
+// Finishes the stream unless `discard`, then frees `s`; returns 0, -1 with a
+// Python exception set, or COMP_CANCELLED
+int codec_writer_close(CodecStream *s, int discard);
+
+CodecStream *codec_reader_open(const CodecOps *ops, const CodecParams *params,
+                               FILE *source, CoreContext *ctx);
+
+// Decodes up to `n` bytes into `buf`; *got is 0 only at the end of the stream;
+// returns as codec_write; `n` of 0 only reports a recorded failure
+int codec_read(CodecStream *s, void *buf, size_t n, size_t *got);
+
+// Frees `s`; returns as codec_writer_close, also failing if the trailing data
+// warning is raised as an error
+int codec_reader_close(CodecStream *s);
+
 // `ctx` is NULL-tolerant; returns 0, -1 with a Python exception set, or
 // COMP_CANCELLED
 int codec_run_stream(const CodecOps *ops, const CodecParams *params,
