@@ -36,7 +36,7 @@ class CancelToken:
     """Cancellation flag shared with a running compression.
 
     Pass one as the `cancel=` argument of any operation below; calling
-    `cancel()` stops it within one 64 KB chunk, raising `Cancelled` and leaving no
+    `cancel()` stops it within one 1 MB chunk, raising `Cancelled` and leaving no
     partial destination file behind.
     """
 

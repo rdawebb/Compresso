@@ -544,8 +544,13 @@ FILE *fs_fopen(const char *path, const char *mode) {
   wchar_t wmode[16];
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
     return NULL;
-  if (fs_widen(mode, wmode, (int)(sizeof(wmode) / sizeof(wmode[0]))) != 0)
+  if (fs_widen(mode, wmode, (int)(sizeof(wmode) / sizeof(wmode[0]) - 1)) != 0)
     return NULL;
+  if (mode[0] == 'r') {
+    size_t n = wcslen(wmode);
+    wmode[n] = L'S'; // FILE_FLAG_SEQUENTIAL_SCAN
+    wmode[n + 1] = L'\0';
+  }
   return _wfopen(wpath, wmode);
 }
 
@@ -849,7 +854,15 @@ struct fs_dir {
   DIR *handle;
 };
 
-FILE *fs_fopen(const char *path, const char *mode) { return fopen(path, mode); }
+FILE *fs_fopen(const char *path, const char *mode) {
+  FILE *f = fopen(path, mode);
+#ifdef POSIX_FADV_SEQUENTIAL
+  // Only a hint, so a failure changes nothing
+  if (f && mode[0] == 'r')
+    (void)posix_fadvise(fileno(f), 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
+  return f;
+}
 
 FILE *fs_fopen_exclusive(const char *path) {
   // O_NOFOLLOW so an existing symlink is refused rather than followed; O_EXCL

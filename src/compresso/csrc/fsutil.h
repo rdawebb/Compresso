@@ -79,7 +79,8 @@ const char *fs_readdir(fs_dir *dir);
 int fs_dir_error(const fs_dir *dir); // Non-zero if iteration stopped on error
 void fs_closedir(fs_dir *dir);
 
-// Open `path` with fopen(3) semantics, returning NULL with errno set
+// Open `path` with fopen(3) semantics, returning NULL with errno set; a file
+// opened to read is hinted as read sequentially, for more readahead
 FILE *fs_fopen(const char *path, const char *mode);
 
 // Open `path` for binary writing, failing with errno EEXIST if it already

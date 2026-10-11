@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define CODEC_CHUNK 65536 // 64KB
+#define CODEC_CHUNK (1024 * 1024) // 1 MB
 
 typedef enum {
   CODEC_MORE = 0,
