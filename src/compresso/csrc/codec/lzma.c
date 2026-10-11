@@ -17,7 +17,8 @@ typedef struct {
   char message[128];
 } LzmaState;
 
-// Prefixed throughout: liblzma already exports lzma_end and lzma_code
+// Prefixed throughout: lzma.h already declares lzma_end and lzma_code, which
+// even static functions can't share names with
 static uint32_t codec_lzma_preset(int level, int extreme) {
   assert(level_in_range((LevelRange)LEVELS_LZMA, level));
   uint32_t preset = level < 0 ? LZMA_PRESET_DEFAULT : (uint32_t)level;

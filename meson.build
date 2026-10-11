@@ -5,6 +5,7 @@ project('compresso', 'c',
     # which hides the POSIX declarations the sources rely on
     'c_std=gnu11,c11',
     'warning_level=2',
+    'b_lto=true',
   ],
 )
 
