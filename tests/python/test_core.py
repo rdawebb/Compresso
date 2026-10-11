@@ -816,6 +816,80 @@ class TestArchiveSkipsItsOwnOutput:
         )
         assert sorted(p.name for p in tree.iterdir()) == ["a.txt", output.name]
 
+    def test_progress_total_leaves_out_the_old_archive(self, temp_dir: Path) -> None:
+        """Test that the progress total counts only what is archived."""
+        tree = temp_dir / "tree"
+        tree.mkdir()
+        (tree / "a.txt").write_text("a" * 10000)
+        output = tree / "out.tar"
+        output.write_bytes(bytes(50000))
+
+        totals: list[int] = []
+        _core.create_archive(
+            str(output),
+            "tar",
+            [str(tree)],
+            overwrite=2,
+            progress=lambda done, total: totals.append(total),
+        )
+
+        assert totals
+        assert set(totals) == {10000}
+
+
+# A small thread stack, which recursing per directory level overflowed; run in
+# a child process, since that is a crash rather than an exception
+_ARCHIVE_ON_SMALL_STACK = """
+import sys, threading
+from compresso import _core
+threading.stack_size(128 * 1024)
+t = threading.Thread(target=_core.create_archive, args=(sys.argv[1], "tar", [sys.argv[2]]))
+t.start()
+t.join()
+print(len(_core.list_archive_contents(sys.argv[1])))
+"""
+
+
+class TestArchiveWalk:
+    """Test the walk over the source tree."""
+
+    def test_deep_tree_needs_no_deep_stack(self, temp_dir: Path) -> None:
+        """Test that nesting depth costs heap, not C stack."""
+        # Shallow enough that the full path stays under Windows' MAX_PATH
+        deepest = temp_dir / "t" / Path(*["d"] * 60)
+        deepest.mkdir(parents=True)
+        (deepest / "f").write_text("f")
+
+        result = subprocess.run(
+            [sys.executable, "-c", _ARCHIVE_ON_SMALL_STACK]
+            + [str(temp_dir / "out.tar"), str(temp_dir / "t")],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "62"
+
+    def test_entries_follow_their_directory(self, temp_dir: Path) -> None:
+        """Test that each directory's contents come straight after it."""
+        for rel in ("t/a/x", "t/a/y/z", "t/b"):
+            (temp_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+            (temp_dir / rel).write_text(rel)
+        output = temp_dir / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(temp_dir / "t")])
+
+        listed = [e["path"] for e in _core.list_archive_contents(str(output))]
+        assert sorted(listed) == sorted(
+            ["t/", "t/a/", "t/a/x", "t/a/y/", "t/a/y/z", "t/b"]
+        )
+        for i, path in enumerate(listed):
+            if path.endswith("/"):
+                inside = [p for p in listed if p.startswith(path) and p != path]
+                assert listed[i + 1 : i + 1 + len(inside)] == inside, listed
+
 
 def _tar_of(path: Path, entries: list[tuple[str, int, int]]) -> None:
     """Write a tar of directories and files, each with a given mode and mtime.

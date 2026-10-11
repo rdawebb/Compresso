@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "archives.h"
+#include "archives/walk.h"
 #include "common.h"
 #include "fsutil.h"
 #include "standalone.h"
@@ -95,26 +96,6 @@ static int path_has_parent_segment(const char *path) {
   return 0;
 }
 
-// Length of the parent prefix of a source path; trailing separators are
-// ignored, so "dir/" names "dir" rather than ""
-static size_t source_prefix_len(const char *path) {
-  size_t end = strlen(path);
-  while (end > 1 && FS_IS_SEP(path[end - 1]))
-    end--;
-
-  size_t start = end;
-  while (start > 0 && !FS_IS_SEP(path[start - 1]))
-    start--;
-
-#if defined(_WIN32) || defined(_WIN64)
-  // "C:file" is drive-relative: the qualifier is not part of the name
-  if (start == 0 && path[0] != '\0' && path[1] == ':')
-    start = 2;
-#endif
-
-  return start;
-}
-
 // Mirror extraction's checks, so an unsafe source fails at write time rather
 // than producing an unextractable archive
 static int check_storable_entry_name(const char *name) {
@@ -130,34 +111,15 @@ static int check_storable_entry_name(const char *name) {
 
 // ---- Helpers ----
 
-// The archive being written and its temp file, so a walk over their own
-// directory leaves them out: tar writes to one during the walk, and an output
-// that is being overwritten still holds the previous archive
-typedef struct {
-  fs_stat files[2];
-  size_t count;
-} OwnFiles;
-
-static void own_files_add(OwnFiles *own, const char *path) {
-  fs_stat st;
-  if (own->count < 2 && fs_stat_path(path, &st) == 0 && st.type == FS_TYPE_FILE)
-    own->files[own->count++] = st;
-}
-
-// `st` receives the path's stat, for the caller's own checks
-static ArchiveEntry *create_entry_from_path(const char *path, size_t prefix_len,
-                                            fs_stat *out_st) {
-  fs_stat st;
-  if (fs_stat_path(path, &st) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-    return NULL;
-  }
+static ArchiveEntry *entry_from_walk(const WalkItem *item) {
+  const char *path = item->path;
+  const fs_stat *st = &item->st;
 
   ArchiveEntry *entry = entry_alloc();
   if (!entry)
     return NULL;
 
-  const char *rel_path = path + prefix_len;
+  const char *rel_path = path + item->prefix_len;
   while (FS_IS_SEP(*rel_path))
     rel_path++;
 
@@ -190,13 +152,13 @@ static ArchiveEntry *create_entry_from_path(const char *path, size_t prefix_len,
     return NULL;
   }
 
-  entry->size = st.size;
-  entry->mtime = st.mtime;
-  entry->mode = st.mode;
+  entry->size = st->size;
+  entry->mtime = st->mtime;
+  entry->mode = st->mode;
 
-  if (st.type == FS_TYPE_DIR) {
+  if (st->type == FS_TYPE_DIR) {
     entry->type = ENTRY_DIR;
-  } else if (st.type == FS_TYPE_SYMLINK) {
+  } else if (st->type == FS_TYPE_SYMLINK) {
     entry->type = ENTRY_SYMLINK;
     char target[FS_PATH_MAX];
     if (fs_readlink(path, target, sizeof(target)) != 0) {
@@ -210,115 +172,13 @@ static ArchiveEntry *create_entry_from_path(const char *path, size_t prefix_len,
       entry_free(entry);
       return NULL;
     }
-  } else if (st.type == FS_TYPE_FILE) {
-    entry->type = ENTRY_FILE;
   } else {
-    entry->type = ENTRY_SPECIAL;
+    entry->type = ENTRY_FILE; // The walk skipped anything else
   }
 
-  *out_st = st;
   return entry;
 }
 
-// A FIFO or device is never opened, and the archive is never archived into
-// itself; returns 1 if `entry` was skipped, and frees it
-static int skip_entry(ArchiveEntry *entry, const fs_stat *st, const char *path,
-                      const OwnFiles *own, CoreContext *ctx) {
-  if (entry->type == ENTRY_SPECIAL) {
-    ctx_log(ctx, CTX_LOG_WARNING,
-            "Skipped %s: FIFOs, sockets and devices are not archived", path);
-    entry_free(entry);
-    return 1;
-  }
-
-  for (size_t i = 0; i < own->count; i++) {
-    if (fs_same_file(st, &own->files[i])) {
-      ctx_log(ctx, CTX_LOG_WARNING,
-              "Skipped %s: it is the archive being created", path);
-      entry_free(entry);
-      return 1;
-    }
-  }
-
-  return 0;
-}
-
-static int add_directory_recursive(void *writer, const CArchive *archive,
-                                   const char *dir_path, size_t prefix_len,
-                                   const OwnFiles *own, CoreContext *ctx) {
-  fs_dir *dir = fs_opendir(dir_path);
-  if (!dir) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir_path);
-    return -1;
-  }
-
-  const char *name;
-  while ((name = fs_readdir(dir)) != NULL) {
-    char full_path[FS_PATH_MAX];
-    if (fs_join(full_path, sizeof(full_path), dir_path, name) != 0) {
-      fs_closedir(dir);
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir_path);
-      return -1;
-    }
-
-    fs_stat st;
-    ArchiveEntry *ae = create_entry_from_path(full_path, prefix_len, &st);
-    if (!ae) {
-      fs_closedir(dir);
-      return -1;
-    }
-    if (skip_entry(ae, &st, full_path, own, ctx))
-      continue;
-
-    if (ae->type == ENTRY_FILE) {
-      FILE *f = fs_fopen(full_path, "rb");
-      if (!f) {
-        entry_free(ae);
-        fs_closedir(dir);
-        PyErr_SetFromErrnoWithFilename(PyExc_OSError, full_path);
-        return -1;
-      }
-      int ret = archive->add_entry(writer, ae, f, full_path, ctx);
-      fclose(f);
-      entry_free(ae);
-      if (ret != 0) {
-        fs_closedir(dir);
-        return ret;
-      }
-    } else if (ae->type == ENTRY_DIR) {
-      int ret = archive->add_entry(writer, ae, NULL, full_path, ctx);
-      entry_free(ae);
-      if (ret == 0) {
-        ret = add_directory_recursive(writer, archive, full_path, prefix_len,
-                                      own, ctx);
-      }
-      if (ret != 0) {
-        fs_closedir(dir);
-        return ret;
-      }
-    } else {
-      int ret = archive->add_entry(writer, ae, NULL, full_path, ctx);
-      entry_free(ae);
-      if (ret != 0) {
-        fs_closedir(dir);
-        return ret;
-      }
-    }
-  }
-
-  // A conversion failure ends iteration the same way exhaustion does, so
-  // without this the archive would quietly be missing files
-  if (fs_dir_error(dir)) {
-    fs_closedir(dir);
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir_path);
-    return -1;
-  }
-
-  fs_closedir(dir);
-  return 0;
-}
-
-// What an extraction did, in order, so a failure can undo it
 typedef struct {
   char *path;
   char *backup; // What OVERWRITE moved aside; NULL if `path` was created
@@ -614,101 +474,29 @@ static char *make_temp_path(const char *final_path) {
   return tmpl;
 }
 
-// Total bytes of regular files under `dir_path`, for the progress denominator
-static uint64_t sum_directory_size(const char *dir_path) {
-  fs_dir *dir = fs_opendir(dir_path);
-  if (!dir)
-    return 0;
+// Write every walked path into an already-open writer
+static int add_walked_entries(const CArchive *archive, void *writer,
+                              const WalkList *walked, CoreContext *ctx) {
+  for (size_t i = 0; i < walked->count; i++) {
+    const WalkItem *item = &walked->items[i];
+    ArchiveEntry *entry = entry_from_walk(item);
+    if (!entry)
+      return -1;
 
-  uint64_t total = 0;
-  const char *name;
-  while ((name = fs_readdir(dir)) != NULL) {
-    char full_path[FS_PATH_MAX];
-    fs_stat st;
-    if (fs_join(full_path, sizeof(full_path), dir_path, name) != 0 ||
-        fs_stat_path(full_path, &st) != 0)
-      continue;
-
-    if (st.type == FS_TYPE_DIR)
-      total += sum_directory_size(full_path);
-    else if (st.type == FS_TYPE_FILE)
-      total += st.size;
-  }
-
-  fs_closedir(dir);
-  return total;
-}
-
-// Bytes the writer stage will read, so progress has a denominator up front
-static uint64_t sum_input_size(const char **input_paths, size_t num_paths) {
-  uint64_t total = 0;
-  for (size_t i = 0; i < num_paths; i++) {
-    fs_stat st;
-    if (fs_stat_path(input_paths[i], &st) != 0)
-      continue;
-
-    if (st.type == FS_TYPE_DIR)
-      total += sum_directory_size(input_paths[i]);
-    else if (st.type == FS_TYPE_FILE)
-      total += st.size;
-  }
-  return total;
-}
-
-// Write every input path into an already-open writer
-static int add_paths_to_writer(const CArchive *archive, void *writer,
-                               const char **input_paths, size_t num_paths,
-                               const OwnFiles *own, CoreContext *ctx) {
-  for (size_t i = 0; i < num_paths; i++) {
-    fs_stat st;
-    if (fs_stat_path(input_paths[i], &st) != 0) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_paths[i]);
+    FILE *f = NULL;
+    if (entry->type == ENTRY_FILE && !(f = fs_fopen(item->path, "rb"))) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, item->path);
+      entry_free(entry);
       return -1;
     }
 
-    // Strip only the source's parent, so entries keep the source's own name
-    size_t prefix_len = source_prefix_len(input_paths[i]);
-
-    if (st.type == FS_TYPE_DIR) {
-      // Record the directory itself so empty directories are preserved
-      ArchiveEntry *dir_entry =
-          create_entry_from_path(input_paths[i], prefix_len, &st);
-      if (!dir_entry)
-        return -1;
-      int dir_ret =
-          archive->add_entry(writer, dir_entry, NULL, input_paths[i], ctx);
-      entry_free(dir_entry);
-      if (dir_ret != 0)
-        return dir_ret;
-
-      int walk_ret = add_directory_recursive(writer, archive, input_paths[i],
-                                             prefix_len, own, ctx);
-      if (walk_ret != 0)
-        return walk_ret;
-    } else {
-      ArchiveEntry *entry =
-          create_entry_from_path(input_paths[i], prefix_len, &st);
-      if (!entry)
-        return -1;
-      if (skip_entry(entry, &st, input_paths[i], own, ctx))
-        continue;
-
-      FILE *f = fs_fopen(input_paths[i], "rb");
-      if (!f) {
-        entry_free(entry);
-        PyErr_SetFromErrnoWithFilename(PyExc_OSError, input_paths[i]);
-        return -1;
-      }
-
-      int ret = archive->add_entry(writer, entry, f, input_paths[i], ctx);
+    int ret = archive->add_entry(writer, entry, f, item->path, ctx);
+    if (f)
       fclose(f);
-      entry_free(entry);
-
-      if (ret != 0)
-        return ret;
-    }
+    entry_free(entry);
+    if (ret != 0)
+      return ret;
   }
-
   return 0;
 }
 
@@ -773,16 +561,19 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
     return -1;
   }
 
-  ctx_begin_stage(ctx, sum_input_size(input_paths, num_paths));
-
   // Once the writer has opened its output, so a tar's identity is known; an
   // existing output is skipped too, as the commit replaces it
   OwnFiles own = {0};
   own_files_add(&own, tmp_path);
   own_files_add(&own, output_path);
 
-  int ret =
-      add_paths_to_writer(archive, writer, input_paths, num_paths, &own, ctx);
+  WalkList walked = {0};
+  int ret = walk_sources(input_paths, num_paths, &own, ctx, &walked);
+  if (ret == 0) {
+    ctx_begin_stage(ctx, walked.file_bytes);
+    ret = add_walked_entries(archive, writer, &walked, ctx);
+  }
+  walk_list_free(&walked);
 
   // libzip does all its compression inside zip_close, so that is where its
   // progress comes from; a run that already failed is discarded instead
