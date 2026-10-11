@@ -511,3 +511,22 @@ class TestParallelism:
         assert results[2].ok is True
         assert not (temp_dir / "i1.comp").exists()
         assert not any(g.timed_out for g in gates)
+
+    def test_zip_creation_lets_other_threads_run(
+        self, payload: Path, temp_dir: Path
+    ) -> None:
+        """Test that libzip compresses inside zip_close without holding the GIL."""
+        job = ArchiveJob.from_paths(
+            sources=[payload],
+            output=temp_dir / "out.zip",
+            options=ArchiveOptions(format="zip"),
+        )
+
+        ticks = 0
+        with job.start() as handle:
+            while not handle.done():
+                time.sleep(0.001)
+                ticks += 1
+            assert handle.result(timeout=30).ok is True
+
+        assert ticks >= 10, ticks

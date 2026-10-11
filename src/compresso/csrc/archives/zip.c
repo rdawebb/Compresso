@@ -304,7 +304,11 @@ static int zip_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
 
   const char *path = writer->output_path;
   int empty = zip_get_num_entries(writer->archive, 0) == 0;
-  int ret = zip_close(writer->archive);
+  int ret;
+  // Compresses every entry; the progress bridge takes the GIL back itself
+  Py_BEGIN_ALLOW_THREADS
+  ret = zip_close(writer->archive);
+  Py_END_ALLOW_THREADS
   int abort_code = writer->abort_code;
 
   // A failed zip_close leaves the archive open, so it is discarded here
