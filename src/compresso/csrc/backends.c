@@ -15,8 +15,7 @@ const CBackend BACKENDS[] = {
     {.name = "lzma",
      .id = ALGO_LZMA,
      .levels = LEVELS_LZMA,
-     .engine = codec_lzma_ops,
-     .enc = {.extreme = 1}},
+     .engine = codec_lzma_ops},
     {.name = "zstd",
      .id = ALGO_ZSTD,
      .levels = LEVELS_ZSTD,
@@ -43,9 +42,11 @@ const CBackend *find_backend_by_id(uint8_t id) {
 }
 
 int backend_compress(const CBackend *backend, FILE *src, FILE *dst, int level,
-                     CoreContext *ctx) {
+                     int max_ratio, CoreContext *ctx) {
   CodecParams params = backend->enc;
   params.level = level;
+  params.max_ratio = max_ratio;
+  params.threads = ctx ? ctx->threads : 0;
   return codec_run_stream(backend->engine(), &params, 0, src, dst, ctx);
 }
 
@@ -54,5 +55,6 @@ int backend_decompress(const CBackend *backend, FILE *src, FILE *dst,
   CodecParams params = backend->dec;
   params.exact_size = 1;
   params.orig_size = orig_size;
+  params.threads = ctx ? ctx->threads : 0;
   return codec_run_stream(backend->engine(), &params, 1, src, dst, ctx);
 }

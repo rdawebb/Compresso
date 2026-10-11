@@ -22,7 +22,12 @@ from compresso.frontend.api import (
     CompressionOptions,
     DecompressionJob,
 )
-from compresso.frontend.archive_api import ArchiveJob, ArchiveOptions, ExtractJob
+from compresso.frontend.archive_api import (
+    ArchiveJob,
+    ArchiveOptions,
+    ExtractJob,
+    ExtractOptions,
+)
 
 # Past the 1 MiB report floor, so the first progress report lands mid-job
 # rather than being the final one
@@ -530,3 +535,38 @@ class TestParallelism:
             assert handle.result(timeout=30).ok is True
 
         assert ticks >= 10, ticks
+
+
+class TestThreadsOption:
+    """Test that every job hands its `threads` option to the core."""
+
+    def test_each_job_passes_it_on(self, payload: Path, temp_dir: Path) -> None:
+        """Test that a negative count reaches the core's check from each job."""
+        comp = temp_dir / "in.comp"
+        archive = temp_dir / "in.tar.xz"
+        assert quick_job(payload, comp).run().ok
+        assert ArchiveJob.from_paths(sources=[payload], output=archive).run().ok
+
+        jobs = [
+            CompressionJob.from_file(
+                src=payload,
+                dest=temp_dir / "c.comp",
+                options=CompressionOptions(threads=-1),
+            ),
+            DecompressionJob.from_file(src=comp, dest=temp_dir / "d", threads=-1),
+            ArchiveJob.from_paths(
+                sources=[payload],
+                output=temp_dir / "a.tar.zst",
+                options=ArchiveOptions(threads=-1),
+            ),
+            ExtractJob.from_archive(
+                archive=archive,
+                output_dir=temp_dir / "x",
+                options=ExtractOptions(threads=-1),
+            ),
+        ]
+
+        for job in jobs:
+            error = job.run().error
+            assert isinstance(error, ValueError), error
+            assert "threads must be 0" in str(error)

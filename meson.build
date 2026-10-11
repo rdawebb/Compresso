@@ -25,7 +25,7 @@ endif
 
 deps = [
   dependency('zlib'),
-  dependency('liblzma'),
+  dependency('liblzma', version: '>=5.4'), # lzma_stream_decoder_mt
   dependency('libzstd'),
   dependency('liblz4'),
   dependency('libzip'),

@@ -3,6 +3,7 @@
 #include "../common.h"
 #include "../fsutil.h"
 #include <Python.h>
+#include <lzma.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -409,10 +410,28 @@ int codec_reader_close(CodecStream *s) {
 
 // ---- Driver ----
 
+uint32_t codec_threads(const CodecParams *params) {
+  if (params->threads > 0) {
+    return (uint32_t)params->threads;
+  }
+  uint32_t cores = lzma_cputhreads(); // 0 when it can't tell
+  return cores ? cores : 1;
+}
+
 int codec_run_stream(const CodecOps *ops, const CodecParams *params,
                      int decompress, FILE *src, FILE *dst, CoreContext *ctx) {
+  // A seekable input's size lets zstd record it and size its window; a file
+  // that changes size meanwhile then fails
+  CodecParams sized = *params;
+  int64_t size = decompress ? -1 : fs_stream_size(src);
+  int64_t at = size < 0 ? -1 : fs_ftell(src);
+  if (at >= 0 && at <= size) {
+    sized.exact_size = 1;
+    sized.orig_size = (uint64_t)(size - at);
+  }
+
   CodecStream *s = decompress ? codec_reader_open(ops, params, src, ctx)
-                              : codec_writer_open(ops, params, dst, ctx);
+                              : codec_writer_open(ops, &sized, dst, ctx);
   if (!s) {
     return -1;
   }

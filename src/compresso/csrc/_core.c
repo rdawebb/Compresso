@@ -130,14 +130,21 @@ static void log_bridge(CoreContext *ctx, int level, const char *message) {
   PyGILState_Release(gstate);
 }
 
-// Populates `ctx` from the optional progress= and cancel= arguments; returns -1
-// with an exception set if either is of the wrong type
+// Populates `ctx` from the optional progress=, cancel= and threads= arguments;
+// returns -1 with an exception set if one is invalid
 //
-// The bridge is installed even when neither is given, since it is also where
-// PyErr_CheckSignals runs
+// The bridge is installed even without progress= or cancel=, since it is also
+// where PyErr_CheckSignals runs
 static int core_context_init(CoreContext *ctx, PyObject *progress,
-                             PyObject *cancel) {
+                             PyObject *cancel, int threads) {
   memset(ctx, 0, sizeof(*ctx));
+
+  if (threads < 0) {
+    PyErr_Format(PyExc_ValueError,
+                 "threads must be 0 (one per core) or more, not %d", threads);
+    return -1;
+  }
+  ctx->threads = threads;
   ctx->on_progress = progress_bridge;
   ctx->on_log = log_bridge;
 
@@ -239,9 +246,9 @@ static int parse_strategy(const char *name, Strategy *out) {
 
 static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
                                   PyObject *kwargs) {
-  static char *kwlist[] = {"src_path", "dst_path", "algo",
-                           "strategy", "level",    "overwrite",
-                           "progress", "cancel",   NULL};
+  static char *kwlist[] = {"src_path", "dst_path",  "algo",    "strategy",
+                           "level",    "overwrite", "threads", "progress",
+                           "cancel",   NULL};
 
   PyObject *src_path_obj;
   PyObject *dst_path_obj;
@@ -249,13 +256,14 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
   const char *strategy_name = NULL;
   int level = -1;
   int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
+  int threads = 0;            // One per core
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|ssi$iOO", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|ssi$iiOO", kwlist,
                                    &src_path_obj, &dst_path_obj, &algo_name,
                                    &strategy_name, &level, &overwrite_existing,
-                                   &progress, &cancel)) {
+                                   &threads, &progress, &cancel)) {
     return NULL; // Error already set
   }
 
@@ -264,7 +272,7 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
   }
 
   CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel) != 0) {
+  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
     return NULL;
   }
 
@@ -325,19 +333,20 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
 
 static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
                                     PyObject *kwargs) {
-  static char *kwlist[] = {"src_path", "dst_path", "algo", "overwrite",
-                           "progress", "cancel",   NULL};
+  static char *kwlist[] = {"src_path", "dst_path", "algo",   "overwrite",
+                           "threads",  "progress", "cancel", NULL};
 
   PyObject *src_path_obj;
   PyObject *dst_path_obj;
   const char *algo_name = NULL;
   int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
+  int threads = 0;            // One per core
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|s$iOO", kwlist,
-                                   &src_path_obj, &dst_path_obj, &algo_name,
-                                   &overwrite_existing, &progress, &cancel)) {
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "OO|s$iiOO", kwlist, &src_path_obj, &dst_path_obj,
+          &algo_name, &overwrite_existing, &threads, &progress, &cancel)) {
     return NULL; // Error already set
   }
 
@@ -346,7 +355,7 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
   }
 
   CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel) != 0) {
+  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
     return NULL;
   }
 
@@ -396,22 +405,23 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
 
 static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
                                    PyObject *kwargs) {
-  static char *kwlist[] = {
-      "output_path", "format",   "input_paths", "compression_level",
-      "overwrite",   "progress", "cancel",      NULL};
+  static char *kwlist[] = {"output_path",       "format",    "input_paths",
+                           "compression_level", "overwrite", "threads",
+                           "progress",          "cancel",    NULL};
 
   PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
   PyObject *input_paths_obj = NULL;
   int compression_level = -1;
   int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
+  int threads = 0;            // One per core
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OsO|i$iOO", kwlist,
-                                   &output_path_obj, &format_name,
-                                   &input_paths_obj, &compression_level,
-                                   &overwrite_existing, &progress, &cancel)) {
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "OsO|i$iiOO", kwlist, &output_path_obj, &format_name,
+          &input_paths_obj, &compression_level, &overwrite_existing, &threads,
+          &progress, &cancel)) {
     return NULL; // Error already set
   }
 
@@ -452,7 +462,7 @@ static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
   }
 
   CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel) != 0) {
+  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
     Py_DECREF(output_path_bytes);
     Py_DECREF(paths_keepalive);
     free(input_paths);
@@ -494,6 +504,7 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
                            "preserve_timestamps",
                            "allow_symlinks",
                            "overwrite_dir_metadata",
+                           "threads",
                            "progress",
                            "cancel",
                            NULL};
@@ -501,6 +512,7 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   PyObject *archive_path_obj = NULL;
   PyObject *output_dir_obj = NULL;
   PyObject *files_obj = NULL;
+  int threads = 0; // One per core
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
@@ -513,12 +525,12 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   unsigned int max_depth = (unsigned int)policy.max_depth;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OOO|$iKIpppipOO", kwlist, &archive_path_obj,
+          args, kwargs, "OOO|$iKIpppipiOO", kwlist, &archive_path_obj,
           &output_dir_obj, &files_obj, &policy.overwrite_existing,
           &max_total_size, &max_depth, &policy.preserve_permissions,
           &policy.exact_permissions, &policy.preserve_timestamps,
-          &policy.allow_symlinks, &policy.overwrite_dir_metadata, &progress,
-          &cancel)) {
+          &policy.allow_symlinks, &policy.overwrite_dir_metadata, &threads,
+          &progress, &cancel)) {
     return NULL; // Error already set
   }
 
@@ -594,7 +606,7 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   }
 
   CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel) != 0) {
+  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
     Py_DECREF(archive_path_bytes);
     Py_DECREF(output_dir_bytes);
     free(files);
@@ -638,7 +650,7 @@ static PyObject *py_list_archive_contents(PyObject *self UNUSED,
 
   // No progress to report, but the bridge still logs and checks for signals
   CoreContext ctx;
-  core_context_init(&ctx, NULL, NULL);
+  core_context_init(&ctx, NULL, NULL, 0);
 
   PyObject *file_list = list_archive_contents(archive_path, &ctx);
   Py_DECREF(archive_path_bytes);
@@ -649,22 +661,23 @@ static PyObject *py_list_archive_contents(PyObject *self UNUSED,
 
 static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
                                         PyObject *kwargs) {
-  static char *kwlist[] = {
-      "input_path", "output_path", "format", "compression_level",
-      "overwrite",  "progress",    "cancel", NULL};
+  static char *kwlist[] = {"input_path",        "output_path", "format",
+                           "compression_level", "overwrite",   "threads",
+                           "progress",          "cancel",      NULL};
 
   PyObject *input_path_obj = NULL;
   PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
   int compression_level = -1;
   int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
+  int threads = 0;            // One per core
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOs|i$iOO", kwlist,
-                                   &input_path_obj, &output_path_obj,
-                                   &format_name, &compression_level,
-                                   &overwrite_existing, &progress, &cancel)) {
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "OOs|i$iiOO", kwlist, &input_path_obj, &output_path_obj,
+          &format_name, &compression_level, &overwrite_existing, &threads,
+          &progress, &cancel)) {
     return NULL; // Error already set
   }
 
@@ -673,7 +686,7 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
   }
 
   CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel) != 0) {
+  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
     return NULL;
   }
 
@@ -731,12 +744,13 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
 static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
                                           PyObject *kwargs) {
   static char *kwlist[] = {"input_path", "output_path", "format", "overwrite",
-                           "progress",   "cancel",      NULL};
+                           "threads",    "progress",    "cancel", NULL};
 
   PyObject *input_path_obj = NULL;
   PyObject *output_path_obj = NULL;
   const char *format_name = NULL;
   int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
+  int threads = 0;            // One per core
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
@@ -744,8 +758,8 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
   FILE *src = NULL;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OO|s$iOO", kwlist, &input_path_obj, &output_path_obj,
-          &format_name, &overwrite_existing, &progress, &cancel)) {
+          args, kwargs, "OO|s$iiOO", kwlist, &input_path_obj, &output_path_obj,
+          &format_name, &overwrite_existing, &threads, &progress, &cancel)) {
     return NULL; // Error already set
   }
 
@@ -754,7 +768,7 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
   }
 
   CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel) != 0) {
+  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
     return NULL;
   }
 

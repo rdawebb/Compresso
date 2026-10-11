@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #define LZMA_DECOMPRESS_MEMLIMIT (512ULL * 1024 * 1024) // 512MB
+#define LZMA_MAX_THREADS 16384                          // liblzma's own limit
 
 typedef struct {
   lzma_stream strm;
@@ -35,13 +36,32 @@ static int codec_lzma_begin(void *state, const CodecParams *params,
   uint32_t flags = params->concatenated ? LZMA_CONCATENATED : 0;
   flags |= LZMA_TELL_UNSUPPORTED_CHECK;
 
+  uint32_t threads = codec_threads(params);
+  if (threads > LZMA_MAX_THREADS) {
+    threads = LZMA_MAX_THREADS;
+  }
+
   // The driver zeroes the state, which is what LZMA_STREAM_INIT amounts to
-  s->code =
-      decompress
-          ? lzma_stream_decoder(&s->strm, LZMA_DECOMPRESS_MEMLIMIT, flags)
-          : lzma_easy_encoder(&s->strm,
-                              codec_lzma_preset(params->level, params->extreme),
-                              LZMA_CHECK_CRC64);
+  if (decompress) {
+    // Past memlimit_threading it falls back to one thread rather than failing
+    lzma_mt mt = {.flags = flags,
+                  .threads = threads,
+                  .memlimit_threading = LZMA_DECOMPRESS_MEMLIMIT,
+                  .memlimit_stop = LZMA_DECOMPRESS_MEMLIMIT};
+    s->code = lzma_stream_decoder_mt(&s->strm, &mt);
+  } else {
+    // Threaded even for one thread, so the block layout doesn't vary by count
+    lzma_mt mt = {.threads = threads,
+                  .preset = codec_lzma_preset(params->level, params->max_ratio),
+                  .check = LZMA_CHECK_CRC64};
+
+    // Fewer threads rather than over a quarter of RAM, as xz does
+    uint64_t cap = lzma_physmem() / 4;
+    while (mt.threads > 1 && lzma_stream_encoder_mt_memusage(&mt) > cap) {
+      mt.threads--;
+    }
+    s->code = lzma_stream_encoder_mt(&s->strm, &mt);
+  }
 
   if (s->code != LZMA_OK) {
     return -1;

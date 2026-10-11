@@ -25,6 +25,8 @@ typedef struct CoreContext {
   // may be cancelled from another thread; NULL = uncancellable
   volatile int *cancel_flag;
 
+  int threads; // 0 for one per core; copied into each CodecParams
+
   // Returns 0 to continue, non-zero to abort
   int (*on_progress)(struct CoreContext *ctx, uint64_t done, uint64_t total);
   void *userdata; // PyObject* callback, owned by the _core.c bridge

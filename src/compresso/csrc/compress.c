@@ -86,7 +86,8 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   // fs_stream_size left src at the start, so the stage covers the whole input
   ctx_begin_stage_stream(ctx, src);
 
-  return_code = backend_compress(backend, src, dst, level, ctx);
+  return_code = backend_compress(backend, src, dst, level,
+                                 strategy == STRAT_MAX_RATIO, ctx);
   if (return_code != 0) {
     if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
       set_backend_error(backend, "compression", "streaming compression");

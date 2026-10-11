@@ -754,6 +754,7 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
     fmt = find_standalone_format(pipeline->codec);
     CodecParams params = fmt->enc;
     params.level = level;
+    params.threads = ctx ? ctx->threads : 0;
     // No context: progress counts the source bytes, which add_entry reports
     stream = codec_writer_open(fmt->engine(), &params, tmp, NULL);
     if (stream)
@@ -1538,6 +1539,13 @@ static FILE *open_archive_source(const char *archive_path,
   return src;
 }
 
+static CodecStream *open_codec_source(const FormatDesc *fmt, FILE *src,
+                                      CoreContext *ctx) {
+  CodecParams params = fmt->dec;
+  params.threads = ctx ? ctx->threads : 0;
+  return codec_reader_open(fmt->engine(), &params, src, ctx);
+}
+
 // `drain` reads past libarchive's stop at the end-of-archive records, so the
 // stream's end checks (checksum, trailing data) still run
 static int close_codec_source(CodecStream *stream, FILE *src, int drain) {
@@ -1601,7 +1609,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
     if (src) {
       const FormatDesc *fmt = find_standalone_format(pipe.codec);
       ctx_begin_stage_stream(ctx, src);
-      stream = codec_reader_open(fmt->engine(), &fmt->dec, src, ctx);
+      stream = open_codec_source(fmt, src, ctx);
       reader =
           stream ? archive->create_codec_reader(stream, archive_path) : NULL;
     } else {
@@ -1764,7 +1772,7 @@ PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
   if (pipe.codec != FORMAT_UNKNOWN) {
     const FormatDesc *fmt = find_standalone_format(pipe.codec);
     ctx_begin_stage_stream(ctx, src);
-    stream = codec_reader_open(fmt->engine(), &fmt->dec, src, ctx);
+    stream = open_codec_source(fmt, src, ctx);
     if (stream)
       reader = archive->create_codec_reader(stream, archive_path);
   } else {

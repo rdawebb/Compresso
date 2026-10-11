@@ -105,11 +105,14 @@ class ArchiveOptions:
         compression_level: The compression level to use, or None for the
             format's default.
         overwrite: What to do when the destination archive already exists.
+        threads: Worker threads for tar.zst and tar.xz, or 0 for one per core;
+            the output is the same for any count.
     """
 
     format: str = "tar.zst"  # Default to tar with zstd
     compression_level: int | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
+    threads: int = 0
 
 
 @dataclass(frozen=True)
@@ -152,6 +155,7 @@ class ExtractOptions:
         overwrite_dir_metadata: Whether a directory that already exists also
             gets the archive's mode and modification time; by default only directories
             the extraction creates get them; never applies with `OverwriteMode.SKIP`.
+        threads: Worker threads for tar.xz, or 0 for one per core.
     """
 
     overwrite: OverwriteMode = OverwriteMode.RENAME
@@ -161,6 +165,7 @@ class ExtractOptions:
     exact_permissions: bool = False
     preserve_timestamps: bool = True
     overwrite_dir_metadata: bool = False
+    threads: int = 0
 
 
 @dataclass(frozen=True)
@@ -479,6 +484,7 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
                 [str(s) for s in self.plan.sources],
                 to_core_level(self.plan.options.compression_level),
                 overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
+                threads=self.plan.options.threads,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )
@@ -580,6 +586,7 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
                 exact_permissions=options.exact_permissions,
                 preserve_timestamps=options.preserve_timestamps,
                 overwrite_dir_metadata=options.overwrite_dir_metadata,
+                threads=options.threads,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )

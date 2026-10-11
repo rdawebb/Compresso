@@ -161,9 +161,9 @@ typedef struct CBackend {
 extern const CBackend BACKENDS[];
 
 // `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation;
-// return 0, -1 or COMP_CANCELLED
+// return 0, -1 or COMP_CANCELLED; `max_ratio` is set for that strategy
 int backend_compress(const CBackend *backend, FILE *src, FILE *dst, int level,
-                     CoreContext *ctx);
+                     int max_ratio, CoreContext *ctx);
 
 // Decoding must produce exactly `orig_size` bytes
 int backend_decompress(const CBackend *backend, FILE *src, FILE *dst,

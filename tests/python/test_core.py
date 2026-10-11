@@ -3,7 +3,9 @@
 import gzip
 import io
 import logging
+import lzma
 import os
+import random
 import stat
 import subprocess
 import sys
@@ -1365,3 +1367,89 @@ class TestLevelValidation:
                 lambda: _core.create_archive(dest, fmt, [str(sample_text_file)], level)
             )
         assert checked == created
+
+
+@pytest.fixture(scope="module")
+def several_blocks(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Compressible input that spans several zstd jobs and xz blocks at level 1.
+
+    Args:
+        tmp_path_factory: Pytest temporary path factory fixture.
+
+    Returns:
+        The path to the created file.
+    """
+    rnd = random.Random(0)
+    path = tmp_path_factory.mktemp("threads") / "input.bin"
+    path.write_bytes(b"".join(rnd.randbytes(4096) * 4 for _ in range(512)))
+    return path
+
+
+class TestCodecThreads:
+    """Test the threads= argument and the settings that came with it."""
+
+    @pytest.mark.parametrize("fmt", ["zstd", "xz"])
+    def test_output_is_the_same_for_any_thread_count(
+        self, several_blocks: Path, temp_dir: Path, fmt: str
+    ) -> None:
+        """Test that a file doesn't depend on the machine that wrote it."""
+        outputs = []
+        for threads in (1, 3):
+            out = temp_dir / f"{threads}.{fmt}"
+            _core.compress_standalone(
+                str(several_blocks), str(out), fmt, 1, threads=threads
+            )
+            outputs.append(out)
+
+        assert outputs[0].read_bytes() == outputs[1].read_bytes()
+
+        restored = temp_dir / "restored"
+        _core.decompress_standalone(str(outputs[1]), str(restored), fmt, threads=3)
+        assert restored.read_bytes() == several_blocks.read_bytes()
+
+    def test_threaded_xz_is_read_by_the_stdlib(
+        self, several_blocks: Path, temp_dir: Path
+    ) -> None:
+        """Test that the multi-block layout is ordinary .xz."""
+        out = temp_dir / "out.xz"
+        _core.compress_standalone(str(several_blocks), str(out), "xz", 1, threads=2)
+
+        assert lzma.decompress(out.read_bytes()) == several_blocks.read_bytes()
+
+    def test_zstd_frame_records_the_content_size(
+        self, several_blocks: Path, temp_dir: Path
+    ) -> None:
+        """Test that a streamed input's size is pledged and written to the header."""
+        out = temp_dir / "out.zst"
+        _core.compress_standalone(str(several_blocks), str(out), "zstd", 1)
+
+        descriptor = out.read_bytes()[4]
+        # Frame_Content_Size_flag, or Single_Segment_flag, which implies the field
+        assert descriptor >> 6 or descriptor & 0x20
+
+    @pytest.mark.parametrize("algo", ["lzma", "zstd"])
+    def test_max_ratio_reaches_the_codec(
+        self, several_blocks: Path, temp_dir: Path, algo: str
+    ) -> None:
+        """Test that max_ratio adds lzma's extreme preset and zstd's long matching."""
+        outputs = {}
+        for strategy in ("balanced", "max_ratio"):
+            out = temp_dir / f"{strategy}.comp"
+            compress_file(str(several_blocks), str(out), algo, strategy, 1)
+            outputs[strategy] = out
+
+            restored = temp_dir / f"{strategy}.out"
+            decompress_file(str(out), str(restored), "")
+            assert restored.read_bytes() == several_blocks.read_bytes()
+
+        assert outputs["balanced"].read_bytes() != outputs["max_ratio"].read_bytes()
+
+    def test_negative_count_is_refused(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that threads below 0 raise rather than meaning one per core."""
+        with pytest.raises(ValueError, match="threads must be 0"):
+            _core.compress_standalone(
+                str(sample_text_file), str(temp_dir / "out.zst"), "zstd", threads=-1
+            )
+        assert not (temp_dir / "out.zst").exists()
