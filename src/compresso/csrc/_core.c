@@ -419,11 +419,11 @@ static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "O&sO&|i$iiOO", kwlist, PyUnicode_FSConverter,
-          &output_path_bytes, &format_name, path_list_converter, &inputs,
-          &compression_level, &overwrite_existing, &threads, &progress,
-          &cancel)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O&sO&|i$iiOO", kwlist,
+                                   PyUnicode_FSConverter, &output_path_bytes,
+                                   &format_name, path_list_converter, &inputs,
+                                   &compression_level, &overwrite_existing,
+                                   &threads, &progress, &cancel)) {
     return NULL; // Error already set
   }
 
@@ -503,11 +503,10 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   if (!PyArg_ParseTupleAndKeywords(
           args, kwargs, "O&O&O|$iKIpppipiOO", kwlist, PyUnicode_FSConverter,
           &archive_path_bytes, PyUnicode_FSConverter, &output_dir_bytes,
-          &files_obj, &policy.overwrite_existing,
-          &max_total_size, &max_depth, &policy.preserve_permissions,
-          &policy.exact_permissions, &policy.preserve_timestamps,
-          &policy.allow_symlinks, &policy.overwrite_dir_metadata, &threads,
-          &progress, &cancel)) {
+          &files_obj, &policy.overwrite_existing, &max_total_size, &max_depth,
+          &policy.preserve_permissions, &policy.exact_permissions,
+          &policy.preserve_timestamps, &policy.allow_symlinks,
+          &policy.overwrite_dir_metadata, &threads, &progress, &cancel)) {
     return NULL; // Error already set
   }
 
@@ -962,114 +961,45 @@ PyMODINIT_FUNC PyInit__core(void) {
     return NULL;
   }
 
-  comp_Error = PyErr_NewException("compresso.Error", NULL, NULL);
-  if (!comp_Error) {
-    Py_DECREF(module);
-    return NULL;
+  // Built at run time: on Windows, &PyExc_UserWarning isn't a constant
+  // expression; each base must precede the exceptions derived from it.
+  const struct {
+    PyObject **slot;
+    const char *name;
+    PyObject **base;
+  } exceptions[] = {
+      {&comp_Error, "compresso.Error", NULL},
+      {&comp_HeaderError, "compresso.HeaderError", &comp_Error},
+      {&comp_BackendError, "compresso.BackendError", &comp_Error},
+      {&comp_Cancelled, "compresso.Cancelled", &comp_Error},
+      {&comp_CorruptDataError, "compresso.CorruptDataError", &comp_Error},
+      {&comp_ExtractionPolicyError, "compresso.ExtractionPolicyError",
+       &comp_Error},
+      {&comp_TrailingDataWarning, "compresso.TrailingDataWarning",
+       &PyExc_UserWarning},
+  };
+  const size_t n_exceptions = sizeof exceptions / sizeof exceptions[0];
+
+  for (size_t i = 0; i < n_exceptions; i++) {
+    PyObject *base = exceptions[i].base ? *exceptions[i].base : NULL;
+    *exceptions[i].slot = PyErr_NewException(exceptions[i].name, base, NULL);
+    if (*exceptions[i].slot == NULL ||
+        PyModule_AddObjectRef(module, strrchr(exceptions[i].name, '.') + 1,
+                              *exceptions[i].slot) < 0) {
+      goto fail;
+    }
   }
 
-  comp_HeaderError =
-      PyErr_NewException("compresso.HeaderError", comp_Error, NULL);
-  if (!comp_HeaderError) {
-    Py_DECREF(comp_Error);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_BackendError =
-      PyErr_NewException("compresso.BackendError", comp_Error, NULL);
-  if (!comp_BackendError) {
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_Error);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_Cancelled = PyErr_NewException("compresso.Cancelled", comp_Error, NULL);
-  if (!comp_Cancelled) {
-    Py_DECREF(comp_BackendError);
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_Error);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_CorruptDataError =
-      PyErr_NewException("compresso.CorruptDataError", comp_Error, NULL);
-  if (!comp_CorruptDataError ||
-      PyModule_AddObjectRef(module, "CorruptDataError", comp_CorruptDataError) <
-          0) {
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_ExtractionPolicyError =
-      PyErr_NewException("compresso.ExtractionPolicyError", comp_Error, NULL);
-  if (!comp_ExtractionPolicyError ||
-      PyModule_AddObjectRef(module, "ExtractionPolicyError",
-                            comp_ExtractionPolicyError) < 0) {
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_TrailingDataWarning = PyErr_NewException("compresso.TrailingDataWarning",
-                                                PyExc_UserWarning, NULL);
-  if (!comp_TrailingDataWarning ||
-      PyModule_AddObjectRef(module, "TrailingDataWarning",
-                            comp_TrailingDataWarning) < 0) {
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  Py_INCREF(comp_Error);
-  if (PyModule_AddObject(module, "Error", comp_Error) < 0) {
-    Py_DECREF(comp_Error);
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_BackendError);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  Py_INCREF(comp_HeaderError);
-  if (PyModule_AddObject(module, "HeaderError", comp_HeaderError) < 0) {
-    Py_DECREF(comp_Error);
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_BackendError);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  Py_INCREF(comp_BackendError);
-  if (PyModule_AddObject(module, "BackendError", comp_BackendError) < 0) {
-    Py_DECREF(comp_Error);
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_BackendError);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  Py_INCREF(comp_Cancelled);
-  if (PyModule_AddObject(module, "Cancelled", comp_Cancelled) < 0) {
-    Py_DECREF(comp_Error);
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_BackendError);
-    Py_DECREF(comp_Cancelled);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  if (PyType_Ready(&CancelTokenType) < 0) {
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  Py_INCREF(&CancelTokenType);
-  if (PyModule_AddObject(module, "CancelToken", (PyObject *)&CancelTokenType) <
-      0) {
-    Py_DECREF(&CancelTokenType);
-    Py_DECREF(module);
-    return NULL;
+  if (PyModule_AddType(module, &CancelTokenType) < 0) {
+    goto fail;
   }
 
   return module;
+
+fail:
+  for (size_t i = 0; i < n_exceptions; i++) {
+    Py_CLEAR(*exceptions[i].slot);
+  }
+  Py_DECREF(module);
+  return NULL;
 }
