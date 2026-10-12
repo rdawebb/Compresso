@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 import tarfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -182,7 +182,7 @@ def bars(monkeypatch: pytest.MonkeyPatch) -> list[Bar]:
     @contextmanager
     def spy(
         label: str, total: int, *, enabled: bool
-    ) -> Iterator[ProgressCallback | None]:
+    ) -> Generator[ProgressCallback | None]:
         bar = Bar(enabled)
         opened.append(bar)
         with progress_bar(label, total, enabled=enabled) as on_progress:

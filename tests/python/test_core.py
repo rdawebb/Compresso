@@ -3,7 +3,9 @@
 import gzip
 import io
 import logging
+import lzma
 import os
+import random
 import stat
 import subprocess
 import sys
@@ -814,6 +816,80 @@ class TestArchiveSkipsItsOwnOutput:
         )
         assert sorted(p.name for p in tree.iterdir()) == ["a.txt", output.name]
 
+    def test_progress_total_leaves_out_the_old_archive(self, temp_dir: Path) -> None:
+        """Test that the progress total counts only what is archived."""
+        tree = temp_dir / "tree"
+        tree.mkdir()
+        (tree / "a.txt").write_text("a" * 10000)
+        output = tree / "out.tar"
+        output.write_bytes(bytes(50000))
+
+        totals: list[int] = []
+        _core.create_archive(
+            str(output),
+            "tar",
+            [str(tree)],
+            overwrite=2,
+            progress=lambda done, total: totals.append(total),
+        )
+
+        assert totals
+        assert set(totals) == {10000}
+
+
+# A small thread stack, which recursing per directory level overflowed; run in
+# a child process, since that is a crash rather than an exception
+_ARCHIVE_ON_SMALL_STACK = """
+import sys, threading
+from compresso import _core
+threading.stack_size(128 * 1024)
+t = threading.Thread(target=_core.create_archive, args=(sys.argv[1], "tar", [sys.argv[2]]))
+t.start()
+t.join()
+print(len(_core.list_archive_contents(sys.argv[1])))
+"""
+
+
+class TestArchiveWalk:
+    """Test the walk over the source tree."""
+
+    def test_deep_tree_needs_no_deep_stack(self, temp_dir: Path) -> None:
+        """Test that nesting depth costs heap, not C stack."""
+        # Shallow enough that the full path stays under Windows' MAX_PATH
+        deepest = temp_dir / "t" / Path(*["d"] * 60)
+        deepest.mkdir(parents=True)
+        (deepest / "f").write_text("f")
+
+        result = subprocess.run(
+            [sys.executable, "-c", _ARCHIVE_ON_SMALL_STACK]
+            + [str(temp_dir / "out.tar"), str(temp_dir / "t")],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "62"
+
+    def test_entries_follow_their_directory(self, temp_dir: Path) -> None:
+        """Test that each directory's contents come straight after it."""
+        for rel in ("t/a/x", "t/a/y/z", "t/b"):
+            (temp_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+            (temp_dir / rel).write_text(rel)
+        output = temp_dir / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(temp_dir / "t")])
+
+        listed = [e["path"] for e in _core.list_archive_contents(str(output))]
+        assert sorted(listed) == sorted(
+            ["t/", "t/a/", "t/a/x", "t/a/y/", "t/a/y/z", "t/b"]
+        )
+        for i, path in enumerate(listed):
+            if path.endswith("/"):
+                inside = [p for p in listed if p.startswith(path) and p != path]
+                assert listed[i + 1 : i + 1 + len(inside)] == inside, listed
+
 
 def _tar_of(path: Path, entries: list[tuple[str, int, int]]) -> None:
     """Write a tar of directories and files, each with a given mode and mtime.
@@ -1365,3 +1441,89 @@ class TestLevelValidation:
                 lambda: _core.create_archive(dest, fmt, [str(sample_text_file)], level)
             )
         assert checked == created
+
+
+@pytest.fixture(scope="module")
+def several_blocks(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Compressible input that spans several zstd jobs and xz blocks at level 1.
+
+    Args:
+        tmp_path_factory: Pytest temporary path factory fixture.
+
+    Returns:
+        The path to the created file.
+    """
+    rnd = random.Random(0)
+    path = tmp_path_factory.mktemp("threads") / "input.bin"
+    path.write_bytes(b"".join(rnd.randbytes(4096) * 4 for _ in range(512)))
+    return path
+
+
+class TestCodecThreads:
+    """Test the threads= argument and the settings that came with it."""
+
+    @pytest.mark.parametrize("fmt", ["zstd", "xz"])
+    def test_output_is_the_same_for_any_thread_count(
+        self, several_blocks: Path, temp_dir: Path, fmt: str
+    ) -> None:
+        """Test that a file doesn't depend on the machine that wrote it."""
+        outputs = []
+        for threads in (1, 3):
+            out = temp_dir / f"{threads}.{fmt}"
+            _core.compress_standalone(
+                str(several_blocks), str(out), fmt, 1, threads=threads
+            )
+            outputs.append(out)
+
+        assert outputs[0].read_bytes() == outputs[1].read_bytes()
+
+        restored = temp_dir / "restored"
+        _core.decompress_standalone(str(outputs[1]), str(restored), fmt, threads=3)
+        assert restored.read_bytes() == several_blocks.read_bytes()
+
+    def test_threaded_xz_is_read_by_the_stdlib(
+        self, several_blocks: Path, temp_dir: Path
+    ) -> None:
+        """Test that the multi-block layout is ordinary .xz."""
+        out = temp_dir / "out.xz"
+        _core.compress_standalone(str(several_blocks), str(out), "xz", 1, threads=2)
+
+        assert lzma.decompress(out.read_bytes()) == several_blocks.read_bytes()
+
+    def test_zstd_frame_records_the_content_size(
+        self, several_blocks: Path, temp_dir: Path
+    ) -> None:
+        """Test that a streamed input's size is pledged and written to the header."""
+        out = temp_dir / "out.zst"
+        _core.compress_standalone(str(several_blocks), str(out), "zstd", 1)
+
+        descriptor = out.read_bytes()[4]
+        # Frame_Content_Size_flag, or Single_Segment_flag, which implies the field
+        assert descriptor >> 6 or descriptor & 0x20
+
+    @pytest.mark.parametrize("algo", ["lzma", "zstd"])
+    def test_max_ratio_reaches_the_codec(
+        self, several_blocks: Path, temp_dir: Path, algo: str
+    ) -> None:
+        """Test that max_ratio adds lzma's extreme preset and zstd's long matching."""
+        outputs = {}
+        for strategy in ("balanced", "max_ratio"):
+            out = temp_dir / f"{strategy}.comp"
+            compress_file(str(several_blocks), str(out), algo, strategy, 1)
+            outputs[strategy] = out
+
+            restored = temp_dir / f"{strategy}.out"
+            decompress_file(str(out), str(restored), "")
+            assert restored.read_bytes() == several_blocks.read_bytes()
+
+        assert outputs["balanced"].read_bytes() != outputs["max_ratio"].read_bytes()
+
+    def test_negative_count_is_refused(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that threads below 0 raise rather than meaning one per core."""
+        with pytest.raises(ValueError, match="threads must be 0"):
+            _core.compress_standalone(
+                str(sample_text_file), str(temp_dir / "out.zst"), "zstd", threads=-1
+            )
+        assert not (temp_dir / "out.zst").exists()

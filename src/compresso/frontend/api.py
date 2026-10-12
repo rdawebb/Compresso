@@ -83,6 +83,8 @@ class CompressionOptions:
             algorithm used; a standalone format is chosen by `algo` instead and
             ignores `strategy`.
         overwrite: What to do when the destination file already exists.
+        threads: Worker threads for zstd and xz/lzma, or 0 for one per core;
+            the output is the same for any count.
     """
 
     algo: str | None = None
@@ -90,6 +92,7 @@ class CompressionOptions:
     level: int | None = None
     format: str | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
+    threads: int = 0
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,7 @@ class DecompressionPlan:
         can_run: Whether decompression can proceed.
         reason_if_unavailable: Reason it cannot, if applicable.
         overwrite: What to do when the destination file already exists.
+        threads: Worker threads for xz/lzma, or 0 for one per core.
     """
 
     src: Path
@@ -144,6 +148,7 @@ class DecompressionPlan:
     can_run: bool = True
     reason_if_unavailable: str | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
+    threads: int = 0
 
 
 def plan_compression(
@@ -298,6 +303,7 @@ def plan_decompression(
     src: str | Path,
     dest: str | Path | None = None,
     overwrite: OverwriteMode = OverwriteMode.RENAME,
+    threads: int = 0,
 ) -> DecompressionPlan:
     """Plan a decompression operation based on file inspection.
 
@@ -307,6 +313,7 @@ def plan_decompression(
             suffix removed (`notes.txt.gz` becomes `notes.txt`), or with
             `.out` appended when it has no suffix.
         overwrite: What to do when the destination file already exists.
+        threads: Worker threads for xz/lzma, or 0 for one per core.
 
     Returns:
         DecompressionPlan: The resulting decompression plan.
@@ -344,6 +351,7 @@ def plan_decompression(
             can_run=can_run,
             reason_if_unavailable=reason,
             overwrite=mode or OverwriteMode.RENAME,
+            threads=threads,
         )
 
     if mode is None:
@@ -471,6 +479,7 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
                     format=standalone,
                     compression_level=lvl,
                     overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
+                    threads=self.plan.options.threads,
                     progress=to_core_progress(progress, total),
                     cancel=cancel,
                 )
@@ -483,6 +492,7 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
                     strategy=self.plan.options.strategy or "",
                     level=lvl,
                     overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
+                    threads=self.plan.options.threads,
                     progress=to_core_progress(progress, total),
                     cancel=cancel,
                 )
@@ -533,6 +543,7 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
         src: str | Path,
         dest: str | Path | None = None,
         overwrite: OverwriteMode = OverwriteMode.RENAME,
+        threads: int = 0,
     ) -> Self:
         """Create a DecompressionJob from file paths.
 
@@ -541,11 +552,12 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
             dest: Destination file path; if None, derived from `src` as
                 `plan_decompression` does.
             overwrite: What to do when the destination file already exists.
+            threads: Worker threads for xz/lzma, or 0 for one per core.
 
         Returns:
             DecompressionJob: The created decompression job.
         """
-        return cls(plan=plan_decompression(src, dest, overwrite))
+        return cls(plan=plan_decompression(src, dest, overwrite, threads))
 
     def run(
         self,
@@ -590,6 +602,7 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
                     output_path=str(object=self.plan.dest),
                     format=self.plan.format,
                     overwrite=_OVERWRITE_CODES[self.plan.overwrite],
+                    threads=self.plan.threads,
                     progress=to_core_progress(progress, total),
                     cancel=cancel,
                 )
@@ -600,6 +613,7 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
                     dst_path=str(object=self.plan.dest),
                     algo="",
                     overwrite=_OVERWRITE_CODES[self.plan.overwrite],
+                    threads=self.plan.threads,
                     progress=to_core_progress(progress, total),
                     cancel=cancel,
                 )

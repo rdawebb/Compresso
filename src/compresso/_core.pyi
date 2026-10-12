@@ -36,7 +36,7 @@ class CancelToken:
     """Cancellation flag shared with a running compression.
 
     Pass one as the `cancel=` argument of any operation below; calling
-    `cancel()` stops it within one 64 KB chunk, raising `Cancelled` and leaving no
+    `cancel()` stops it within one 1 MB chunk, raising `Cancelled` and leaving no
     partial destination file behind.
     """
 
@@ -52,6 +52,8 @@ class CancelToken:
 # that exception
 ProgressFn: TypeAlias = Callable[[int, int], None]
 
+# `threads=`: worker threads for zstd and xz/lzma, 0 (default) for one per core
+
 def compress_file(
     src_path: str,
     dst_path: str,
@@ -60,6 +62,7 @@ def compress_file(
     level: int,
     *,
     overwrite: int = ...,
+    threads: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
 ) -> str:
@@ -78,6 +81,7 @@ def decompress_file(
     algo: str,
     *,
     overwrite: int = ...,
+    threads: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
 ) -> str:
@@ -138,6 +142,7 @@ def create_archive(
     compression_level: int = ...,
     *,
     overwrite: int = ...,
+    threads: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
 ) -> str:
@@ -163,6 +168,7 @@ def extract_archive(
     preserve_timestamps: bool = ...,
     allow_symlinks: int = ...,
     overwrite_dir_metadata: bool = ...,
+    threads: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
 ) -> None:
@@ -220,6 +226,7 @@ def compress_standalone(
     compression_level: int = ...,
     *,
     overwrite: int = ...,
+    threads: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
 ) -> str:
@@ -238,6 +245,7 @@ def decompress_standalone(
     format: str = ...,
     *,
     overwrite: int = ...,
+    threads: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
 ) -> str:

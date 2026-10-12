@@ -61,7 +61,7 @@ static int run_stream(const CBackend *backend, int decompress,
   rewind(src);
 
   int rc = decompress ? backend_decompress(backend, src, dst, orig_size, NULL)
-                      : backend_compress(backend, src, dst, level, NULL);
+                      : backend_compress(backend, src, dst, level, 0, NULL);
 
   if (rc == 0) {
     *output = drain(dst, output_size);

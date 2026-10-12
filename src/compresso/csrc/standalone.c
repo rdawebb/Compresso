@@ -14,6 +14,7 @@ int standalone_compress(const FormatDesc *fmt, const char *input_path,
                         const OutputTarget *out, int level, CoreContext *ctx) {
   CodecParams params = fmt->enc;
   params.level = level;
+  params.threads = ctx ? ctx->threads : 0;
   char failure[64];
   snprintf(failure, sizeof(failure), "%s compression failed", fmt->name);
   return codec_run_file(fmt->engine(), &params, 0, input_path, out, ctx,
@@ -25,7 +26,9 @@ int standalone_decompress(const FormatDesc *fmt, const char *input_path,
                           CoreContext *ctx) {
   char failure[64];
   snprintf(failure, sizeof(failure), "%s decompression failed", fmt->name);
-  return codec_run_source(fmt->engine(), &fmt->dec, 1, input_path, input, out,
+  CodecParams params = fmt->dec;
+  params.threads = ctx ? ctx->threads : 0;
+  return codec_run_source(fmt->engine(), &params, 1, input_path, input, out,
                           ctx, failure);
 }
 

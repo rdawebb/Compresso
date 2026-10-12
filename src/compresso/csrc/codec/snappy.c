@@ -18,9 +18,12 @@ enum {
 static const unsigned char STREAM_ID[10] = {0xFF, 0x06, 0x00, 0x00, 's',
                                             'N',  'a',  'P',  'p',  'Y'};
 
-// snappy_max_compressed_length(CODEC_CHUNK), which is a function, not a
+// The format's limit on a chunk's decoded data, whatever the codec chunk size
+#define SNAPPY_CHUNK 65536
+
+// snappy_max_compressed_length(SNAPPY_CHUNK), which is a function, not a
 // constant; a compressed chunk any longer is rejected
-#define MAX_COMPRESSED (32 + CODEC_CHUNK + CODEC_CHUNK / 6)
+#define MAX_COMPRESSED (32 + SNAPPY_CHUNK + SNAPPY_CHUNK / 6)
 #define MAX_BODY (4 + MAX_COMPRESSED)
 
 typedef struct {
@@ -30,7 +33,7 @@ typedef struct {
   char message[128];
 
   // Encoder: the input chunk being gathered; decoder: the decoded chunk
-  unsigned char raw[CODEC_CHUNK];
+  unsigned char raw[SNAPPY_CHUNK];
   size_t raw_len;
 
   // Encoder: the chunk being written out; decoder: the chunk being read in,
@@ -77,7 +80,7 @@ static int snappy_begin(void *state, const CodecParams *params, int decompress,
   (void)params; // Snappy has no levels, and the framing always checksums
   (void)ctx;
   SnappyState *s = (SnappyState *)state;
-  assert(MAX_COMPRESSED == snappy_max_compressed_length(CODEC_CHUNK));
+  assert(MAX_COMPRESSED == snappy_max_compressed_length(SNAPPY_CHUNK));
   s->decompress = decompress;
   return 0;
 }

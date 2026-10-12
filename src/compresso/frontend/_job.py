@@ -131,7 +131,7 @@ class JobHandle:
         """Ask the job to stop.
 
         Safe to call from any thread, more than once, and after the job has
-        already finished. Returns immediately: the job stops within one 64 KB
+        already finished; returns immediately: the job stops within one 1 MB
         chunk, leaving no partial destination file.
         """
         self._token.cancel()

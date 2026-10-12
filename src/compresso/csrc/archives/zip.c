@@ -304,7 +304,11 @@ static int zip_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
 
   const char *path = writer->output_path;
   int empty = zip_get_num_entries(writer->archive, 0) == 0;
-  int ret = zip_close(writer->archive);
+  int ret;
+  // Compresses every entry; the progress bridge takes the GIL back itself
+  Py_BEGIN_ALLOW_THREADS
+  ret = zip_close(writer->archive);
+  Py_END_ALLOW_THREADS
   int abort_code = writer->abort_code;
 
   // A failed zip_close leaves the archive open, so it is discarded here
@@ -335,6 +339,7 @@ typedef struct {
   zip_int64_t current_index;
   zip_file_t *current_file;
   const char *input_path;
+  unsigned char data[CODEC_CHUNK]; // For entry data
 } ZipReader;
 
 static void *zip_create_reader(const char *input_path) {
@@ -430,6 +435,7 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
 
   // Open the file at current_index - 1 (already incremented)
   zip_int64_t idx = reader->current_index - 1;
+  unsigned char *buffer = reader->data;
 
   zip_file_t *zf = zip_fopen_index(reader->archive, idx, 0);
   if (!zf) {
@@ -438,7 +444,6 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
     return -1;
   }
 
-  char buffer[65536];
   zip_int64_t bytes_read;
   uint64_t total = 0;
   int over_limit = 0;
@@ -446,7 +451,7 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
 
   Py_BEGIN_ALLOW_THREADS
 
-  while ((bytes_read = zip_fread(zf, buffer, sizeof(buffer))) > 0) {
+  while ((bytes_read = zip_fread(zf, buffer, CODEC_CHUNK)) > 0) {
     // Cap is applied to the bytes produced rather than to the declared size
     if ((uint64_t)bytes_read > max_bytes - total) {
       over_limit = 1;

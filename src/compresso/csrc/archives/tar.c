@@ -41,9 +41,12 @@ static void set_tar_error(struct archive *a, const char *what, const char *path,
 
 // ---- TAR Writer ----
 
+#define TAR_BLOCK (1024 * 1024)
+
 typedef struct {
   struct archive *archive;
   const char *output_path;
+  unsigned char data[CODEC_CHUNK]; // For entry data
 } TarWriter;
 
 static TarWriter *tar_writer_new(const char *output_path) {
@@ -60,6 +63,7 @@ static TarWriter *tar_writer_new(const char *output_path) {
   }
 
   archive_write_set_format_pax_restricted(writer->archive);
+  archive_write_set_bytes_per_block(writer->archive, TAR_BLOCK);
   writer->output_path = output_path;
   return writer;
 }
@@ -152,8 +156,11 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
     break;
   }
 
-  // Write header
-  int r = archive_write_header(writer->archive, ae);
+  // A header that fills libarchive's block flushes it through any codec
+  int r;
+  Py_BEGIN_ALLOW_THREADS
+  r = archive_write_header(writer->archive, ae);
+  Py_END_ALLOW_THREADS
   if (r != ARCHIVE_OK) {
     set_tar_error(writer->archive, "Failed to write header",
                   writer->output_path, 0);
@@ -163,16 +170,15 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
 
   // Write data for files
   if (entry->type == ENTRY_FILE && data) {
-    char buffer[65536];
     size_t bytes_read;
 
     int advance = 0;
 
     Py_BEGIN_ALLOW_THREADS
 
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), data)) > 0) {
+    while ((bytes_read = fread(writer->data, 1, CODEC_CHUNK, data)) > 0) {
       la_ssize_t bytes_written =
-          archive_write_data(writer->archive, buffer, bytes_read);
+          archive_write_data(writer->archive, writer->data, bytes_read);
       if (bytes_written < 0) {
         Py_BLOCK_THREADS
         set_tar_error(writer->archive, "Failed to write data",
@@ -219,7 +225,11 @@ static int tar_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
     return 0;
   }
 
-  int r = archive_write_close(writer->archive);
+  // Flushes the last block through any codec
+  int r;
+  Py_BEGIN_ALLOW_THREADS
+  r = archive_write_close(writer->archive);
+  Py_END_ALLOW_THREADS
   if (r != ARCHIVE_OK) {
     set_tar_error(writer->archive, "Failed to close archive",
                   writer->output_path, 0);
@@ -240,8 +250,9 @@ typedef struct {
   struct archive *archive;
   struct archive_entry *current_entry;
   const char *input_path;
-  CodecStream *stream;  // Not owned; NULL without a codec stage
-  unsigned char *block; // libarchive's read buffer
+  CodecStream *stream;             // Not owned; NULL without a codec stage
+  unsigned char *block;            // libarchive's read buffer
+  unsigned char data[CODEC_CHUNK]; // For entry data
 } TarReader;
 
 // Prefers the stream's own failure (e.g. COMP_CANCELLED), raised when it is
@@ -300,8 +311,8 @@ static void *tar_create_reader(const char *input_path) {
   if (!reader) {
     return NULL;
   }
-  return tar_reader_opened(
-      reader, archive_read_open_filename(reader->archive, input_path, 10240));
+  return tar_reader_opened(reader, archive_read_open_filename(
+                                       reader->archive, input_path, TAR_BLOCK));
 }
 
 static la_ssize_t tar_codec_read(struct archive *a, void *reader_ptr,
@@ -428,7 +439,6 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
     return -1;
   }
 
-  char buffer[65536];
   // la_ssize_t, not ssize_t: see the note in tar_add_entry
   la_ssize_t bytes_read;
   uint64_t total = 0;
@@ -437,15 +447,15 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
 
   Py_BEGIN_ALLOW_THREADS
 
-  while ((bytes_read =
-              archive_read_data(reader->archive, buffer, sizeof(buffer))) > 0) {
+  while ((bytes_read = archive_read_data(reader->archive, reader->data,
+                                         CODEC_CHUNK)) > 0) {
     // Cap is applied to the bytes produced rather than to the declared size
     if ((uint64_t)bytes_read > max_bytes - total) {
       over_limit = 1;
       break;
     }
 
-    size_t written = fwrite(buffer, 1, bytes_read, output);
+    size_t written = fwrite(reader->data, 1, bytes_read, output);
     if (written != (size_t)bytes_read || ferror(output)) {
       Py_BLOCK_THREADS
       PyErr_SetFromErrno(PyExc_OSError);

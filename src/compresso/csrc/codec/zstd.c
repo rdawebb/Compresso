@@ -43,6 +43,32 @@ static int zstd_begin(void *state, const CodecParams *params, int decompress,
     return -1;
   }
 
+  // Any worker count writes the same bytes, but 0 writes others; a libzstd
+  // built without threads has an upper bound of 0
+  ZSTD_bounds workers = ZSTD_cParam_getBounds(ZSTD_c_nbWorkers);
+  if (!ZSTD_isError(workers.error) && workers.upperBound > 0) {
+    uint32_t n = codec_threads(params);
+    if (n > (uint32_t)workers.upperBound) {
+      n = (uint32_t)workers.upperBound;
+    }
+    if (ZSTD_isError(
+            ZSTD_CCtx_setParameter(s->cctx, ZSTD_c_nbWorkers, (int)n))) {
+      return -1;
+    }
+  }
+
+  // 1 is ZSTD_ps_enable, which zstd.h only declares for static linking
+  if (params->max_ratio &&
+      ZSTD_isError(ZSTD_CCtx_setParameter(
+          s->cctx, ZSTD_c_enableLongDistanceMatching, 1))) {
+    return -1;
+  }
+
+  if (params->exact_size &&
+      ZSTD_isError(ZSTD_CCtx_setPledgedSrcSize(s->cctx, params->orig_size))) {
+    return -1;
+  }
+
   return 0;
 }
 

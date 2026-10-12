@@ -5,10 +5,14 @@
 #include <stdio.h>
 #include <string.h>
 
+// At the HC levels the output depends on how the input is split across
+// LZ4F_compressUpdate calls, so it is fed a fixed amount whatever CODEC_CHUNK is
+#define LZ4_FEED 65536
+
 // LZ4F_compressUpdate needs room for every block a call completes: with the
 // default 64 KB blocks, at most one per 64 KB of input, each with a 4-byte
 // header, which this covers
-#define LZ4_OUT_CHUNK (CODEC_CHUNK + CODEC_CHUNK / 255 + 16)
+#define LZ4_OUT_CHUNK (LZ4_FEED + LZ4_FEED / 255 + 16)
 
 typedef struct {
   LZ4F_compressionContext_t cctx;
@@ -86,15 +90,16 @@ static int lz4_process(void *state, CodecBuf *buf, int finish) {
   }
 
   if (buf->avail_in > 0) {
+    size_t feed = buf->avail_in < LZ4_FEED ? buf->avail_in : LZ4_FEED;
     size_t n = LZ4F_compressUpdate(s->cctx, buf->next_out, buf->avail_out,
-                                   buf->next_in, buf->avail_in, NULL);
+                                   buf->next_in, feed, NULL);
     if (LZ4F_isError(n)) {
       s->code = n;
       return CODEC_ERR;
     }
 
-    buf->next_in += buf->avail_in;
-    buf->avail_in = 0;
+    buf->next_in += feed;
+    buf->avail_in -= feed;
     buf->next_out += n;
     buf->avail_out -= n;
     return CODEC_MORE;

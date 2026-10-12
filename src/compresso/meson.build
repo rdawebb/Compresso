@@ -24,6 +24,7 @@ py.extension_module('_core',
     # Archive backends
     'csrc/archives/tar.c',
     'csrc/archives/zip.c',
+    'csrc/archives/walk.c',
   ),
   dependencies: deps,
   subdir: 'compresso',

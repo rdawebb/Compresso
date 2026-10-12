@@ -14,7 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TEST_INPUT FIXTURE_DIR "/alice29.txt"
+// alice29.txt repeated past two chunks, so a run refills the driver's buffer
+#define TEST_INPUT "tmp_codec_driver.big"
 #define TMP_OUT "tmp_codec_driver.out"
 #define TMP_IN "tmp_codec_driver.in"
 
@@ -185,6 +186,20 @@ static int record_progress(CoreContext *ctx, uint64_t done, uint64_t total) {
 
 static CoreContext ctx;
 
+static void write_test_input(void) {
+  static char text[200000];
+  FILE *in = fopen(FIXTURE_DIR "/alice29.txt", "rb");
+  FILE *out = fopen(TEST_INPUT, "wb");
+  TEST_ASSERT_NOT_NULL(in);
+  TEST_ASSERT_NOT_NULL(out);
+  size_t n = fread(text, 1, sizeof(text), in);
+  for (size_t written = 0; written <= 2 * CODEC_CHUNK; written += n) {
+    TEST_ASSERT_EQUAL_size_t(n, fwrite(text, 1, n, out));
+  }
+  fclose(in);
+  fclose(out);
+}
+
 void setUp(void) {
   if (!Py_IsInitialized()) {
     Py_Initialize();
@@ -203,6 +218,7 @@ void setUp(void) {
   memset(&ctx, 0, sizeof(ctx));
   ctx.on_progress = record_progress;
   ctx.cancel_flag = &cancel_flag;
+  write_test_input();
 
   PyErr_Clear();
 }
@@ -212,6 +228,7 @@ void tearDown(void) {
   PyRun_SimpleString("import warnings; warnings.resetwarnings()");
   remove(TMP_OUT);
   remove(TMP_IN);
+  remove(TEST_INPUT);
 }
 
 // Runs the driver over `input_path` with `level` selecting the stub's mode
@@ -244,7 +261,6 @@ static int run_stub_stream(int level, const char *input_path) {
 // ---- Copying ----
 
 void test_driver_copies_a_multi_chunk_stream(void) {
-  // alice29.txt is 152 KB, so the driver refills its 64 KB buffer twice
   TEST_ASSERT_EQUAL_INT(0, run_stub(STUB_COPY, TEST_INPUT));
   TEST_ASSERT_TRUE(files_equal(TEST_INPUT, TMP_OUT));
   TEST_ASSERT_EQUAL_INT(1, stub_end_calls);
@@ -537,7 +553,7 @@ void test_writer_hands_the_engine_whole_chunks(void) {
 
   TEST_ASSERT_EQUAL_INT(0, close_writer(s, 0, sink));
   TEST_ASSERT_TRUE(files_equal(TEST_INPUT, TMP_OUT));
-  // lz4's output bound assumes at most a chunk per call
+  // Never more than a chunk at a time
   TEST_ASSERT_EQUAL_size_t(CODEC_CHUNK, stub_max_in);
 }
 

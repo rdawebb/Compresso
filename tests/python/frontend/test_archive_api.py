@@ -1490,7 +1490,8 @@ class TestArchiveEntryMetadata:
     """Test what `plan_extraction` reports about each entry."""
 
     @pytest.fixture(scope="class")
-    def archived(self, tmp_path_factory: pytest.TempPathFactory) -> ArchivedTree:
+    @classmethod
+    def archived(cls, tmp_path_factory: pytest.TempPathFactory) -> ArchivedTree:
         """Archive a small tree once per format, and plan each extraction.
 
         Shared by the whole class, so tests must only read it.
