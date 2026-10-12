@@ -313,6 +313,15 @@ class TestListArchiveContentsArgs:
             _core.list_archive_contents(str(temp_dir / "a.tar"), bogus=1)  # type: ignore[call-arg]  # ty:ignore[unknown-argument]
 
 
+class TestDetectFormat:
+    """Test detect_format's handling of a path it cannot read."""
+
+    def test_missing_file_raises(self, temp_dir: Path) -> None:
+        """Test that a missing file is reported as such, not as "unknown"."""
+        with pytest.raises(FileNotFoundError):
+            _core.detect_format(temp_dir / "missing.gz")
+
+
 class TestPathArguments:
     """Test how the entry points convert filesystem paths."""
 

@@ -21,20 +21,6 @@ static Format detect_format_from_stream(FILE *f, const char *path) {
   return desc ? desc->id : FORMAT_UNKNOWN;
 }
 
-Format detect_format_from_path(const char *path) {
-  if (!path) {
-    return FORMAT_UNKNOWN;
-  }
-
-  FILE *f = fs_fopen(path, "rb");
-  if (!f) {
-    return FORMAT_UNKNOWN;
-  }
-  Format format = detect_format_from_stream(f, path);
-  fclose(f);
-  return format;
-}
-
 FILE *open_source(const char *path, Format *format) {
   FILE *f = fs_fopen(path, "rb");
   if (!f) {

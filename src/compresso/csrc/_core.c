@@ -275,55 +275,37 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
     return NULL; // Error already set
   }
 
-  const char *src_path = PyBytes_AS_STRING(src_path_bytes);
-  const char *dst_path = PyBytes_AS_STRING(dst_path_bytes);
-
-  if (validate_overwrite_arg(overwrite_existing) != 0) {
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
-  }
-
-  CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
-  }
-
   AlgoID algo = algo_from_string(algo_name);
   Strategy strat;
+  CoreContext ctx;
+  int result = -1;
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    goto done;
+  }
 
   if (algo_name && algo_name[0] != '\0' && algo == ALGO_NONE) {
     PyErr_Format(PyExc_ValueError, "Unknown compression algorithm: %s",
                  algo_name);
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
+    goto done;
   }
 
-  if (parse_strategy(strategy_name, &strat) != 0) {
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
-  }
-
-  if (validate_compression_request(algo, strat, level, NULL) != 0) {
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
+  if (parse_strategy(strategy_name, &strat) != 0 ||
+      validate_compression_request(algo, strat, level, NULL) != 0 ||
+      core_context_init(&ctx, progress, cancel, threads) != 0) {
+    goto done;
   }
 
   char actual_path[FS_PATH_MAX];
-  int return_code =
-      compress_file(src_path, dst_path, algo, strat, level, overwrite_existing,
-                    actual_path, sizeof(actual_path), &ctx);
+  result = compress_file(PyBytes_AS_STRING(src_path_bytes),
+                         PyBytes_AS_STRING(dst_path_bytes), algo, strat, level,
+                         overwrite_existing, actual_path, sizeof(actual_path),
+                         &ctx);
 
+done:
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
-
-  if (return_code != 0) {
-    set_cancelled_error(return_code);
+  if (result != 0) {
+    set_cancelled_error(result);
     return NULL; // Error already set
   }
 
@@ -355,42 +337,34 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
     return NULL; // Error already set
   }
 
-  const char *src_path = PyBytes_AS_STRING(src_path_bytes);
-  const char *dst_path = PyBytes_AS_STRING(dst_path_bytes);
-
-  if (validate_overwrite_arg(overwrite_existing) != 0) {
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
-  }
-
-  CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
-  }
-
   AlgoID algo = algo_from_string(algo_name);
+  CoreContext ctx;
+  int result = -1;
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    goto done;
+  }
 
   if (algo_name && algo_name[0] != '\0' && algo == ALGO_NONE) {
     PyErr_Format(PyExc_ValueError, "Unknown decompression algorithm: %s",
                  algo_name);
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
+    goto done;
+  }
+
+  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
+    goto done;
   }
 
   char actual_path[FS_PATH_MAX];
-  int return_code =
-      decompress_file(src_path, dst_path, algo, overwrite_existing, actual_path,
-                      sizeof(actual_path), &ctx);
+  result = decompress_file(PyBytes_AS_STRING(src_path_bytes),
+                           PyBytes_AS_STRING(dst_path_bytes), algo,
+                           overwrite_existing, actual_path, sizeof(actual_path),
+                           &ctx);
 
+done:
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
-
-  if (return_code != 0) {
-    set_cancelled_error(return_code);
+  if (result != 0) {
+    set_cancelled_error(result);
     return NULL; // Error already set
   }
 
@@ -640,8 +614,7 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
   CoreContext ctx;
   char actual_path[FS_PATH_MAX];
   int rc = -1;
-  if (validate_overwrite_arg(overwrite_existing) != 0 ||
-      core_context_init(&ctx, progress, cancel, threads) != 0) {
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
     goto done;
   }
 
@@ -659,7 +632,8 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
     goto done;
   }
 
-  if (validate_level(fmt->name, fmt->levels, compression_level) != 0) {
+  if (validate_level(fmt->name, fmt->levels, compression_level) != 0 ||
+      core_context_init(&ctx, progress, cancel, threads) != 0) {
     goto done;
   }
 
@@ -712,53 +686,64 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
   }
 
   const char *input_path = PyBytes_AS_STRING(input_path_bytes);
+  const FormatDesc *named = NULL;
   CoreContext ctx;
-  if (validate_overwrite_arg(overwrite_existing) != 0 ||
-      core_context_init(&ctx, progress, cancel, threads) != 0) {
-    goto fail;
+  char actual_path[FS_PATH_MAX];
+  int rc = -1;
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    goto done;
+  }
+
+  if (format_name) {
+    named = format_by_name(format_name);
+    if (!named) {
+      PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
+      goto done;
+    }
+  }
+
+  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
+    goto done;
   }
 
   src = open_source(input_path, &format);
   if (!src) {
-    goto fail;
+    goto done;
   }
 
-  if (format_name) {
-    const FormatDesc *desc = format_by_name(format_name);
-    if (!desc) {
-      PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
-      goto fail;
-    }
-    format = desc->id;
+  if (named) {
+    format = named->id;
   } else if (format == FORMAT_UNKNOWN) {
     PyErr_Format(PyExc_ValueError, "Could not detect format for: %s",
                  input_path);
-    goto fail;
+    goto done;
   }
 
   const FormatDesc *fmt = find_standalone_format(format);
-
   if (!fmt) {
     PyErr_Format(PyExc_ValueError, "Format cannot decompress a single file: %s",
                  format_by_id(format)->name);
-    goto fail;
+    goto done;
   }
 
-  char actual_path[FS_PATH_MAX];
   OutputTarget out = {.path = PyBytes_AS_STRING(output_path_bytes),
                       .overwrite = overwrite_existing,
                       .actual = actual_path,
                       .actual_size = sizeof(actual_path),
                       .keep_source_metadata = 1};
-  int rc = standalone_decompress(fmt, input_path, src, &out, &ctx);
-  src = NULL;
-  if (rc != 0) {
-    set_cancelled_error(rc);
-    goto fail; // Error already set
-  }
+  rc = standalone_decompress(fmt, input_path, src, &out, &ctx);
+  src = NULL; // Closed by standalone_decompress
 
+done:
+  if (src) {
+    fclose(src);
+  }
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
+  if (rc != 0) {
+    set_cancelled_error(rc);
+    return NULL; // Error already set
+  }
 
   if (ctx_finish(&ctx) != 0) {
     return NULL;
@@ -766,14 +751,6 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
 
   // The path actually written, which RENAME may have changed vs asked for
   return PyUnicode_DecodeFSDefault(actual_path);
-
-fail:
-  if (src) {
-    fclose(src);
-  }
-  Py_DECREF(input_path_bytes);
-  Py_DECREF(output_path_bytes);
-  return NULL;
 }
 
 // ---- Format Detection Methods ----
@@ -786,8 +763,15 @@ static PyObject *py_detect_format(PyObject *self UNUSED, PyObject *args) {
   }
 
   const char *file_path = PyBytes_AS_STRING(file_path_bytes);
-  CompressionPipeline pipe =
-      pipeline_from_format(detect_format_from_path(file_path), file_path);
+  Format format;
+  FILE *f = open_source(file_path, &format);
+  if (!f) {
+    Py_DECREF(file_path_bytes);
+    return NULL;
+  }
+  fclose(f);
+
+  CompressionPipeline pipe = pipeline_from_format(format, file_path);
   char name[32];
   pipeline_display_name(&pipe, name, sizeof(name));
 
