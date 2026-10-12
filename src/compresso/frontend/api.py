@@ -368,7 +368,7 @@ def plan_decompression(
     # Decided from the file's magic bytes rather than its name, so a renamed
     # archive is still recognised correctly
     try:
-        detected: str = detect_format(str(object=src_path))
+        detected: str = detect_format(src_path)
 
     except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
         return plan(None, False, f"Cannot read file: {e}")
@@ -474,8 +474,8 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
                 # A standalone container has no Compresso header to record the
                 # algorithm in, so the format itself is the codec
                 actual_path = compress_standalone(
-                    input_path=str(object=self.plan.src),
-                    output_path=str(object=self.plan.dest),
+                    input_path=self.plan.src,
+                    output_path=self.plan.dest,
                     format=standalone,
                     compression_level=lvl,
                     overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
@@ -486,8 +486,8 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
 
             else:
                 actual_path = compress_file(
-                    src_path=str(object=self.plan.src),
-                    dst_path=str(object=self.plan.dest),
+                    src_path=self.plan.src,
+                    dst_path=self.plan.dest,
                     algo=self.plan.backend_name or "",
                     strategy=self.plan.options.strategy or "",
                     level=lvl,
@@ -598,8 +598,8 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
                 # The format came from the file's magic bytes, so pass it on
                 # rather than letting the C layer re-guess from the extension
                 actual_path = decompress_standalone(
-                    input_path=str(object=self.plan.src),
-                    output_path=str(object=self.plan.dest),
+                    input_path=self.plan.src,
+                    output_path=self.plan.dest,
                     format=self.plan.format,
                     overwrite=_OVERWRITE_CODES[self.plan.overwrite],
                     threads=self.plan.threads,
@@ -609,8 +609,8 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
 
             else:
                 actual_path = decompress_file(
-                    src_path=str(object=self.plan.src),
-                    dst_path=str(object=self.plan.dest),
+                    src_path=self.plan.src,
+                    dst_path=self.plan.dest,
                     algo="",
                     overwrite=_OVERWRITE_CODES[self.plan.overwrite],
                     threads=self.plan.threads,

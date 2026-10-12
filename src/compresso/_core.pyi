@@ -3,6 +3,8 @@
 from collections.abc import Callable, Sequence
 from typing import Literal, NotRequired, TypeAlias, TypedDict
 
+from _typeshed import StrOrBytesPath
+
 class Error(Exception):
     """Base error for compression operations."""
 
@@ -55,8 +57,8 @@ ProgressFn: TypeAlias = Callable[[int, int], None]
 # `threads=`: worker threads for zstd and xz/lzma, 0 (default) for one per core
 
 def compress_file(
-    src_path: str,
-    dst_path: str,
+    src_path: StrOrBytesPath,
+    dst_path: StrOrBytesPath,
     algo: str,
     strategy: str,
     level: int,
@@ -76,8 +78,8 @@ def compress_file(
     """
 
 def decompress_file(
-    src_path: str,
-    dst_path: str,
+    src_path: StrOrBytesPath,
+    dst_path: StrOrBytesPath,
     algo: str,
     *,
     overwrite: int = ...,
@@ -136,9 +138,9 @@ def get_default_backend_for_strategy(strategy: str) -> str:
     """Get the default backend for the given strategy."""
 
 def create_archive(
-    output_path: str,
+    output_path: StrOrBytesPath,
     format: str,
-    input_paths: list[str],
+    input_paths: Sequence[StrOrBytesPath],
     compression_level: int = ...,
     *,
     overwrite: int = ...,
@@ -156,8 +158,8 @@ def create_archive(
     """
 
 def extract_archive(
-    archive_path: str,
-    output_dir: str,
+    archive_path: StrOrBytesPath,
+    output_dir: StrOrBytesPath,
     files: Sequence[str],
     *,
     overwrite: int = ...,
@@ -186,7 +188,7 @@ def extract_archive(
     setuid/setgid/sticky are dropped and the umask applies.
     """
 
-def detect_format(file_path: str) -> str:
+def detect_format(file_path: StrOrBytesPath) -> str:
     """Name a file's format, from its magic bytes and then its extension."""
 
 def format_is_archive(format: str) -> bool:
@@ -216,12 +218,12 @@ class ArchiveEntryDict(TypedDict):
     crc: NotRequired[int]
     method: NotRequired[int]
 
-def list_archive_contents(archive_path: str) -> list[ArchiveEntryDict]:
+def list_archive_contents(archive_path: StrOrBytesPath) -> list[ArchiveEntryDict]:
     """Describe each entry in an archive."""
 
 def compress_standalone(
-    input_path: str,
-    output_path: str,
+    input_path: StrOrBytesPath,
+    output_path: StrOrBytesPath,
     format: str,
     compression_level: int = ...,
     *,
@@ -240,8 +242,8 @@ def compress_standalone(
     """
 
 def decompress_standalone(
-    input_path: str,
-    output_path: str,
+    input_path: StrOrBytesPath,
+    output_path: StrOrBytesPath,
     format: str = ...,
     *,
     overwrite: int = ...,

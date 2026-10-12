@@ -392,7 +392,7 @@ def plan_extraction(
                 crc=raw.get("crc"),
                 method=raw.get("method"),
             )
-            for raw in list_archive_contents(str(archive_path))
+            for raw in list_archive_contents(archive_path)
         ]
 
     except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
@@ -479,9 +479,9 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
         total: int = self.plan.total_input_size
         try:
             actual_path = create_archive(
-                str(self.plan.output),
+                self.plan.output,
                 self.plan.options.format,
-                [str(s) for s in self.plan.sources],
+                self.plan.sources,
                 to_core_level(self.plan.options.compression_level),
                 overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
                 threads=self.plan.options.threads,
@@ -576,8 +576,8 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
             options = self.plan.options
             self.plan.output_dir.mkdir(parents=True, exist_ok=True)
             extract_archive(
-                str(self.plan.archive),
-                str(self.plan.output_dir),
+                self.plan.archive,
+                self.plan.output_dir,
                 self.plan.files or [],
                 overwrite=_OVERWRITE_CODES[options.overwrite],
                 max_total_size=options.max_total_size,

@@ -68,7 +68,7 @@ def looks_like_archive(path: Path) -> bool:
         True if the path looks like an archive, False otherwise.
     """
     try:
-        return bool(format_is_archive(detect_format(str(object=path))))
+        return bool(format_is_archive(detect_format(path)))
 
     except Exception:
         return False

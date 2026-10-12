@@ -149,9 +149,7 @@ def _archive_many(
     options = ArchiveOptions(
         format=fmt.lower(), compression_level=level, overwrite=overwrite
     )
-    job = ArchiveJob.from_paths(
-        sources=[str(object=s) for s in sources], output=destination, options=options
-    )
+    job = ArchiveJob.from_paths(sources=sources, output=destination, options=options)
     plan = job.plan
 
     if not plan.can_run:

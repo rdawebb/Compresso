@@ -313,6 +313,56 @@ class TestListArchiveContentsArgs:
             _core.list_archive_contents(str(temp_dir / "a.tar"), bogus=1)  # type: ignore[call-arg]  # ty:ignore[unknown-argument]
 
 
+class TestPathArguments:
+    """Test how the entry points convert filesystem paths."""
+
+    def test_path_like_round_trip(self, sample_text_file: Path, temp_dir: Path) -> None:
+        """Test that Path and bytes paths work, and input_paths takes any sequence."""
+        archive = temp_dir / "out.tar"
+
+        _core.create_archive(archive, "tar", (sample_text_file,))
+        listed = _core.list_archive_contents(os.fsencode(archive))
+        _core.extract_archive(archive, temp_dir / "out", [])
+
+        assert [e["path"] for e in listed] == [sample_text_file.name]
+        assert (temp_dir / "out" / sample_text_file.name).read_bytes() == (
+            sample_text_file.read_bytes()
+        )
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda src, dst: _core.compress_file(src, dst + "\0x", "zstd", "", -1),
+            lambda src, dst: _core.compress_standalone(src, dst + "\0x", "gzip"),
+            lambda src, dst: _core.create_archive(dst + "\0x", "tar", [src]),
+            lambda src, dst: _core.create_archive(dst, "tar", [src + "\0x"]),
+        ],
+        ids=["compress_file", "compress_standalone", "archive_output", "archive_input"],
+    )
+    def test_embedded_nul_is_refused(
+        self,
+        sample_text_file: Path,
+        temp_dir: Path,
+        call: Callable[[str, str], object],
+    ) -> None:
+        """Test that a NUL raises rather than truncating the path."""
+        dst = str(temp_dir / "out")
+
+        with pytest.raises(ValueError, match="null"):
+            call(str(sample_text_file), dst)
+
+        assert not os.path.exists(dst)
+
+    def test_bare_path_as_input_paths_is_refused(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that a path passed bare isn't read as a path per character."""
+        with pytest.raises(TypeError, match="sequence of paths"):
+            _core.create_archive(
+                str(temp_dir / "out.tar"), "tar", str(sample_text_file)
+            )
+
+
 class TestExtractArchiveFilesArg:
     """Test the validation of extract_archive's `files` selection."""
 
