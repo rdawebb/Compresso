@@ -6,8 +6,8 @@ Usage:
     python bench/run.py --compare build/bench/base.json --formats tar.zst,zip
 
 Default is every format, 100 MB. Each perf change records a baseline with
-`--save` before it and reports `--compare` after it. Numbers are only comparable
-on the same machine.
+`--save` before it and reports `--compare` after it; numbers are only comparable
+on the same machine, and between runs with the same `--cool`.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import random
 import shutil
 import time
@@ -120,6 +121,44 @@ def build_corpus(size_mb: int) -> tuple[Path, Path]:
     return mixed, tree
 
 
+def timed(call: Callable[[], object], cool: float) -> float:
+    """Time one call, then settle the machine before the next.
+
+    What the call wrote is flushed to disk, untimed, so the write-back doesn't
+    land in the next call's timing; then it rests for `cool` times as long as
+    the call took, so a machine that throttles when hot doesn't time the next
+    call at whatever heat this one left.
+
+    Args:
+        call: The operation to time.
+        cool: Rest per second of work; 0 skips resting.
+
+    Returns:
+        The call's duration in seconds.
+    """
+    start = time.perf_counter()
+    call()
+    elapsed = time.perf_counter() - start
+    if hasattr(os, "sync"):  # Not on Windows
+        os.sync()
+    time.sleep(elapsed * cool)
+
+    return elapsed
+
+
+def remove(path: Path) -> None:
+    """Delete a file or directory left by an earlier run, if any.
+
+    Args:
+        path: The path to delete.
+    """
+    if path.is_dir():
+        shutil.rmtree(path)
+
+    else:
+        path.unlink(missing_ok=True)
+
+
 def time_pair(
     name: str,
     size: int,
@@ -128,6 +167,7 @@ def time_pair(
     packed: Path,
     unpacked: Path,
     repeats: int,
+    cool: float,
 ) -> BenchmarkResult:
     """Time one format's compress and decompress, keeping the fastest run.
 
@@ -139,6 +179,7 @@ def time_pair(
         packed: The compressed output.
         unpacked: The decompressed output, a file or a directory.
         repeats: Runs per side; the minimum is least disturbed by other load.
+        cool: Rest after each timed call, per second it took.
 
     Returns:
         The result, with the fastest compress and decompress times.
@@ -146,24 +187,16 @@ def time_pair(
     comp_times: list[float] = []
     decomp_times: list[float] = []
     for _ in range(repeats):
+        # Outside the timing, so replacing a previous output isn't counted
         packed.unlink(missing_ok=True)
-        start = time.perf_counter()
-        compress()
-        comp_times.append(time.perf_counter() - start)
+        comp_times.append(timed(compress, cool))
 
-        if unpacked.is_dir():
-            shutil.rmtree(unpacked)
-        start = time.perf_counter()
-        decompress()
-        decomp_times.append(time.perf_counter() - start)
+        remove(unpacked)
+        decomp_times.append(timed(decompress, cool))
 
     compressed_size = packed.stat().st_size
     packed.unlink()
-
-    if unpacked.is_dir():
-        shutil.rmtree(unpacked)
-    else:
-        unpacked.unlink()
+    remove(unpacked)
 
     return BenchmarkResult(
         algo=name,
@@ -176,13 +209,16 @@ def time_pair(
     )
 
 
-def run(formats: list[str], size_mb: int, repeats: int) -> list[BenchmarkResult]:
+def run(
+    formats: list[str], size_mb: int, repeats: int, cool: float
+) -> list[BenchmarkResult]:
     """Benchmark each format on the corpus at its default level.
 
     Args:
         formats: `comp:<algo>`, standalone and archive format names.
         size_mb: Corpus size in MB.
         repeats: Runs per format.
+        cool: Rest after each timed call, per second it took.
 
     Returns:
         One result per format, in the order given.
@@ -225,7 +261,9 @@ def run(formats: list[str], size_mb: int, repeats: int) -> list[BenchmarkResult]
                 overwrite=2,
             )
 
-        result = time_pair(fmt, size, compress, decompress, packed, unpacked, repeats)
+        result = time_pair(
+            fmt, size, compress, decompress, packed, unpacked, repeats, cool
+        )
         print(f"{fmt:<12} {result.comp_mb_s:8.1f} / {result.decomp_mb_s:8.1f} MB/s")
         results.append(result)
 
@@ -277,11 +315,17 @@ def main() -> None:
     )
     parser.add_argument("--size-mb", type=int, default=100)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--cool",
+        type=float,
+        default=1.0,
+        help="rest after each timed call, per second it took; 0 to skip",
+    )
     parser.add_argument("--save", type=Path, help="write the results as JSON")
     parser.add_argument("--compare", type=Path, help="a --save file to diff against")
     args = parser.parse_args()
 
-    results = run(args.formats.split(","), args.size_mb, args.repeats)
+    results = run(args.formats.split(","), args.size_mb, args.repeats, args.cool)
     print_results(results)
 
     if args.compare:

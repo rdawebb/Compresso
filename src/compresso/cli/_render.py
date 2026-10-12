@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import NoReturn
 
@@ -110,7 +110,7 @@ def exit_for_result(result: JobResult, what: str) -> None:
 @contextmanager
 def progress_bar(
     label: str, total: int, *, enabled: bool
-) -> Iterator[ProgressCallback | None]:
+) -> Generator[ProgressCallback | None]:
     """Yield a progress callback that draws a bar, or None.
 
     Args:
