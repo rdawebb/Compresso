@@ -2,12 +2,12 @@
 #define COMMON_H
 
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "archives.h"
 #include "codec/codec.h"
 #include "context.h"
 #include "fsutil.h"
 #include "levels.h"
-#include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>

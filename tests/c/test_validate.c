@@ -1,8 +1,8 @@
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "archives.h"
 #include "unity.h"
 #include "validate.h"
-#include <Python.h>
 
 void setUp(void) {
   if (!Py_IsInitialized()) {

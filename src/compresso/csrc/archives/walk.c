@@ -1,6 +1,6 @@
 #define PY_SSIZE_T_CLEAN
-#include "walk.h"
 #include <Python.h>
+#include "walk.h"
 #include <stdlib.h>
 #include <string.h>
 

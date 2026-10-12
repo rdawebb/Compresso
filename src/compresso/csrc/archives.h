@@ -2,10 +2,10 @@
 #define ARCHIVE_H
 
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "context.h"
 #include "formats.h"
 #include "levels.h"
-#include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>

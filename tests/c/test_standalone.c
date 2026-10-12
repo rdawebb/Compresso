@@ -1,6 +1,7 @@
 // Makes Unity define TEST_RANGE; the runner generator expands each one
 #define UNITY_SUPPORT_TEST_CASES
 
+#include <Python.h>
 #include "codec/crc32c.h"
 #include "common.h"
 #include "files.h"

@@ -1,9 +1,9 @@
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "archives.h"
 #include "common.h"
 #include "fsutil.h"
 #include "standalone.h"
-#include <Python.h>
 #include <string.h>
 
 static int decompress_compresso_file(const char *src_path, FILE *src,

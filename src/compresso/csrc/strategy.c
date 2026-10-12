@@ -1,6 +1,6 @@
 #define PY_SSIZE_T_CLEAN
-#include "common.h"
 #include <Python.h>
+#include "common.h"
 #include <string.h>
 
 // ---- Backend Strategy ----

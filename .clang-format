@@ -8,3 +8,11 @@ StatementMacros:
   - Py_UNBLOCK_THREADS
   - PyObject_HEAD
   - PyObject_VAR_HEAD
+# Python.h sets feature-test macros, so it must precede every system header
+IncludeCategories:
+  - Regex: '^<Python\.h>$'
+    Priority: -1
+  - Regex: '^"'
+    Priority: 1
+  - Regex: ".*"
+    Priority: 2

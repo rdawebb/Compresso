@@ -1,8 +1,8 @@
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "codec.h"
 #include "../common.h"
 #include "../fsutil.h"
-#include <Python.h>
 #include <lzma.h>
 #include <stdlib.h>
 #include <string.h>

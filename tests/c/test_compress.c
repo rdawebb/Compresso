@@ -4,6 +4,7 @@
 #define UNITY_SUPPORT_TEST_CASES
 
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "codec/codec.h"
 #include "codec/crc32c.h"
 #include "common.h"
@@ -11,7 +12,6 @@
 #include "fsutil.h"
 #include "test_stubs.h"
 #include "unity.h"
-#include <Python.h>
 #include <stdio.h>
 #include <string.h>
 

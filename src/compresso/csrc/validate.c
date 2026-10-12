@@ -1,7 +1,7 @@
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "validate.h"
 #include "standalone.h"
-#include <Python.h>
 
 // -1 selects each backend's default, and is accepted by all of them
 #define LEVEL_DEFAULT (-1)

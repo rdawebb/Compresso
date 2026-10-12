@@ -1,10 +1,10 @@
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "codec/crc32c.h"
 #include "common.h"
 #include "fsutil.h"
 #include "standalone.h"
 #include "validate.h"
-#include <Python.h>
 
 // Error Objects
 PyObject *comp_Error;

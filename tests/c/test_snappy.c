@@ -1,6 +1,7 @@
 // Each malformed stream below differs from a valid one in a single way, so a
 // CorruptDataError can only come from what each test checks
 
+#include <Python.h>
 #include "codec/codec.h"
 #include "codec/crc32c.h"
 #include "common.h"

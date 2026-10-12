@@ -1,10 +1,10 @@
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "archives.h"
 #include "archives/walk.h"
 #include "common.h"
 #include "fsutil.h"
 #include "standalone.h"
-#include <Python.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>

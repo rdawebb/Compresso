@@ -1,9 +1,9 @@
 // Test-harness definitions for symbols that live in _core.c and archives/
 
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "test_stubs.h"
 #include "archives.h"
-#include <Python.h>
 
 PyObject *comp_Error = NULL;
 PyObject *comp_HeaderError = NULL;

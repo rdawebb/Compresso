@@ -1,7 +1,7 @@
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "standalone.h"
 #include "common.h"
-#include <Python.h>
 #include <stdio.h>
 #include <string.h>
 

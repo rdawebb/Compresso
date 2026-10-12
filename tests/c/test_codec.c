@@ -4,6 +4,7 @@
 // For fopencookie
 #define _GNU_SOURCE
 
+#include <Python.h>
 #include "codec/codec.h"
 #include "common.h"
 #include "files.h"

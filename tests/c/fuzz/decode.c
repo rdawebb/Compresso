@@ -1,10 +1,10 @@
 // libFuzzer target for one standalone decoder, chosen by FORMAT
 
 #define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include "codec/crc32c.h"
 #include "standalone.h"
 #include "test_stubs.h"
-#include <Python.h>
 #include <stdint.h>
 #include <stdio.h>
 
