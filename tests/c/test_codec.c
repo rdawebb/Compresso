@@ -170,7 +170,7 @@ typedef struct {
 } ProgressLog;
 
 static ProgressLog progress_log;
-static volatile int cancel_flag;
+static COMPRESSO_ATOMIC_INT cancel_flag;
 
 static int record_progress(CoreContext *ctx, uint64_t done, uint64_t total) {
   (void)ctx;

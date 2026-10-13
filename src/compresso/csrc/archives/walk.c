@@ -121,6 +121,16 @@ int walk_sources(const char **input_paths, size_t num_paths,
                source_prefix_len(input_paths[i]));
 
   while (ret == 0 && pending.count > 0) {
+    // The walk reports no progress, so polls for itself; holds the GIL
+    if (ctx_cancelled(ctx)) {
+      ret = COMP_CANCELLED;
+      break;
+    }
+    if (PyErr_CheckSignals() != 0) {
+      ret = -1;
+      break;
+    }
+
     WalkItem item = pending.items[--pending.count];
     if (fs_stat_path(item.path, &item.st) != 0) {
       PyErr_SetFromErrnoWithFilename(PyExc_OSError, item.path);

@@ -181,6 +181,22 @@ class TestArchiveCancellation:
 
         assert not output.exists()
 
+    def test_cancel_lands_during_the_walk(
+        self, temp_dir: Path, archive_format: tuple[str, str]
+    ) -> None:
+        """Test that a cancel lands while walking a tree with no file data."""
+        fmt, ext = archive_format
+        source = temp_dir / "dirs"
+        (source / "a" / "b").mkdir(parents=True)
+        output = temp_dir / f"never{ext}"
+        token = CancelToken()
+        token.cancel()
+
+        with pytest.raises(Cancelled):
+            create_archive(str(output), fmt, [str(source)], cancel=token)
+
+        assert not output.exists()
+
     def test_cancel_during_extraction(
         self, source_tree: Path, temp_dir: Path, archive_format: tuple[str, str]
     ) -> None:

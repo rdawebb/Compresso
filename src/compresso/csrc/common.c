@@ -76,6 +76,10 @@ void ctx_begin_stage(CoreContext *ctx, uint64_t total) {
       interval > CTX_MIN_INTERVAL ? interval : CTX_MIN_INTERVAL;
 }
 
+int ctx_cancelled(const CoreContext *ctx) {
+  return ctx && ctx->cancel_flag && comp_atomic_load(ctx->cancel_flag);
+}
+
 // Shared tail of ctx_advance and ctx_set_position: done_bytes is already up to
 // date, so check for cancellation and decide whether to report
 static int ctx_check(CoreContext *ctx) {
@@ -85,7 +89,7 @@ static int ctx_check(CoreContext *ctx) {
   }
 
   // Checked every chunk, so cancellation lands within one chunk
-  if (ctx->cancel_flag && *ctx->cancel_flag) {
+  if (ctx_cancelled(ctx)) {
     return COMP_CANCELLED;
   }
 

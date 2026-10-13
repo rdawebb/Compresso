@@ -11,18 +11,17 @@
 // A cancellation flag the C loops can poll without holding the GIL
 typedef struct {
   PyObject_HEAD
-  // One-way and a single machine word
-  volatile int flag;
+  COMPRESSO_ATOMIC_INT flag; // One-way
 } CancelTokenObject;
 
 static PyObject *cancel_token_cancel(PyObject *self, PyObject *ignored UNUSED) {
-  ((CancelTokenObject *)self)->flag = 1;
+  comp_atomic_store(&((CancelTokenObject *)self)->flag, 1);
   Py_RETURN_NONE;
 }
 
 static PyObject *cancel_token_get_cancelled(PyObject *self,
                                             void *closure UNUSED) {
-  return PyBool_FromLong(((CancelTokenObject *)self)->flag);
+  return PyBool_FromLong(comp_atomic_load(&((CancelTokenObject *)self)->flag));
 }
 
 static PyMethodDef cancel_token_methods[] = {
