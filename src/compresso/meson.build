@@ -4,7 +4,7 @@ py.extension_module('_core',
   files(
     'csrc/_core.c',
     'csrc/common.c',
-    'csrc/compress.c',
+    'csrc/comp_format.c',
     'csrc/pipeline.c',
     'csrc/formats.c',
     'csrc/standalone.c',

@@ -289,6 +289,24 @@ class TestDecompressFile:
             assert message is None
             assert output.read_bytes() == b"payload"
 
+    @pytest.mark.parametrize(("algo", "refused"), [("zstd", True), ("zlib", False)])
+    def test_algo_is_checked_against_a_comp_header(
+        self, small_file: Path, temp_dir: Path, algo: str, refused: bool
+    ) -> None:
+        """Test that an explicit algo must match the one a .comp header records."""
+        compressed = temp_dir / "data.comp"
+        compress_file(small_file, compressed, "zlib", "balanced", 6)
+        output = temp_dir / "data"
+
+        message = _value_error(lambda: decompress_file(compressed, output, algo))
+
+        if refused:
+            assert message == "File was compressed with zlib, not the requested zstd"
+            assert not output.exists()
+        else:
+            assert message is None
+            assert output.read_bytes() == small_file.read_bytes()
+
 
 class TestStandaloneErrors:
     """Test refusing a format the single-file entry points cannot use.
