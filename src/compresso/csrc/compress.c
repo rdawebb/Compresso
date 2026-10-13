@@ -118,6 +118,15 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
 
   const FormatDesc *standalone = find_standalone_format(format);
   if (standalone) {
+    // By engine, so "zlib" accepts gzip and "lzma" accepts xz
+    const CBackend *requested = find_backend_by_id(algo);
+    if (requested && requested->engine != standalone->engine) {
+      fclose(src);
+      PyErr_Format(PyExc_ValueError,
+                   "File was compressed with %s, not the requested %s",
+                   standalone->name, requested->name);
+      return -1;
+    }
     return standalone_decompress(standalone, src_path, src, &out, ctx);
   }
   if (format == FORMAT_COMPRESSO) {

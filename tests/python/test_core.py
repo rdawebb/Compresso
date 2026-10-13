@@ -271,6 +271,24 @@ class TestDecompressFile:
 
         assert decompressed_file.read_text(encoding="utf-8") == content
 
+    @pytest.mark.parametrize(("algo", "refused"), [("zstd", True), ("zlib", False)])
+    def test_algo_is_checked_against_a_container(
+        self, temp_dir: Path, algo: str, refused: bool
+    ) -> None:
+        """Test that an explicit algo must match a gzip file's engine."""
+        source = temp_dir / "data.gz"
+        source.write_bytes(gzip.compress(b"payload"))
+        output = temp_dir / "data"
+
+        message = _value_error(lambda: decompress_file(source, output, algo))
+
+        if refused:
+            assert message == "File was compressed with gzip, not the requested zstd"
+            assert not output.exists()
+        else:
+            assert message is None
+            assert output.read_bytes() == b"payload"
+
 
 class TestStandaloneErrors:
     """Test refusing a format the single-file entry points cannot use.
