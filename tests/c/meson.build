@@ -128,7 +128,7 @@ suites = {
   'test_crc32c.c': 'codec',
   'test_snappy.c': 'codec',
   'test_backends.c': 'compression',
-  'test_compress.c': 'compression',
+  'test_comp_format.c': 'compression',
   'test_standalone.c': 'standalone',
 }
 

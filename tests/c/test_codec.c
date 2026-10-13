@@ -385,30 +385,6 @@ static int run_members(const char *input, int concatenated) {
                         &ctx, "stub run failed");
 }
 
-// Whether the pending exception's message contains `needle`; leaves it set
-static int error_says(const char *needle) {
-#if PY_VERSION_HEX >= 0x030C0000
-  PyObject *exc = PyErr_GetRaisedException();
-#else
-  PyObject *type, *exc, *tb;
-  PyErr_Fetch(&type, &exc, &tb);
-  PyErr_NormalizeException(&type, &exc, &tb);
-#endif
-  if (!exc) {
-    return 0;
-  }
-  PyObject *text = PyObject_Str(exc);
-  const char *message = text ? PyUnicode_AsUTF8(text) : NULL;
-  int found = message && strstr(message, needle) != NULL;
-  Py_XDECREF(text);
-#if PY_VERSION_HEX >= 0x030C0000
-  PyErr_SetRaisedException(exc);
-#else
-  PyErr_Restore(type, exc, tb);
-#endif
-  return found;
-}
-
 static int output_is(const char *expected) {
   write_file(TMP_IN, expected);
   return files_equal(TMP_IN, TMP_OUT);

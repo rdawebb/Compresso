@@ -4,6 +4,7 @@
 #include <Python.h>
 #include "test_stubs.h"
 #include "archives.h"
+#include <string.h>
 
 const CompErrors *test_errors(void) {
   static CompErrors errors;
@@ -30,6 +31,29 @@ CoreContext *test_ctx(void) {
   static CoreContext ctx;
   ctx = (CoreContext){.errors = test_errors()};
   return &ctx;
+}
+
+int error_says(const char *needle) {
+#if PY_VERSION_HEX >= 0x030C0000
+  PyObject *exc = PyErr_GetRaisedException();
+#else
+  PyObject *type, *exc, *tb;
+  PyErr_Fetch(&type, &exc, &tb);
+  PyErr_NormalizeException(&type, &exc, &tb);
+#endif
+  if (!exc) {
+    return 0;
+  }
+  PyObject *text = PyObject_Str(exc);
+  const char *message = text ? PyUnicode_AsUTF8(text) : NULL;
+  int found = message && strstr(message, needle) != NULL;
+  Py_XDECREF(text);
+#if PY_VERSION_HEX >= 0x030C0000
+  PyErr_SetRaisedException(exc);
+#else
+  PyErr_Restore(type, exc, tb);
+#endif
+  return found;
 }
 
 // archives/{tar,zip}.c need libarchive/libzip, so the format table points at

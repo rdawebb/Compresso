@@ -12,4 +12,7 @@ const CompErrors *test_errors(void);
 // can fail
 CoreContext *test_ctx(void);
 
+// Whether the pending exception's message contains `needle`; leaves it set
+int error_says(const char *needle);
+
 #endif // TEST_STUBS_H
