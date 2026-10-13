@@ -51,6 +51,7 @@ deps = [
 
 csrc = '../../src/compresso/csrc'
 inc = include_directories('support', 'unity', csrc)
+fsutil_platform = host_machine.system() == 'windows' ? 'fsutil_win32.c' : 'fsutil_posix.c'
 
 unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 
@@ -65,6 +66,7 @@ under_test = static_library('under_test',
   csrc / 'formats.c',
   csrc / 'standalone.c',
   csrc / 'fsutil.c',
+  csrc / fsutil_platform,
   csrc / 'pipeline.c',
   csrc / 'registry.c',
   csrc / 'strategy.c',
