@@ -445,7 +445,7 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
     return -1;
   }
 
-  // la_ssize_t, not ssize_t: see the note in tar_add_entry
+  // la_ssize_t, not ssize_t, which MSVC lacks
   la_ssize_t bytes_read;
   uint64_t total = 0;
   int over_limit = 0;
