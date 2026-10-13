@@ -1,6 +1,7 @@
 """Tests for the core compression/decompression functionality."""
 
 import gzip
+import importlib.util
 import io
 import logging
 import lzma
@@ -64,6 +65,21 @@ class TestCoreExceptions:
     def test_corrupt_data_is_not_a_backend_error(self) -> None:
         """Test that bad input is told apart from a backend failure."""
         assert not issubclass(CorruptDataError, BackendError)
+
+    def test_each_module_raises_its_own(self, temp_dir: Path) -> None:
+        """Test that a second _core module object raises its own classes."""
+        spec = importlib.util.find_spec("compresso._core")
+        assert spec and spec.loader
+        fresh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fresh)
+        assert fresh.Cancelled is not Cancelled
+
+        source = temp_dir / "input.txt"
+        source.write_bytes(b"data")
+        token = fresh.CancelToken()
+        token.cancel()
+        with pytest.raises(fresh.Cancelled):
+            fresh.compress_file(source, temp_dir / "out.comp", cancel=token)
 
 
 class TestCapabilities:

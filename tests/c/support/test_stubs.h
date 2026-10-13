@@ -3,8 +3,13 @@
 #ifndef TEST_STUBS_H
 #define TEST_STUBS_H
 
-// Creates the comp_* exception objects, with _core.c's hierarchy, on first
-// call; they start NULL, which PyErr_SetString can't take as a type
-void ensure_comp_exceptions(void);
+#include "common.h"
+
+// _core.c's exception classes, with its hierarchy, created on first call
+const CompErrors *test_errors(void);
+
+// A context holding only test_errors(), reset on each call, for a call that
+// can fail
+CoreContext *test_ctx(void);
 
 #endif // TEST_STUBS_H

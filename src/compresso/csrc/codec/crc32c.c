@@ -46,7 +46,9 @@ static uint32_t update_table(uint32_t crc, const unsigned char *p, size_t n) {
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((target("sse4.2")))
 #endif
-static uint32_t update_sse42(uint32_t crc, const unsigned char *p, size_t n) {
+
+static uint32_t
+update_sse42(uint32_t crc, const unsigned char *p, size_t n) {
   uint64_t crc64 = crc;
   for (; n >= 8; p += 8, n -= 8) {
     uint64_t word;
@@ -84,6 +86,10 @@ static uint32_t update_arm(uint32_t crc, const unsigned char *p, size_t n) {
 #endif
 
 void crc32c_init(void) {
+  // Each import of the module runs this again, possibly while another thread
+  // is mid-crc32c
+  if (update)
+    return;
   for (uint32_t b = 0; b < 256; b++) {
     uint32_t crc = b;
     for (int bit = 0; bit < 8; bit++)

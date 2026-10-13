@@ -1,4 +1,5 @@
 #include "backend_io.h"
+#include "test_stubs.h"
 #include "unity.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,8 +61,9 @@ static int run_stream(const CBackend *backend, int decompress,
   }
   rewind(src);
 
-  int rc = decompress ? backend_decompress(backend, src, dst, orig_size, NULL)
-                      : backend_compress(backend, src, dst, level, 0, NULL);
+  int rc = decompress
+               ? backend_decompress(backend, src, dst, orig_size, test_ctx())
+               : backend_compress(backend, src, dst, level, 0, test_ctx());
 
   if (rc == 0) {
     *output = drain(dst, output_size);

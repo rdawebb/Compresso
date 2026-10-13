@@ -6,15 +6,6 @@
 #include "standalone.h"
 #include "validate.h"
 
-// Error Objects
-PyObject *comp_Error;
-PyObject *comp_HeaderError;
-PyObject *comp_BackendError;
-PyObject *comp_CorruptDataError;
-PyObject *comp_ExtractionPolicyError;
-PyObject *comp_Cancelled;
-PyObject *comp_TrailingDataWarning;
-
 // ---- Cancel Token ----
 
 // A cancellation flag the C loops can poll without holding the GIL
@@ -130,14 +121,16 @@ static void log_bridge(CoreContext *ctx, int level, const char *message) {
   PyGILState_Release(gstate);
 }
 
-// Populates `ctx` from the optional progress=, cancel= and threads= arguments;
-// returns -1 with an exception set if one is invalid
+// Populates `ctx` from `module`'s exceptions and optional progress=, cancel=
+// and threads= arguments; returns -1 with an exception set if one is invalid
 //
 // The bridge is installed even without progress= or cancel=, since it is also
 // where PyErr_CheckSignals runs
-static int core_context_init(CoreContext *ctx, PyObject *progress,
-                             PyObject *cancel, int threads) {
+static int core_context_init(CoreContext *ctx, PyObject *module,
+                             PyObject *progress, PyObject *cancel,
+                             int threads) {
   memset(ctx, 0, sizeof(*ctx));
+  ctx->errors = PyModule_GetState(module);
 
   if (threads < 0) {
     PyErr_Format(PyExc_ValueError,
@@ -169,9 +162,10 @@ static int core_context_init(CoreContext *ctx, PyObject *progress,
 
 // Call only on a non-zero return; an exception already raised by the callback
 // or a signal handler is more specific
-static void set_cancelled_error(int return_code) {
+static void set_cancelled_error(PyObject *module, int return_code) {
   if (return_code == COMP_CANCELLED && !PyErr_Occurred()) {
-    PyErr_SetString(comp_Cancelled, "Operation cancelled");
+    const CompErrors *errors = PyModule_GetState(module);
+    PyErr_SetString(errors->cancelled, "Operation cancelled");
   }
 }
 
@@ -251,7 +245,7 @@ static int parse_strategy(const char *name, Strategy *out) {
 
 // ---- Module Methods ----
 
-static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_compress_file(PyObject *self, PyObject *args,
                                   PyObject *kwargs) {
   static char *kwlist[] = {"src_path", "dst_path",  "algo",    "strategy",
                            "level",    "overwrite", "threads", "progress",
@@ -291,21 +285,21 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
 
   if (parse_strategy(strategy_name, &strat) != 0 ||
       validate_compression_request(algo, strat, level, NULL) != 0 ||
-      core_context_init(&ctx, progress, cancel, threads) != 0) {
+      core_context_init(&ctx, self, progress, cancel, threads) != 0) {
     goto done;
   }
 
   char actual_path[FS_PATH_MAX];
-  result = compress_file(PyBytes_AS_STRING(src_path_bytes),
-                         PyBytes_AS_STRING(dst_path_bytes), algo, strat, level,
-                         overwrite_existing, actual_path, sizeof(actual_path),
-                         &ctx);
+  result =
+      compress_file(PyBytes_AS_STRING(src_path_bytes),
+                    PyBytes_AS_STRING(dst_path_bytes), algo, strat, level,
+                    overwrite_existing, actual_path, sizeof(actual_path), &ctx);
 
 done:
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
   if (result != 0) {
-    set_cancelled_error(result);
+    set_cancelled_error(self, result);
     return NULL; // Error already set
   }
 
@@ -317,7 +311,7 @@ done:
   return PyUnicode_DecodeFSDefault(actual_path);
 }
 
-static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_decompress_file(PyObject *self, PyObject *args,
                                     PyObject *kwargs) {
   static char *kwlist[] = {"src_path", "dst_path", "algo",   "overwrite",
                            "threads",  "progress", "cancel", NULL};
@@ -350,21 +344,20 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
     goto done;
   }
 
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
+  if (core_context_init(&ctx, self, progress, cancel, threads) != 0) {
     goto done;
   }
 
   char actual_path[FS_PATH_MAX];
-  result = decompress_file(PyBytes_AS_STRING(src_path_bytes),
-                           PyBytes_AS_STRING(dst_path_bytes), algo,
-                           overwrite_existing, actual_path, sizeof(actual_path),
-                           &ctx);
+  result = decompress_file(
+      PyBytes_AS_STRING(src_path_bytes), PyBytes_AS_STRING(dst_path_bytes),
+      algo, overwrite_existing, actual_path, sizeof(actual_path), &ctx);
 
 done:
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
   if (result != 0) {
-    set_cancelled_error(result);
+    set_cancelled_error(self, result);
     return NULL; // Error already set
   }
 
@@ -378,7 +371,7 @@ done:
 
 // ---- Archive Operations ----
 
-static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_create_archive(PyObject *self, PyObject *args,
                                    PyObject *kwargs) {
   static char *kwlist[] = {"output_path",       "format",    "input_paths",
                            "compression_level", "overwrite", "threads",
@@ -415,7 +408,7 @@ static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
 
   if (validate_compression_request(ALGO_NONE, STRAT_BALANCED, compression_level,
                                    &pipe) != 0 ||
-      core_context_init(&ctx, progress, cancel, threads) != 0) {
+      core_context_init(&ctx, self, progress, cancel, threads) != 0) {
     goto done;
   }
 
@@ -428,7 +421,7 @@ done:
   Py_DECREF(output_path_bytes);
   path_list_converter(NULL, &inputs);
   if (result != 0) {
-    set_cancelled_error(result);
+    set_cancelled_error(self, result);
     return NULL; // Error already set
   }
 
@@ -441,7 +434,7 @@ done:
   return PyUnicode_DecodeFSDefault(actual_path);
 }
 
-static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_extract_archive(PyObject *self, PyObject *args,
                                     PyObject *kwargs) {
   static char *kwlist[] = {"archive_path",
                            "output_dir",
@@ -542,7 +535,7 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
     }
   }
 
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
+  if (core_context_init(&ctx, self, progress, cancel, threads) != 0) {
     goto done;
   }
 
@@ -556,7 +549,7 @@ done:
   free(files);
   Py_XDECREF(files_tuple);
   if (result != 0) {
-    set_cancelled_error(result);
+    set_cancelled_error(self, result);
     return NULL; // Error already set
   }
 
@@ -567,8 +560,7 @@ done:
   Py_RETURN_NONE;
 }
 
-static PyObject *py_list_archive_contents(PyObject *self UNUSED,
-                                          PyObject *args) {
+static PyObject *py_list_archive_contents(PyObject *self, PyObject *args) {
   PyObject *archive_path_bytes = NULL;
 
   if (!PyArg_ParseTuple(args, "O&", PyUnicode_FSConverter,
@@ -578,7 +570,7 @@ static PyObject *py_list_archive_contents(PyObject *self UNUSED,
 
   // No progress to report, but the bridge still logs and checks for signals
   CoreContext ctx;
-  core_context_init(&ctx, NULL, NULL, 0);
+  core_context_init(&ctx, self, NULL, NULL, 0);
 
   PyObject *file_list =
       list_archive_contents(PyBytes_AS_STRING(archive_path_bytes), &ctx);
@@ -588,7 +580,7 @@ static PyObject *py_list_archive_contents(PyObject *self UNUSED,
 
 // ---- Standalone Methods ----
 
-static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_compress_standalone(PyObject *self, PyObject *args,
                                         PyObject *kwargs) {
   static char *kwlist[] = {"input_path",        "output_path", "format",
                            "compression_level", "overwrite",   "threads",
@@ -633,7 +625,7 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
   }
 
   if (validate_level(fmt->name, fmt->levels, compression_level) != 0 ||
-      core_context_init(&ctx, progress, cancel, threads) != 0) {
+      core_context_init(&ctx, self, progress, cancel, threads) != 0) {
     goto done;
   }
 
@@ -649,7 +641,7 @@ done:
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
   if (rc != 0) {
-    set_cancelled_error(rc);
+    set_cancelled_error(self, rc);
     return NULL; // Error already set
   }
 
@@ -662,7 +654,7 @@ done:
   return PyUnicode_DecodeFSDefault(actual_path);
 }
 
-static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_decompress_standalone(PyObject *self, PyObject *args,
                                           PyObject *kwargs) {
   static char *kwlist[] = {"input_path", "output_path", "format", "overwrite",
                            "threads",    "progress",    "cancel", NULL};
@@ -702,7 +694,7 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
     }
   }
 
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
+  if (core_context_init(&ctx, self, progress, cancel, threads) != 0) {
     goto done;
   }
 
@@ -741,7 +733,7 @@ done:
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
   if (rc != 0) {
-    set_cancelled_error(rc);
+    set_cancelled_error(self, rc);
     return NULL; // Error already set
   }
 
@@ -923,67 +915,90 @@ static PyMethodDef CoreMethods[] = {
     {NULL, NULL, 0, NULL} // Sentinel
 };
 
-static struct PyModuleDef coremodule = {
-    PyModuleDef_HEAD_INIT,
-    "_core",
-    "Compresso core extension",
-    -1,
-    CoreMethods,
-    NULL, // m_slots
-    NULL, // m_traverse
-    NULL, // m_clear
-    NULL  // m_free
-};
-
 // ---- Module Initialisation ----
 
-PyMODINIT_FUNC PyInit__core(void) {
+static int core_exec(PyObject *module) {
   crc32c_init();
 
-  PyObject *module = PyModule_Create(&coremodule);
-  if (module == NULL) {
-    return NULL;
-  }
-
   // Built at run time: on Windows, &PyExc_UserWarning isn't a constant
-  // expression; each base must precede the exceptions derived from it.
+  // expression; each base must precede the exceptions derived from it;
+  // failure leaves the rest to core_free
+  CompErrors *errors = PyModule_GetState(module);
   const struct {
     PyObject **slot;
     const char *name;
     PyObject **base;
   } exceptions[] = {
-      {&comp_Error, "compresso.Error", NULL},
-      {&comp_HeaderError, "compresso.HeaderError", &comp_Error},
-      {&comp_BackendError, "compresso.BackendError", &comp_Error},
-      {&comp_Cancelled, "compresso.Cancelled", &comp_Error},
-      {&comp_CorruptDataError, "compresso.CorruptDataError", &comp_Error},
-      {&comp_ExtractionPolicyError, "compresso.ExtractionPolicyError",
-       &comp_Error},
-      {&comp_TrailingDataWarning, "compresso.TrailingDataWarning",
+      {&errors->error, "compresso.Error", NULL},
+      {&errors->header, "compresso.HeaderError", &errors->error},
+      {&errors->backend, "compresso.BackendError", &errors->error},
+      {&errors->cancelled, "compresso.Cancelled", &errors->error},
+      {&errors->corrupt_data, "compresso.CorruptDataError", &errors->error},
+      {&errors->extraction_policy, "compresso.ExtractionPolicyError",
+       &errors->error},
+      {&errors->trailing_data_warning, "compresso.TrailingDataWarning",
        &PyExc_UserWarning},
   };
-  const size_t n_exceptions = sizeof exceptions / sizeof exceptions[0];
 
-  for (size_t i = 0; i < n_exceptions; i++) {
+  for (size_t i = 0; i < sizeof exceptions / sizeof exceptions[0]; i++) {
     PyObject *base = exceptions[i].base ? *exceptions[i].base : NULL;
     *exceptions[i].slot = PyErr_NewException(exceptions[i].name, base, NULL);
     if (*exceptions[i].slot == NULL ||
         PyModule_AddObjectRef(module, strrchr(exceptions[i].name, '.') + 1,
                               *exceptions[i].slot) < 0) {
-      goto fail;
+      return -1;
     }
   }
 
-  if (PyModule_AddType(module, &CancelTokenType) < 0) {
-    goto fail;
-  }
-
-  return module;
-
-fail:
-  for (size_t i = 0; i < n_exceptions; i++) {
-    Py_CLEAR(*exceptions[i].slot);
-  }
-  Py_DECREF(module);
-  return NULL;
+  return PyModule_AddType(module, &CancelTokenType);
 }
+
+static int core_traverse(PyObject *module, visitproc visit, void *arg) {
+  CompErrors *errors = PyModule_GetState(module);
+  Py_VISIT(errors->error);
+  Py_VISIT(errors->header);
+  Py_VISIT(errors->backend);
+  Py_VISIT(errors->corrupt_data);
+  Py_VISIT(errors->extraction_policy);
+  Py_VISIT(errors->cancelled);
+  Py_VISIT(errors->trailing_data_warning);
+  return 0;
+}
+
+static int core_clear(PyObject *module) {
+  CompErrors *errors = PyModule_GetState(module);
+  Py_CLEAR(errors->error);
+  Py_CLEAR(errors->header);
+  Py_CLEAR(errors->backend);
+  Py_CLEAR(errors->corrupt_data);
+  Py_CLEAR(errors->extraction_policy);
+  Py_CLEAR(errors->cancelled);
+  Py_CLEAR(errors->trailing_data_warning);
+  return 0;
+}
+
+static void core_free(void *module) { core_clear((PyObject *)module); }
+
+static PyModuleDef_Slot core_slots[] = {
+    {Py_mod_exec, core_exec},
+#if PY_VERSION_HEX >= 0x030C0000
+    // Progress and log bridges take the GIL through PyGILState, which only
+    // knows the main interpreter
+    {Py_mod_multiple_interpreters, Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED},
+#endif
+    {0, NULL},
+};
+
+static struct PyModuleDef coremodule = {
+    PyModuleDef_HEAD_INIT,
+    .m_name = "_core",
+    .m_doc = "Compresso core extension",
+    .m_size = sizeof(CompErrors),
+    .m_methods = CoreMethods,
+    .m_slots = core_slots,
+    .m_traverse = core_traverse,
+    .m_clear = core_clear,
+    .m_free = core_free,
+};
+
+PyMODINIT_FUNC PyInit__core(void) { return PyModuleDef_Init(&coremodule); }

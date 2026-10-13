@@ -18,9 +18,15 @@ enum { CTX_LOG_DEBUG = 10, CTX_LOG_INFO = 20, CTX_LOG_WARNING = 30 };
 #define CTX_PRINTF(fmt, args)
 #endif
 
-// Per-call progress and cancellation state; every field is optional, and a
-// NULL CoreContext behaves as no context
+// The module's exception classes, defined in common.h
+typedef struct CompErrors CompErrors;
+
+// Per-call state: the exception classes a failure raises, and optional progress
+// and cancellation; a NULL CoreContext reports nothing and can raise none of
+// compresso's own exceptions
 typedef struct CoreContext {
+  const CompErrors *errors; // Set by the _core.c bridge
+
   // Owned by a Python CancelToken, which outlives this stack-local context and
   // may be cancelled from another thread; NULL = uncancellable
   volatile int *cancel_flag;

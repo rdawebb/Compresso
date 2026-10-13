@@ -18,7 +18,6 @@ int LLVMFuzzerInitialize(int *argc, char ***argv) {
   (void)argc;
   (void)argv;
   Py_Initialize();
-  ensure_comp_exceptions();
   crc32c_init();
   // Each TrailingDataWarning names a different offset, so none would repeat
   PyRun_SimpleString("import warnings; warnings.simplefilter('ignore')");
@@ -36,7 +35,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     return 0;
   }
   const FormatDesc *fmt = find_standalone_format(FORMAT);
-  codec_run_stream(fmt->engine(), &fmt->dec, 1, src, sink, NULL);
+  codec_run_stream(fmt->engine(), &fmt->dec, 1, src, sink, test_ctx());
   fclose(src);
   PyErr_Clear();
   return 0;

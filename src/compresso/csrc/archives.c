@@ -282,7 +282,8 @@ static int existing_ancestor_is_contained(const char *resolved_root,
 }
 
 // Ensure `dir` exists and is inside the extraction root, creating it if needed
-static int prepare_output_dir(const char *resolved_root, const char *dir,
+static int prepare_output_dir(const CompErrors *errors,
+                              const char *resolved_root, const char *dir,
                               uint32_t mode, const char *entry_path,
                               Changes *changes) {
   int contained = dir_is_contained(resolved_root, dir);
@@ -293,7 +294,7 @@ static int prepare_output_dir(const char *resolved_root, const char *dir,
     size_t existing_len;
     if (existing_ancestor_is_contained(resolved_root, dir, &existing_len) !=
         1) {
-      PyErr_Format(comp_ExtractionPolicyError,
+      PyErr_Format(errors->extraction_policy,
                    "Path traversal detected in entry: %s", entry_path);
       return -1;
     }
@@ -313,7 +314,7 @@ static int prepare_output_dir(const char *resolved_root, const char *dir,
   }
 
   if (contained != 1) {
-    PyErr_Format(comp_ExtractionPolicyError,
+    PyErr_Format(errors->extraction_policy,
                  "Path traversal detected in entry: %s", entry_path);
     return -1;
   }
@@ -321,25 +322,26 @@ static int prepare_output_dir(const char *resolved_root, const char *dir,
   return 0;
 }
 
-static int validate_entry_path(const char *output_dir,
+static int validate_entry_path(const CompErrors *errors,
+                               const char *output_dir,
                                const char *resolved_root,
                                const char *entry_path, uint32_t depth,
                                const ExtractionPolicy *policy) {
   if (fs_is_absolute(entry_path)) {
-    PyErr_Format(comp_ExtractionPolicyError,
+    PyErr_Format(errors->extraction_policy,
                  "Archive entry has an absolute path: %s", entry_path);
     return -1;
   }
 
   if (fs_is_stream_path(entry_path)) {
-    PyErr_Format(comp_ExtractionPolicyError,
+    PyErr_Format(errors->extraction_policy,
                  "Archive entry names an alternate data stream: %s",
                  entry_path);
     return -1;
   }
 
   if (policy->max_depth > 0 && depth > policy->max_depth) {
-    PyErr_Format(comp_ExtractionPolicyError,
+    PyErr_Format(errors->extraction_policy,
                  "Archive entry exceeds max depth (%u): %s", policy->max_depth,
                  entry_path);
     return -1;
@@ -372,7 +374,7 @@ static int validate_entry_path(const char *output_dir,
     *last_sep = saved_sep;
 
   if (traversal) {
-    PyErr_Format(comp_ExtractionPolicyError,
+    PyErr_Format(errors->extraction_policy,
                  "Path traversal detected in entry: %s", entry_path);
     return -1;
   }
@@ -382,7 +384,8 @@ static int validate_entry_path(const char *output_dir,
 
 // A hardlink's target names another entry, so it gets the same checks as an
 // entry's own path; anything else has no target to check
-static int validate_link_target(const char *output_dir,
+static int validate_link_target(const CompErrors *errors,
+                                const char *output_dir,
                                 const char *resolved_root,
                                 const ArchiveEntry *entry, const char *target,
                                 const ExtractionPolicy *policy) {
@@ -390,20 +393,21 @@ static int validate_link_target(const char *output_dir,
     return 0;
 
   if (!target || !*target) {
-    PyErr_Format(comp_ExtractionPolicyError, "Hardlink has no target: %s",
+    PyErr_Format(errors->extraction_policy, "Hardlink has no target: %s",
                  entry->path);
     return -1;
   }
 
-  return validate_entry_path(output_dir, resolved_root, target,
+  return validate_entry_path(errors, output_dir, resolved_root, target,
                              path_depth(target), policy);
 }
 
-static int check_entry_policy(const ArchiveEntry *entry,
+static int check_entry_policy(const CompErrors *errors,
+                              const ArchiveEntry *entry,
                               const ExtractionPolicy *policy) {
   if (entry->type == ENTRY_SYMLINK) {
     if (!policy->allow_symlinks) {
-      PyErr_Format(comp_ExtractionPolicyError,
+      PyErr_Format(errors->extraction_policy,
                    "Archive contains symlink, but policy denies it: %s",
                    entry->path);
       return -1;
@@ -417,7 +421,7 @@ static int check_entry_policy(const ArchiveEntry *entry,
   }
 
   if (entry->type == ENTRY_SPECIAL) {
-    PyErr_Format(comp_ExtractionPolicyError,
+    PyErr_Format(errors->extraction_policy,
                  "Archive contains special file, but policy denies it: %s",
                  entry->path);
     return -1;
@@ -442,7 +446,8 @@ static int entry_is_selected(const ArchiveEntry *entry, const char **files,
 
 // The backend for a pipeline's container, so a recognised format without a
 // backend (e.g. 7z) is identified
-static const CArchive *archive_for_pipeline(const CompressionPipeline *p) {
+static const CArchive *archive_for_pipeline(const CompErrors *errors,
+                                            const CompressionPipeline *p) {
   const CArchive *archive = find_archive_by_id(p->archive);
   if (archive)
     return archive;
@@ -451,7 +456,7 @@ static const CArchive *archive_for_pipeline(const CompressionPipeline *p) {
                                    .codec = FORMAT_UNKNOWN};
   char name[32];
   pipeline_display_name(&container, name, sizeof(name));
-  PyErr_Format(comp_BackendError,
+  PyErr_Format(errors->backend,
                "%s archives are recognised but not supported yet", name);
   return NULL;
 }
@@ -516,7 +521,7 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
 
   int level = pipeline->compression_level;
 
-  const CArchive *archive = archive_for_pipeline(pipeline);
+  const CArchive *archive = archive_for_pipeline(ctx->errors, pipeline);
   if (!archive)
     return -1;
 
@@ -534,23 +539,24 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   if (!tmp)
     return -1;
 
-  // A codec compresses the tar as libarchive writes it
+  // A codec compresses the tar as libarchive writes it; its context only
+  // raises, as progress counts the source bytes, which add_entry reports
   const FormatDesc *fmt = NULL;
   CodecStream *stream = NULL;
+  CoreContext stream_ctx = {.errors = ctx->errors};
   void *writer = NULL;
   if (pipeline->codec != FORMAT_UNKNOWN) {
     fmt = find_standalone_format(pipeline->codec);
     CodecParams params = fmt->enc;
     params.level = level;
-    params.threads = ctx ? ctx->threads : 0;
-    // No context: progress counts the source bytes, which add_entry reports
-    stream = codec_writer_open(fmt->engine(), &params, tmp, NULL);
+    params.threads = ctx->threads;
+    stream = codec_writer_open(fmt->engine(), &params, tmp, &stream_ctx);
     if (stream)
-      writer = archive->create_codec_writer(stream, output_path);
+      writer = archive->create_codec_writer(stream, output_path, ctx);
   } else {
     fclose(tmp);
     tmp = NULL;
-    writer = archive->create_writer(tmp_path, level);
+    writer = archive->create_writer(tmp_path, level, ctx);
   }
   if (!writer) {
     if (stream)
@@ -599,7 +605,7 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
 
   char failure[64];
   snprintf(failure, sizeof(failure), "%s compression failed", fmt->name);
-  return output_finish(ret, NULL, tmp, tmp_path, &out, failure);
+  return output_finish(ret, NULL, tmp, tmp_path, &out, ctx->errors, failure);
 }
 
 // Walk every entry without writing anything, so an archive holding a refused
@@ -632,11 +638,11 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
       continue;
     }
 
-    if (validate_entry_path(output_dir, resolved_root, entry.path,
+    if (validate_entry_path(ctx->errors, output_dir, resolved_root, entry.path,
                             path_depth(entry.path), policy) != 0 ||
-        validate_link_target(output_dir, resolved_root, &entry,
+        validate_link_target(ctx->errors, output_dir, resolved_root, &entry,
                              entry.link_target, policy) != 0 ||
-        check_entry_policy(&entry, policy) != 0) {
+        check_entry_policy(ctx->errors, &entry, policy) != 0) {
       entry_reset(&entry);
       return -1;
     }
@@ -647,7 +653,7 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
       declared_total += entry.type == ENTRY_FILE ? entry.size : 0;
       if (policy->max_total_size > 0 &&
           declared_total > policy->max_total_size) {
-        PyErr_Format(comp_ExtractionPolicyError,
+        PyErr_Format(ctx->errors->extraction_policy,
                      "Archive exceeds the maximum extracted size (%llu bytes)",
                      (unsigned long long)policy->max_total_size);
         entry_reset(&entry);
@@ -914,7 +920,8 @@ static int rename_conflicting_dir(const char *output_dir, const char *out_path,
 
 // Links `out_path` to the already-extracted `target`, applying the overwrite
 // mode as for a file; returns 0, or -1 with an exception set
-static int extract_hardlink(const char *resolved_root, const char *output_dir,
+static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
+                            const char *output_dir,
                             const char *out_path, const char *target,
                             const char *entry_path, int overwrite_existing,
                             Changes *changes) {
@@ -931,7 +938,7 @@ static int extract_hardlink(const char *resolved_root, const char *output_dir,
     return -1;
   }
   if (st.type != FS_TYPE_FILE) {
-    PyErr_Format(comp_ExtractionPolicyError,
+    PyErr_Format(errors->extraction_policy,
                  "Hardlink %s names %s, which is not a regular file",
                  entry_path, target);
     return -1;
@@ -945,7 +952,7 @@ static int extract_hardlink(const char *resolved_root, const char *output_dir,
     int contained = dir_is_contained(resolved_root, target_path);
     *target_sep = saved;
     if (contained != 1) {
-      PyErr_Format(comp_ExtractionPolicyError,
+      PyErr_Format(errors->extraction_policy,
                    "Path traversal detected in hardlink target: %s", target);
       return -1;
     }
@@ -956,7 +963,7 @@ static int extract_hardlink(const char *resolved_root, const char *output_dir,
   char *link_sep = fs_last_sep(link_parent);
   if (link_sep) {
     *link_sep = '\0';
-    if (prepare_output_dir(resolved_root, link_parent, DIR_CREATE_MODE,
+    if (prepare_output_dir(errors, resolved_root, link_parent, DIR_CREATE_MODE,
                            entry_path, changes) != 0)
       return -1;
   }
@@ -1057,11 +1064,12 @@ static int extract_entries(const CArchive *archive, void *reader,
     }
 
     // Re-checked rather than trusted from the first pass
-    if (validate_entry_path(output_dir, resolved_root, effective_path,
-                            path_depth(effective_path), policy) != 0 ||
-        validate_link_target(output_dir, resolved_root, &entry,
+    if (validate_entry_path(ctx->errors, output_dir, resolved_root,
+                            effective_path, path_depth(effective_path),
+                            policy) != 0 ||
+        validate_link_target(ctx->errors, output_dir, resolved_root, &entry,
                              effective_target, policy) != 0 ||
-        check_entry_policy(&entry, policy) != 0) {
+        check_entry_policy(ctx->errors, &entry, policy) != 0) {
       entry_reset(&entry);
       result = -1;
       goto cleanup;
@@ -1153,8 +1161,8 @@ static int extract_entries(const CArchive *archive, void *reader,
       // An existing directory keeps its own metadata unless asked otherwise
       int restore = !existing_is_dir || (policy->overwrite_dir_metadata &&
                                          policy->overwrite_existing != 1);
-      if (prepare_output_dir(resolved_root, out_path, DIR_CREATE_MODE,
-                             entry.path, changes) != 0 ||
+      if (prepare_output_dir(ctx->errors, resolved_root, out_path,
+                             DIR_CREATE_MODE, entry.path, changes) != 0 ||
           (restore && defer_dir(deferred, out_path, entry.mode & mode_mask,
                                 entry.mtime) != 0)) {
         entry_reset(&entry);
@@ -1167,8 +1175,8 @@ static int extract_entries(const CArchive *archive, void *reader,
       if (last_slash) {
         char saved = *last_slash;
         *last_slash = '\0';
-        int rc = prepare_output_dir(resolved_root, out_path, DIR_CREATE_MODE,
-                                    entry.path, changes);
+        int rc = prepare_output_dir(ctx->errors, resolved_root, out_path,
+                                    DIR_CREATE_MODE, entry.path, changes);
         *last_slash = saved;
         if (rc != 0) {
           entry_reset(&entry);
@@ -1286,7 +1294,7 @@ static int extract_entries(const CArchive *archive, void *reader,
       }
     } else if (entry.type == ENTRY_HARDLINK) {
       // Shares the target's inode, and so its metadata too
-      if (extract_hardlink(resolved_root, output_dir, out_path,
+      if (extract_hardlink(ctx->errors, resolved_root, output_dir, out_path,
                            effective_target, entry.path,
                            policy->overwrite_existing, changes) != 0) {
         entry_reset(&entry);
@@ -1309,7 +1317,7 @@ cleanup:
 // Opens `archive_path` and detects its pipeline and archive backend
 static FILE *open_archive_source(const char *archive_path,
                                  const CArchive **archive,
-                                 CompressionPipeline *pipe) {
+                                 CompressionPipeline *pipe, CoreContext *ctx) {
   *archive = NULL;
 
   Format format;
@@ -1319,7 +1327,7 @@ static FILE *open_archive_source(const char *archive_path,
 
   *pipe = pipeline_from_format(format, archive_path);
   if (pipeline_is_valid(pipe) && pipe->archive != ARCHIVE_NONE)
-    *archive = archive_for_pipeline(pipe);
+    *archive = archive_for_pipeline(ctx->errors, pipe);
   else
     PyErr_SetString(PyExc_ValueError, "Not an archive format");
 
@@ -1333,7 +1341,7 @@ static FILE *open_archive_source(const char *archive_path,
 static CodecStream *open_codec_source(const FormatDesc *fmt, FILE *src,
                                       CoreContext *ctx) {
   CodecParams params = fmt->dec;
-  params.threads = ctx ? ctx->threads : 0;
+  params.threads = ctx->threads;
   return codec_reader_open(fmt->engine(), &params, src, ctx);
 }
 
@@ -1362,7 +1370,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
 
   const CArchive *archive;
   CompressionPipeline pipe;
-  FILE *src = open_archive_source(archive_path, &archive, &pipe);
+  FILE *src = open_archive_source(archive_path, &archive, &pipe, ctx);
   if (!src)
     return -1;
   if (pipe.codec == FORMAT_UNKNOWN) {
@@ -1401,12 +1409,12 @@ int extract_archive(const char *archive_path, const char *output_dir,
       const FormatDesc *fmt = find_standalone_format(pipe.codec);
       ctx_begin_stage_stream(ctx, src);
       stream = open_codec_source(fmt, src, ctx);
-      reader =
-          stream ? archive->create_codec_reader(stream, archive_path) : NULL;
+      reader = stream ? archive->create_codec_reader(stream, archive_path, ctx)
+                      : NULL;
     } else {
       if (pass == 1)
         ctx_begin_stage(ctx, declared_total);
-      reader = archive->create_reader(archive_path);
+      reader = archive->create_reader(archive_path, ctx);
     }
     if (!reader) {
       ret = -1;
@@ -1553,7 +1561,7 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader,
 PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
   const CArchive *archive;
   CompressionPipeline pipe;
-  FILE *src = open_archive_source(archive_path, &archive, &pipe);
+  FILE *src = open_archive_source(archive_path, &archive, &pipe, ctx);
   if (!src)
     return NULL;
 
@@ -1565,11 +1573,11 @@ PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
     ctx_begin_stage_stream(ctx, src);
     stream = open_codec_source(fmt, src, ctx);
     if (stream)
-      reader = archive->create_codec_reader(stream, archive_path);
+      reader = archive->create_codec_reader(stream, archive_path, ctx);
   } else {
     fclose(src);
     src = NULL;
-    reader = archive->create_reader(archive_path);
+    reader = archive->create_reader(archive_path, ctx);
   }
 
   PyObject *list = reader ? read_archive_entries(archive, reader, ctx) : NULL;

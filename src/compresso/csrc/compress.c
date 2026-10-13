@@ -37,7 +37,8 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
   } else {
     backend = choose_backend(strategy);
     if (!backend) {
-      PyErr_SetString(comp_Error, "No available compression backend found");
+      PyErr_SetString(ctx->errors->error,
+                      "No available compression backend found");
       return -1;
     }
   }
@@ -78,7 +79,8 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
 
   if (fwrite(header_buf, 1, sizeof(header_buf), dst) != sizeof(header_buf) ||
       ferror(dst)) {
-    PyErr_SetString(comp_HeaderError, "Failed to write header to output file");
+    PyErr_SetString(ctx->errors->header,
+                    "Failed to write header to output file");
     return_code = -1;
     goto done;
   }
@@ -90,12 +92,13 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
                                  strategy == STRAT_MAX_RATIO, ctx);
   if (return_code != 0) {
     if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
-      set_backend_error(backend, "compression", "streaming compression");
+      set_backend_error(ctx->errors, backend, "compression",
+                        "streaming compression");
     }
   }
 
 done:
-  return output_finish(return_code, src, dst, temp, &out, NULL);
+  return output_finish(return_code, src, dst, temp, &out, ctx->errors, NULL);
 }
 
 int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
@@ -124,12 +127,13 @@ int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
   fclose(src);
   const FormatDesc *desc = format_by_id(format);
   if (!desc) {
-    PyErr_SetString(comp_Error, "Unknown or unsupported format");
+    PyErr_SetString(ctx->errors->error, "Unknown or unsupported format");
   } else if (desc->kind == KIND_ARCHIVE) {
-    PyErr_SetString(comp_Error,
+    PyErr_SetString(ctx->errors->error,
                     "Use archive decompression API for archive formats");
   } else {
-    PyErr_Format(comp_Error, "Unknown or unsupported format: %s", desc->name);
+    PyErr_Format(ctx->errors->error, "Unknown or unsupported format: %s",
+                 desc->name);
   }
   return -1;
 }
@@ -150,7 +154,8 @@ static int decompress_compresso_file(const char *src_path, FILE *src,
 
   uint8_t header_buf[C_HEADER_SIZE];
   if (fread(header_buf, 1, sizeof(header_buf), src) != sizeof(header_buf)) {
-    PyErr_SetString(comp_HeaderError, "Failed to read header from input file");
+    PyErr_SetString(ctx->errors->header,
+                    "Failed to read header from input file");
     return_code = -1;
     goto done;
   }
@@ -159,20 +164,20 @@ static int decompress_compresso_file(const char *src_path, FILE *src,
   c_header_unpack(header_buf, &header);
 
   if (memcmp(header.magic, C_MAGIC, C_MAGIC_LEN) != 0) {
-    PyErr_SetString(comp_HeaderError, "Invalid file magic number");
+    PyErr_SetString(ctx->errors->header, "Invalid file magic number");
     return_code = -1;
     goto done;
   }
 
   if (header.version != 1) {
-    PyErr_SetString(comp_HeaderError, "Unsupported file version");
+    PyErr_SetString(ctx->errors->header, "Unsupported file version");
     return_code = -1;
     goto done;
   }
 
   const CBackend *backend = find_backend_by_id(header.algo);
   if (!backend) {
-    PyErr_SetString(comp_HeaderError,
+    PyErr_SetString(ctx->errors->header,
                     "Compression algorithm from file not available");
     return_code = -1;
     goto done;
@@ -201,10 +206,11 @@ static int decompress_compresso_file(const char *src_path, FILE *src,
   return_code = backend_decompress(backend, src, dst, orig_size, ctx);
   if (return_code != 0) {
     if (return_code != COMP_CANCELLED && !PyErr_Occurred()) {
-      set_backend_error(backend, "decompression", "streaming decompression");
+      set_backend_error(ctx->errors, backend, "decompression",
+                        "streaming decompression");
     }
   }
 
 done:
-  return output_finish(return_code, src, dst, temp, out, NULL);
+  return output_finish(return_code, src, dst, temp, out, ctx->errors, NULL);
 }

@@ -13,7 +13,8 @@
 #define TEST_INPUT FIXTURE_DIR "/alice29.txt"
 
 static const Format CONTAINERS[] = {
-    FORMAT_GZIP, FORMAT_BZIP2, FORMAT_XZ, FORMAT_ZSTD, FORMAT_LZ4, FORMAT_SNAPPY,
+    FORMAT_GZIP, FORMAT_BZIP2, FORMAT_XZ,
+    FORMAT_ZSTD, FORMAT_LZ4,   FORMAT_SNAPPY,
 };
 
 // Every TEST_RANGE below must span exactly these rows
@@ -24,7 +25,6 @@ void setUp(void) {
   if (!Py_IsInitialized()) {
     Py_Initialize();
   }
-  ensure_comp_exceptions();
   crc32c_init();
 }
 
@@ -57,10 +57,11 @@ void test_round_trip(int index) {
   snprintf(out, sizeof(out), "tmp_%s_rt.out", fmt->name);
 
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      0, standalone_compress(fmt, TEST_INPUT, OVERWRITE_TO(comp), 6, NULL),
+      0,
+      standalone_compress(fmt, TEST_INPUT, OVERWRITE_TO(comp), 6, test_ctx()),
       fmt->name);
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      0, standalone_decompress(fmt, comp, NULL, OVERWRITE_TO(out), NULL),
+      0, standalone_decompress(fmt, comp, NULL, OVERWRITE_TO(out), test_ctx()),
       fmt->name);
   TEST_ASSERT_TRUE_MESSAGE(files_equal(TEST_INPUT, out), fmt->name);
 
@@ -91,14 +92,15 @@ void test_decodes_concatenated_streams(int index) {
   snprintf(out, sizeof(out), "tmp_%s_cat.out", fmt->name);
 
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      0, standalone_compress(fmt, TEST_INPUT, OVERWRITE_TO(comp), 6, NULL),
+      0,
+      standalone_compress(fmt, TEST_INPUT, OVERWRITE_TO(comp), 6, test_ctx()),
       fmt->name);
   remove(both);
   append_file(both, comp);
   append_file(both, comp);
 
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      0, standalone_decompress(fmt, both, NULL, OVERWRITE_TO(out), NULL),
+      0, standalone_decompress(fmt, both, NULL, OVERWRITE_TO(out), test_ctx()),
       fmt->name);
   TEST_ASSERT_EQUAL_INT_MESSAGE(2 * file_size(TEST_INPUT), file_size(out),
                                 fmt->name);
@@ -116,7 +118,8 @@ void test_detects_corruption(int index) {
   snprintf(out, sizeof(out), "tmp_%s_cx.out", fmt->name);
 
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      0, standalone_compress(fmt, TEST_INPUT, OVERWRITE_TO(comp), 6, NULL),
+      0,
+      standalone_compress(fmt, TEST_INPUT, OVERWRITE_TO(comp), 6, test_ctx()),
       fmt->name);
 
   // Flip a byte in the middle of the compressed payload
@@ -132,9 +135,9 @@ void test_detects_corruption(int index) {
 
   // Decompression must fail (CRC/checksum or structural error)
   TEST_ASSERT_EQUAL_INT_MESSAGE(
-      -1, standalone_decompress(fmt, comp, NULL, OVERWRITE_TO(out), NULL),
+      -1, standalone_decompress(fmt, comp, NULL, OVERWRITE_TO(out), test_ctx()),
       fmt->name);
-  TEST_ASSERT_TRUE_MESSAGE(PyErr_ExceptionMatches(comp_CorruptDataError),
+  TEST_ASSERT_TRUE_MESSAGE(PyErr_ExceptionMatches(test_errors()->corrupt_data),
                            fmt->name);
 
   remove(comp);
@@ -165,9 +168,9 @@ void test_gzip_bad_header_is_corrupt_data(int index) {
   TEST_ASSERT_EQUAL_INT_MESSAGE(
       -1,
       standalone_decompress(find_standalone_format(FORMAT_GZIP), comp, NULL,
-                            OVERWRITE_TO(out), NULL),
+                            OVERWRITE_TO(out), test_ctx()),
       BAD_GZIP_HEADERS[index].name);
-  TEST_ASSERT_TRUE_MESSAGE(PyErr_ExceptionMatches(comp_CorruptDataError),
+  TEST_ASSERT_TRUE_MESSAGE(PyErr_ExceptionMatches(test_errors()->corrupt_data),
                            BAD_GZIP_HEADERS[index].name);
 
   remove(comp);

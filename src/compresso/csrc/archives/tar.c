@@ -19,8 +19,8 @@
 // Raises OSError for a system call's errno, CorruptDataError for a damaged
 // archive while reading, and BackendError otherwise; libarchive's readers
 // report damage as FILE_FORMAT, MISC or EINVAL
-static void set_tar_error(struct archive *a, const char *what, const char *path,
-                          int reading) {
+static void set_tar_error(const CompErrors *errors, struct archive *a,
+                          const char *what, const char *path, int reading) {
   int code = archive_errno(a);
   const char *detail = archive_error_string(a);
   if (!detail) {
@@ -30,12 +30,12 @@ static void set_tar_error(struct archive *a, const char *what, const char *path,
   int corrupt = code == TAR_ERRNO_FILE_FORMAT ||
                 (reading && (code == TAR_ERRNO_MISC || code == EINVAL));
   if (corrupt) {
-    PyErr_Format(comp_CorruptDataError, "%s: %s", what, detail);
+    PyErr_Format(errors->corrupt_data, "%s: %s", what, detail);
   } else if (code > 0 && code != EINVAL) {
     errno = code;
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
   } else {
-    PyErr_Format(comp_BackendError, "%s: %s", what, detail);
+    PyErr_Format(errors->backend, "%s: %s", what, detail);
   }
 }
 
@@ -46,10 +46,11 @@ static void set_tar_error(struct archive *a, const char *what, const char *path,
 typedef struct {
   struct archive *archive;
   const char *output_path;
+  const CompErrors *errors;
   unsigned char data[CODEC_CHUNK]; // For entry data
 } TarWriter;
 
-static TarWriter *tar_writer_new(const char *output_path) {
+static TarWriter *tar_writer_new(const char *output_path, CoreContext *ctx) {
   TarWriter *writer = safe_malloc(sizeof(TarWriter));
   if (!writer) {
     return NULL;
@@ -65,12 +66,13 @@ static TarWriter *tar_writer_new(const char *output_path) {
   archive_write_set_format_pax_restricted(writer->archive);
   archive_write_set_bytes_per_block(writer->archive, TAR_BLOCK);
   writer->output_path = output_path;
+  writer->errors = ctx->errors;
   return writer;
 }
 
 static void *tar_writer_opened(TarWriter *writer, int r) {
   if (r != ARCHIVE_OK) {
-    set_tar_error(writer->archive, "Failed to open archive",
+    set_tar_error(writer->errors, writer->archive, "Failed to open archive",
                   writer->output_path, 0);
     archive_write_free(writer->archive);
     free(writer);
@@ -79,10 +81,11 @@ static void *tar_writer_opened(TarWriter *writer, int r) {
   return writer;
 }
 
-static void *tar_create_writer(const char *output_path, int compression_level) {
+static void *tar_create_writer(const char *output_path, int compression_level,
+                               CoreContext *ctx) {
   (void)compression_level; // TAR doesn't have compression
 
-  TarWriter *writer = tar_writer_new(output_path);
+  TarWriter *writer = tar_writer_new(output_path, ctx);
   if (!writer) {
     return NULL;
   }
@@ -98,8 +101,9 @@ static la_ssize_t tar_codec_write(struct archive *a, void *stream,
 }
 
 static void *tar_create_codec_writer(CodecStream *stream,
-                                     const char *output_path) {
-  TarWriter *writer = tar_writer_new(output_path);
+                                     const char *output_path,
+                                     CoreContext *ctx) {
+  TarWriter *writer = tar_writer_new(output_path, ctx);
   if (!writer) {
     return NULL;
   }
@@ -162,7 +166,7 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   r = archive_write_header(writer->archive, ae);
   Py_END_ALLOW_THREADS
   if (r != ARCHIVE_OK) {
-    set_tar_error(writer->archive, "Failed to write header",
+    set_tar_error(writer->errors, writer->archive, "Failed to write header",
                   writer->output_path, 0);
     archive_entry_free(ae);
     return -1;
@@ -181,7 +185,7 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
           archive_write_data(writer->archive, writer->data, bytes_read);
       if (bytes_written < 0) {
         Py_BLOCK_THREADS
-        set_tar_error(writer->archive, "Failed to write data",
+        set_tar_error(writer->errors, writer->archive, "Failed to write data",
                       writer->output_path, 0);
         archive_entry_free(ae);
         return -1;
@@ -231,7 +235,7 @@ static int tar_close_writer(void *writer_ptr, CoreContext *ctx, int discard) {
   r = archive_write_close(writer->archive);
   Py_END_ALLOW_THREADS
   if (r != ARCHIVE_OK) {
-    set_tar_error(writer->archive, "Failed to close archive",
+    set_tar_error(writer->errors, writer->archive, "Failed to close archive",
                   writer->output_path, 0);
   }
   archive_write_free(writer->archive);
@@ -250,6 +254,7 @@ typedef struct {
   struct archive *archive;
   struct archive_entry *current_entry;
   const char *input_path;
+  const CompErrors *errors;
   CodecStream *stream;             // Not owned; NULL without a codec stage
   unsigned char *block;            // libarchive's read buffer
   unsigned char data[CODEC_CHUNK]; // For entry data
@@ -263,11 +268,11 @@ static int tar_read_failed(TarReader *reader, const char *what) {
   if (err != 0) {
     return err;
   }
-  set_tar_error(reader->archive, what, reader->input_path, 1);
+  set_tar_error(reader->errors, reader->archive, what, reader->input_path, 1);
   return -1;
 }
 
-static TarReader *tar_reader_new(const char *input_path) {
+static TarReader *tar_reader_new(const char *input_path, CoreContext *ctx) {
   TarReader *reader = safe_malloc(sizeof(TarReader));
   if (!reader) {
     return NULL;
@@ -286,6 +291,7 @@ static TarReader *tar_reader_new(const char *input_path) {
 
   reader->current_entry = NULL;
   reader->input_path = input_path;
+  reader->errors = ctx->errors;
   reader->stream = NULL;
   reader->block = NULL;
   return reader;
@@ -306,8 +312,8 @@ static void *tar_reader_opened(TarReader *reader, int r) {
   return reader;
 }
 
-static void *tar_create_reader(const char *input_path) {
-  TarReader *reader = tar_reader_new(input_path);
+static void *tar_create_reader(const char *input_path, CoreContext *ctx) {
+  TarReader *reader = tar_reader_new(input_path, ctx);
   if (!reader) {
     return NULL;
   }
@@ -328,8 +334,8 @@ static la_ssize_t tar_codec_read(struct archive *a, void *reader_ptr,
 }
 
 static void *tar_create_codec_reader(CodecStream *stream,
-                                     const char *input_path) {
-  TarReader *reader = tar_reader_new(input_path);
+                                     const char *input_path, CoreContext *ctx) {
+  TarReader *reader = tar_reader_new(input_path, ctx);
   if (!reader) {
     return NULL;
   }
@@ -479,7 +485,7 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
   }
 
   if (over_limit) {
-    PyErr_SetString(comp_ExtractionPolicyError,
+    PyErr_SetString(reader->errors->extraction_policy,
                     "Archive exceeds the maximum extracted size");
     return -1;
   }

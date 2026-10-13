@@ -24,7 +24,6 @@ void setUp(void) {
   if (!Py_IsInitialized()) {
     Py_Initialize();
   }
-  ensure_comp_exceptions();
   crc32c_init();
   PyErr_Clear();
 }
@@ -39,7 +38,7 @@ void tearDown(void) {
 static int run(int decompress, const char *in, const char *out) {
   CodecParams params = {0};
   return codec_run_file(codec_snappy_ops(), &params, decompress, in,
-                        OVERWRITE_TO(out), NULL, "snappy run failed");
+                        OVERWRITE_TO(out), test_ctx(), "snappy run failed");
 }
 
 static void write_bytes(const char *path, const char *bytes, size_t n) {
@@ -64,7 +63,7 @@ static int decode(const char *stream, size_t n, const char *expected) {
 
 static void assert_corrupt(int rc) {
   TEST_ASSERT_EQUAL_INT(-1, rc);
-  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(test_errors()->corrupt_data));
 }
 
 static unsigned char head[11];

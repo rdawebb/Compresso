@@ -23,8 +23,9 @@ static const char *codec_label(const CodecOps *ops, const CodecParams *params) {
   return (params && params->label) ? params->label : ops->name;
 }
 
-static void set_failure(const CodecOps *ops, const CodecParams *params,
-                        void *state, FailKind kind, int decompress) {
+static void set_failure(const CompErrors *errors, const CodecOps *ops,
+                        const CodecParams *params, void *state, FailKind kind,
+                        int decompress) {
   if (PyErr_Occurred()) {
     return; // An engine that raised its own is more specific
   }
@@ -37,22 +38,22 @@ static void set_failure(const CodecOps *ops, const CodecParams *params,
     PyErr_SetString(PyExc_IOError, "Error writing output file");
     return;
   case FAIL_TRUNCATED:
-    PyErr_Format(decompress ? comp_CorruptDataError : comp_BackendError,
+    PyErr_Format(decompress ? errors->corrupt_data : errors->backend,
                  "Truncated or incomplete %s stream", codec_label(ops, params));
     return;
   case FAIL_TRAILING:
-    PyErr_Format(comp_CorruptDataError,
+    PyErr_Format(errors->corrupt_data,
                  "Invalid data after the end of a %s stream",
                  codec_label(ops, params));
     return;
   case FAIL_TOO_LONG:
-    PyErr_Format(comp_CorruptDataError,
+    PyErr_Format(errors->corrupt_data,
                  "Decoded %s data exceeds its recorded size of %llu bytes",
                  codec_label(ops, params),
                  (unsigned long long)params->orig_size);
     return;
   case FAIL_TOO_SHORT:
-    PyErr_Format(comp_CorruptDataError,
+    PyErr_Format(errors->corrupt_data,
                  "Decoded %s data is shorter than its recorded size of %llu "
                  "bytes",
                  codec_label(ops, params),
@@ -65,7 +66,7 @@ static void set_failure(const CodecOps *ops, const CodecParams *params,
                                               decompress, &corrupt)
                               : NULL;
     if (message) {
-      PyErr_SetString(corrupt ? comp_CorruptDataError : comp_BackendError,
+      PyErr_SetString(corrupt ? errors->corrupt_data : errors->backend,
                       message);
     }
     return; // No describe: the caller applies its own fallback
@@ -124,7 +125,8 @@ static int stream_close(CodecStream *s) {
   int err = s->err;
   // Before end(), which releases what describe() reads from
   if (err == -1) {
-    set_failure(s->ops, &s->params, s->state, s->fail, s->decompress);
+    set_failure(s->ctx->errors, s->ops, &s->params, s->state, s->fail,
+                s->decompress);
   }
 
   s->ops->end(s->state);
@@ -397,7 +399,7 @@ int codec_read(CodecStream *s, void *buf, size_t n, size_t *got) {
 int codec_reader_close(CodecStream *s) {
   // Fails the run instead when warnings are errors
   if (!s->err && s->trailing_ignored &&
-      PyErr_WarnFormat(comp_TrailingDataWarning, 1,
+      PyErr_WarnFormat(s->ctx->errors->trailing_data_warning, 1,
                        "Ignored trailing data from byte %llu, after the "
                        "end of the %s stream",
                        (unsigned long long)s->member_start,
@@ -514,5 +516,6 @@ int codec_run_source(const CodecOps *ops, const CodecParams *params,
 
   int err = codec_run_stream(ops, params, decompress, input, output, ctx);
 
-  return output_finish(err, input, output, temp, out, failure_message);
+  return output_finish(err, input, output, temp, out, ctx->errors,
+                       failure_message);
 }
