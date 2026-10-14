@@ -284,11 +284,12 @@ static int check_entry_policy(const CompErrors *errors,
       return -1;
     }
 
-    // Refuse rather than drop the entry silently: neither allowed mode is
-    // implemented yet (1 = create the link, 2 = rewrite to a regular file)
-    PyErr_Format(PyExc_NotImplementedError,
-                 "Symlink extraction is not implemented: %s", entry->path);
-    return -1;
+    // Refuse symlinks (creation not implemented yet)
+    if (policy->allow_symlinks == 1) {
+      PyErr_Format(PyExc_NotImplementedError,
+                   "Symlink extraction is not implemented: %s", entry->path);
+      return -1;
+    }
   }
 
   if (entry->type == ENTRY_SPECIAL) {
@@ -370,9 +371,10 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
       return -1;
     }
 
-    // A hardlink adds no data, but claims its path like a file
+    // A link declares no data, but claims its path like a file
     if (entry_is_selected(&entry, files, num_files) &&
-        (entry.type == ENTRY_FILE || entry.type == ENTRY_HARDLINK)) {
+        (entry.type == ENTRY_FILE || entry.type == ENTRY_HARDLINK ||
+         entry.type == ENTRY_SYMLINK)) {
       declared_total += entry.type == ENTRY_FILE ? entry.size : 0;
       if (policy->max_total_size > 0 &&
           declared_total > policy->max_total_size) {
@@ -869,8 +871,24 @@ static int extract_file(const CArchive *archive, void *reader,
                            : UINT64_MAX;
   uint64_t written = 0;
 
-  int data_ret =
-      archive->extract_entry_data(reader, f, remaining, &written, data_ctx);
+  int data_ret = 0;
+  if (entry->type == ENTRY_SYMLINK) {
+    // Mode 2: the link's target text becomes the file's content
+    size_t len = entry->link_target ? strlen(entry->link_target) : 0;
+    if (len > remaining) {
+      PyErr_SetString(errors->extraction_policy,
+                      "Archive exceeds the maximum extracted size");
+      data_ret = -1;
+    } else if (len > 0 && fwrite(entry->link_target, 1, len, f) != len) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+      data_ret = -1;
+    } else {
+      written = len;
+    }
+  } else {
+    data_ret =
+        archive->extract_entry_data(reader, f, remaining, &written, data_ctx);
+  }
   *written_total += written;
 
   if (data_ret != 0) {
@@ -887,7 +905,9 @@ static int extract_file(const CArchive *archive, void *reader,
   if (!close_errno) {
     if (policy->preserve_timestamps && entry->mtime > 0)
       fs_futimens(f, (int64_t)entry->mtime);
-    if (policy->preserve_permissions)
+    // A link's own mode (usually 0777) would make its text executable, so it
+    // keeps the default file mode
+    if (policy->preserve_permissions && entry->type == ENTRY_FILE)
       fs_fchmod(f, entry->mode & mode_mask);
   }
   if (fclose(f) != 0 && !close_errno)
@@ -972,7 +992,7 @@ static int extract_entries(const CArchive *archive, void *reader,
     if (entry.type == ENTRY_DIR)
       rc = extract_dir(ctx->errors, output_dir, resolved_root, out_path, &entry,
                        policy, mode_mask, &renames, changes, deferred);
-    else if (entry.type == ENTRY_FILE)
+    else if (entry.type == ENTRY_FILE || entry.type == ENTRY_SYMLINK)
       rc = extract_file(archive, reader, ctx->errors, resolved_root, out_path,
                         &entry, policy, mode_mask, data_ctx, &written_total,
                         changes);

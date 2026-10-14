@@ -1199,21 +1199,25 @@ class TestTarHeaderWarnings:
         assert len(caplog.records) == 1
 
 
-def _tar_with_hardlink(path: Path, target: str, *, link: str = "d/b") -> None:
-    """Write a tar of file d/a then a hardlink entry `link` naming `target`.
+def _tar_with_hardlink(
+    path: Path, target: str, *, link: str = "d/b", kind: bytes = tarfile.LNKTYPE
+) -> None:
+    """Write a tar of file d/a then a link entry `link` naming `target`.
 
     Args:
         path: Where to write the tar.
-        target: The archive path the hardlink names.
-        link: The hardlink entry's own name.
+        target: The archive path the link names.
+        link: The link entry's own name.
+        kind: The link's tar type, a hardlink unless given.
     """
     with tarfile.open(path, "w", format=tarfile.GNU_FORMAT) as tf:
         info = tarfile.TarInfo("d/a")
         info.size = 1
         tf.addfile(info, io.BytesIO(b"x"))
         hardlink = tarfile.TarInfo(link)
-        hardlink.type = tarfile.LNKTYPE
+        hardlink.type = kind
         hardlink.linkname = target
+        hardlink.mode = 0o777
         tf.addfile(hardlink)
 
 
@@ -1282,6 +1286,37 @@ class TestHardlinkExtraction:
         assert (renamed / "b").read_text() == "existing"
         [extra] = [p for p in renamed.iterdir() if p.name not in ("a", "b")]
         assert os.path.samefile(renamed / "a", extra)
+
+
+class TestSymlinksAsFiles:
+    """Test allow_symlinks=2, which writes a symlink's target as a regular file."""
+
+    def test_link_becomes_a_file_holding_its_target(self, temp_dir: Path) -> None:
+        """Test the file's content, and that the link's 0777 mode isn't applied."""
+        archive = temp_dir / "links.tar"
+        _tar_with_hardlink(archive, "a", kind=tarfile.SYMTYPE)
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), [], allow_symlinks=2)
+
+        link = out / "d" / "b"
+        assert not link.is_symlink()
+        assert link.read_bytes() == b"a"
+        if sys.platform != "win32":
+            assert link.stat().st_mode & 0o111 == 0
+
+    def test_target_text_counts_toward_the_size_cap(self, temp_dir: Path) -> None:
+        """Test that the cap covers the written target, and nothing is left."""
+        archive = temp_dir / "links.tar"
+        _tar_with_hardlink(archive, "a", kind=tarfile.SYMTYPE)
+        out = temp_dir / "out"
+
+        with pytest.raises(ExtractionPolicyError, match="maximum extracted size"):
+            _core.extract_archive(
+                str(archive), str(out), [], allow_symlinks=2, max_total_size=1
+            )
+
+        assert list(out.iterdir()) == []
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX symlinks")
