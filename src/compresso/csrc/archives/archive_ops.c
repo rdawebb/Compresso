@@ -216,11 +216,12 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   if (!tmp)
     return -1;
 
-  // A codec compresses the tar as libarchive writes it; its context only
-  // raises, as progress counts the source bytes, which add_entry reports
+  // No progress in the codec's context, as add_entry counts the source bytes;
+  // it keeps cancel for the flush after the last entry
   const FormatDesc *fmt = NULL;
   CodecStream *stream = NULL;
-  CoreContext stream_ctx = {.errors = ctx->errors};
+  CoreContext stream_ctx = {.errors = ctx->errors,
+                            .cancel_flag = ctx->cancel_flag};
   void *writer = NULL;
   if (pipeline->codec != FORMAT_UNKNOWN) {
     fmt = find_standalone_format(pipeline->codec);
@@ -271,10 +272,15 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
     return ret;
   }
 
-  // libarchive only saw its write callback fail; the stream raises the cause,
-  // and a failed stream returns its failure to every later write
-  if (ret != 0 && codec_write(stream, NULL, 0) == -1)
-    PyErr_Clear();
+  // libarchive only knows its write callback failed; failed streams return
+  // a failure to every write; empty ones swap in the cause (e.g. cancelled)
+  if (ret != 0) {
+    int stream_ret = codec_write(stream, NULL, 0);
+    if (stream_ret != 0) {
+      PyErr_Clear();
+      ret = stream_ret;
+    }
+  }
 
   int codec_ret = codec_writer_close(stream, ret != 0);
   if (ret == 0)

@@ -197,6 +197,11 @@ static int writer_pump(CodecStream *s, int finish) {
 
     // Full buffer means the engine may have more waiting
     do {
+      if (finish && ctx_cancelled(s->ctx)) {
+        s->err = COMP_CANCELLED;
+        return COMP_CANCELLED;
+      }
+
       s->buf.next_out = s->out_buf;
       s->buf.avail_out = s->out_size;
 
