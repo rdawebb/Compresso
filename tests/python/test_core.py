@@ -1,6 +1,7 @@
 """Tests for the core compression/decompression functionality."""
 
 import gzip
+import importlib.util
 import io
 import logging
 import lzma
@@ -64,6 +65,21 @@ class TestCoreExceptions:
     def test_corrupt_data_is_not_a_backend_error(self) -> None:
         """Test that bad input is told apart from a backend failure."""
         assert not issubclass(CorruptDataError, BackendError)
+
+    def test_each_module_raises_its_own(self, temp_dir: Path) -> None:
+        """Test that a second _core module object raises its own classes."""
+        spec = importlib.util.find_spec("compresso._core")
+        assert spec and spec.loader
+        fresh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fresh)
+        assert fresh.Cancelled is not Cancelled
+
+        source = temp_dir / "input.txt"
+        source.write_bytes(b"data")
+        token = fresh.CancelToken()
+        token.cancel()
+        with pytest.raises(fresh.Cancelled):
+            fresh.compress_file(source, temp_dir / "out.comp", cancel=token)
 
 
 class TestCapabilities:
@@ -255,6 +271,42 @@ class TestDecompressFile:
 
         assert decompressed_file.read_text(encoding="utf-8") == content
 
+    @pytest.mark.parametrize(("algo", "refused"), [("zstd", True), ("zlib", False)])
+    def test_algo_is_checked_against_a_container(
+        self, temp_dir: Path, algo: str, refused: bool
+    ) -> None:
+        """Test that an explicit algo must match a gzip file's engine."""
+        source = temp_dir / "data.gz"
+        source.write_bytes(gzip.compress(b"payload"))
+        output = temp_dir / "data"
+
+        message = _value_error(lambda: decompress_file(source, output, algo))
+
+        if refused:
+            assert message == "File was compressed with gzip, not the requested zstd"
+            assert not output.exists()
+        else:
+            assert message is None
+            assert output.read_bytes() == b"payload"
+
+    @pytest.mark.parametrize(("algo", "refused"), [("zstd", True), ("zlib", False)])
+    def test_algo_is_checked_against_a_comp_header(
+        self, small_file: Path, temp_dir: Path, algo: str, refused: bool
+    ) -> None:
+        """Test that an explicit algo must match the one a .comp header records."""
+        compressed = temp_dir / "data.comp"
+        compress_file(small_file, compressed, "zlib", "balanced", 6)
+        output = temp_dir / "data"
+
+        message = _value_error(lambda: decompress_file(compressed, output, algo))
+
+        if refused:
+            assert message == "File was compressed with zlib, not the requested zstd"
+            assert not output.exists()
+        else:
+            assert message is None
+            assert output.read_bytes() == small_file.read_bytes()
+
 
 class TestStandaloneErrors:
     """Test refusing a format the single-file entry points cannot use.
@@ -311,6 +363,79 @@ class TestListArchiveContentsArgs:
         """Test that a stray keyword raises rather than being silently dropped."""
         with pytest.raises(TypeError, match="keyword"):
             _core.list_archive_contents(str(temp_dir / "a.tar"), bogus=1)  # type: ignore[call-arg]  # ty:ignore[unknown-argument]
+
+
+class TestDetectFormat:
+    """Test detect_format's handling of a path it cannot read."""
+
+    def test_missing_file_raises(self, temp_dir: Path) -> None:
+        """Test that a missing file is reported as such, not as "unknown"."""
+        with pytest.raises(FileNotFoundError):
+            _core.detect_format(temp_dir / "missing.gz")
+
+
+class TestFormatIsArchive:
+    """Test that format_is_archive agrees with what create_archive accepts."""
+
+    @pytest.mark.parametrize(
+        ("fmt", "expected"),
+        [("tar.gz", True), ("tgz", True), ("zip", True), ("zip.gz", False)],
+    )
+    def test_only_a_valid_pipeline_is_an_archive(
+        self, fmt: str, expected: bool
+    ) -> None:
+        """Test that zip, which compresses its own entries, takes no codec."""
+        assert _core.format_is_archive(fmt) is expected
+
+
+class TestPathArguments:
+    """Test how the entry points convert filesystem paths."""
+
+    def test_path_like_round_trip(self, sample_text_file: Path, temp_dir: Path) -> None:
+        """Test that Path and bytes paths work, and input_paths takes any sequence."""
+        archive = temp_dir / "out.tar"
+
+        _core.create_archive(archive, "tar", (sample_text_file,))
+        listed = _core.list_archive_contents(os.fsencode(archive))
+        _core.extract_archive(archive, temp_dir / "out", [])
+
+        assert [e["path"] for e in listed] == [sample_text_file.name]
+        assert (temp_dir / "out" / sample_text_file.name).read_bytes() == (
+            sample_text_file.read_bytes()
+        )
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda src, dst: _core.compress_file(src, dst + "\0x", "zstd", "", -1),
+            lambda src, dst: _core.compress_standalone(src, dst + "\0x", "gzip"),
+            lambda src, dst: _core.create_archive(dst + "\0x", "tar", [src]),
+            lambda src, dst: _core.create_archive(dst, "tar", [src + "\0x"]),
+        ],
+        ids=["compress_file", "compress_standalone", "archive_output", "archive_input"],
+    )
+    def test_embedded_nul_is_refused(
+        self,
+        sample_text_file: Path,
+        temp_dir: Path,
+        call: Callable[[str, str], object],
+    ) -> None:
+        """Test that a NUL raises rather than truncating the path."""
+        dst = str(temp_dir / "out")
+
+        with pytest.raises(ValueError, match="null"):
+            call(str(sample_text_file), dst)
+
+        assert not os.path.exists(dst)
+
+    def test_bare_path_as_input_paths_is_refused(
+        self, sample_text_file: Path, temp_dir: Path
+    ) -> None:
+        """Test that a path passed bare isn't read as a path per character."""
+        with pytest.raises(TypeError, match="sequence of paths"):
+            _core.create_archive(
+                str(temp_dir / "out.tar"), "tar", str(sample_text_file)
+            )
 
 
 class TestExtractArchiveFilesArg:

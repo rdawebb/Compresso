@@ -77,7 +77,7 @@ def _inspect_archive(file: Path, output_json: bool, show_entries: bool) -> None:
     if not plan.can_run:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
-    fmt = detect_format(str(file))
+    fmt = detect_format(file)
     total_size = sum(entry.size for entry in plan.entries)
     archive_size: int = file.stat().st_size
 

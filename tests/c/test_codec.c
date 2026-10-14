@@ -170,7 +170,7 @@ typedef struct {
 } ProgressLog;
 
 static ProgressLog progress_log;
-static volatile int cancel_flag;
+static COMPRESSO_ATOMIC_INT cancel_flag;
 
 static int record_progress(CoreContext *ctx, uint64_t done, uint64_t total) {
   (void)ctx;
@@ -206,8 +206,6 @@ void setUp(void) {
     Py_Initialize();
   }
 
-  ensure_comp_exceptions();
-
   stub_end_calls = 0;
   stub_reset_calls = 0;
   stub_last_finish = -1;
@@ -217,6 +215,7 @@ void setUp(void) {
   cancel_flag = 0;
   memset(&progress_log, 0, sizeof(progress_log));
   memset(&ctx, 0, sizeof(ctx));
+  ctx.errors = test_errors();
   ctx.on_progress = record_progress;
   ctx.cancel_flag = &cancel_flag;
   write_test_input();
@@ -328,8 +327,8 @@ void test_driver_reports_a_process_failure(void) {
 
 void test_driver_blames_the_engine_for_an_encoding_failure(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_stub(STUB_FAIL_PROCESS, TEST_INPUT));
-  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_BackendError));
-  TEST_ASSERT_FALSE(PyErr_ExceptionMatches(comp_CorruptDataError));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(test_errors()->backend));
+  TEST_ASSERT_FALSE(PyErr_ExceptionMatches(test_errors()->corrupt_data));
 }
 
 void test_driver_blames_the_input_when_the_engine_does(void) {
@@ -338,7 +337,7 @@ void test_driver_blames_the_input_when_the_engine_does(void) {
   TEST_ASSERT_EQUAL_INT(-1, codec_run_file(&stub_ops, &params, 1, TEST_INPUT,
                                            OVERWRITE_TO(TMP_OUT), &ctx,
                                            "stub run failed"));
-  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(test_errors()->corrupt_data));
 }
 
 void test_driver_unlinks_the_output_on_failure(void) {
@@ -386,30 +385,6 @@ static int run_members(const char *input, int concatenated) {
                         &ctx, "stub run failed");
 }
 
-// Whether the pending exception's message contains `needle`; leaves it set
-static int error_says(const char *needle) {
-#if PY_VERSION_HEX >= 0x030C0000
-  PyObject *exc = PyErr_GetRaisedException();
-#else
-  PyObject *type, *exc, *tb;
-  PyErr_Fetch(&type, &exc, &tb);
-  PyErr_NormalizeException(&type, &exc, &tb);
-#endif
-  if (!exc) {
-    return 0;
-  }
-  PyObject *text = PyObject_Str(exc);
-  const char *message = text ? PyUnicode_AsUTF8(text) : NULL;
-  int found = message && strstr(message, needle) != NULL;
-  Py_XDECREF(text);
-#if PY_VERSION_HEX >= 0x030C0000
-  PyErr_SetRaisedException(exc);
-#else
-  PyErr_Restore(type, exc, tb);
-#endif
-  return found;
-}
-
 static int output_is(const char *expected) {
   write_file(TMP_IN, expected);
   return files_equal(TMP_IN, TMP_OUT);
@@ -451,7 +426,7 @@ void test_driver_ends_cleanly_when_a_member_ends_the_input_on_a_chunk(void) {
 void test_driver_refuses_a_second_member_unless_concatenated(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_members("abc|def|", 0));
   TEST_ASSERT_TRUE(error_says("Invalid data after the end of a stub stream"));
-  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(test_errors()->corrupt_data));
   TEST_ASSERT_EQUAL_INT(0, stub_reset_calls);
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
 }
@@ -459,14 +434,14 @@ void test_driver_refuses_a_second_member_unless_concatenated(void) {
 void test_driver_reports_trailing_data_that_is_not_a_member(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_members("abc|!junk", 1));
   TEST_ASSERT_TRUE(error_says("Invalid data after the end of a stub stream"));
-  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(test_errors()->corrupt_data));
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
 }
 
 void test_driver_reports_a_truncated_later_member(void) {
   TEST_ASSERT_EQUAL_INT(-1, run_members("abc|de", 1));
   TEST_ASSERT_TRUE(error_says("Truncated or incomplete stub stream"));
-  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(test_errors()->corrupt_data));
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
 }
 
@@ -654,7 +629,7 @@ void test_driver_tolerates_a_null_context(void) {
   CodecParams params = {.level = STUB_COPY};
 
   TEST_ASSERT_EQUAL_INT(0, codec_run_file(&stub_ops, &params, 0, TEST_INPUT,
-                                          OVERWRITE_TO(TMP_OUT), NULL,
+                                          OVERWRITE_TO(TMP_OUT), test_ctx(),
                                           "stub run failed"));
   TEST_ASSERT_TRUE(files_equal(TEST_INPUT, TMP_OUT));
 }
@@ -695,7 +670,8 @@ void test_finish_reports_an_output_that_fails_to_flush(void) {
   fputs("buffered", out);
   write_file(TMP_OUT, "partial"); // Stands in for the half-written file
 
-  TEST_ASSERT_EQUAL_INT(-1, codec_finish_file(0, NULL, out, TMP_OUT, NULL));
+  TEST_ASSERT_EQUAL_INT(
+      -1, codec_finish_file(0, NULL, out, TMP_OUT, test_errors(), NULL));
   TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_OSError));
   TEST_ASSERT_TRUE(error_says("No space left on device"));
   TEST_ASSERT_EQUAL_INT(-1, file_size(TMP_OUT));
@@ -705,8 +681,9 @@ void test_finish_keeps_an_earlier_failure_over_a_close_failure(void) {
   FILE *out = full_disk_stream();
   TEST_ASSERT_NOT_NULL(out);
   fputs("buffered", out);
-  PyErr_SetString(comp_BackendError, "the real failure");
+  PyErr_SetString(test_errors()->backend, "the real failure");
 
-  TEST_ASSERT_EQUAL_INT(-1, codec_finish_file(-1, NULL, out, TMP_OUT, NULL));
+  TEST_ASSERT_EQUAL_INT(
+      -1, codec_finish_file(-1, NULL, out, TMP_OUT, test_errors(), NULL));
   TEST_ASSERT_TRUE(error_says("the real failure"));
 }

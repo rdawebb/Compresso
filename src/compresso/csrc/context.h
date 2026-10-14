@@ -18,12 +18,31 @@ enum { CTX_LOG_DEBUG = 10, CTX_LOG_INFO = 20, CTX_LOG_WARNING = 30 };
 #define CTX_PRINTF(fmt, args)
 #endif
 
-// Per-call progress and cancellation state; every field is optional, and a
-// NULL CoreContext behaves as no context
+// MSVC: Interlocked intrinsics, since C11 atomics are still experimental
+#if defined(_MSC_VER)
+#include <intrin.h>
+#define COMPRESSO_ATOMIC_INT volatile long
+#define comp_atomic_load(p) _InterlockedOr((p), 0)
+#define comp_atomic_store(p, v) _InterlockedExchange((p), (v))
+#else
+#include <stdatomic.h>
+#define COMPRESSO_ATOMIC_INT atomic_int
+#define comp_atomic_load(p) atomic_load(p)
+#define comp_atomic_store(p, v) atomic_store((p), (v))
+#endif
+
+// The module's exception classes, defined in common.h
+typedef struct CompErrors CompErrors;
+
+// Per-call state: the exception classes a failure raises, and optional progress
+// and cancellation; a NULL CoreContext reports nothing and can raise none of
+// compresso's own exceptions
 typedef struct CoreContext {
+  const CompErrors *errors; // Set by the _core.c bridge
+
   // Owned by a Python CancelToken, which outlives this stack-local context and
   // may be cancelled from another thread; NULL = uncancellable
-  volatile int *cancel_flag;
+  COMPRESSO_ATOMIC_INT *cancel_flag;
 
   int threads; // 0 for one per core; copied into each CodecParams
 
@@ -61,6 +80,9 @@ void ctx_begin_stage(CoreContext *ctx, uint64_t total);
 // its current position to the end; an unmeasurable stream (a pipe) gets a
 // total of 0 rather than failing
 void ctx_begin_stage_stream(CoreContext *ctx, FILE *input);
+
+// Non-zero once the cancel flag is set; for loops with no bytes to report
+int ctx_cancelled(const CoreContext *ctx);
 
 // Records `n` more input bytes consumed: returns 0 to continue, COMP_CANCELLED
 // if the cancel flag is set, or -1 if the progress callback itself failed

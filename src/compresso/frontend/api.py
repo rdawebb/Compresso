@@ -16,6 +16,7 @@ from .._core import (
     decompress_standalone,
     detect_format,
     format_is_archive,
+    standalone_formats,
 )
 from .._core import get_default_backend_for_strategy as default_backend
 from .._levels import to_core_level
@@ -27,30 +28,18 @@ from .archive_api import _OVERWRITE_CODES, OverwriteMode
 
 MB = 1024 * 1024
 
-# Single-file container formats, as opposed to the Compresso container or an archive
+_STANDALONE = standalone_formats()
+
+# Single-file container formats, as opposed to the Compresso container or an
+# archive, including aliases
 STANDALONE_FORMATS: dict[str, str] = {
-    "gz": "gzip",
-    "gzip": "gzip",
-    "bz2": "bzip2",
-    "bzip2": "bzip2",
-    "xz": "xz",
-    "lzma": "xz",
-    "zst": "zstd",
-    "zstd": "zstd",
-    "lz4": "lz4",
-    "sz": "snappy",
-    "snappy": "snappy",
+    alias: f["name"] for f in _STANDALONE for alias in (f["name"], *f["aliases"])
 }
 
 # Suffix each standalone format conventionally uses, for naming an output the
 # caller did not name themselves
 STANDALONE_SUFFIXES: dict[str, str] = {
-    "gzip": ".gz",
-    "bzip2": ".bz2",
-    "xz": ".xz",
-    "zstd": ".zst",
-    "lz4": ".lz4",
-    "snappy": ".sz",
+    f["name"]: "." + f["exts"][0] for f in _STANDALONE
 }
 
 
@@ -368,7 +357,7 @@ def plan_decompression(
     # Decided from the file's magic bytes rather than its name, so a renamed
     # archive is still recognised correctly
     try:
-        detected: str = detect_format(str(object=src_path))
+        detected: str = detect_format(src_path)
 
     except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
         return plan(None, False, f"Cannot read file: {e}")
@@ -474,8 +463,8 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
                 # A standalone container has no Compresso header to record the
                 # algorithm in, so the format itself is the codec
                 actual_path = compress_standalone(
-                    input_path=str(object=self.plan.src),
-                    output_path=str(object=self.plan.dest),
+                    input_path=self.plan.src,
+                    output_path=self.plan.dest,
                     format=standalone,
                     compression_level=lvl,
                     overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
@@ -486,8 +475,8 @@ class CompressionJob(ThreadedJob[CompressionPlan]):
 
             else:
                 actual_path = compress_file(
-                    src_path=str(object=self.plan.src),
-                    dst_path=str(object=self.plan.dest),
+                    src_path=self.plan.src,
+                    dst_path=self.plan.dest,
                     algo=self.plan.backend_name or "",
                     strategy=self.plan.options.strategy or "",
                     level=lvl,
@@ -598,8 +587,8 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
                 # The format came from the file's magic bytes, so pass it on
                 # rather than letting the C layer re-guess from the extension
                 actual_path = decompress_standalone(
-                    input_path=str(object=self.plan.src),
-                    output_path=str(object=self.plan.dest),
+                    input_path=self.plan.src,
+                    output_path=self.plan.dest,
                     format=self.plan.format,
                     overwrite=_OVERWRITE_CODES[self.plan.overwrite],
                     threads=self.plan.threads,
@@ -609,8 +598,8 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
 
             else:
                 actual_path = decompress_file(
-                    src_path=str(object=self.plan.src),
-                    dst_path=str(object=self.plan.dest),
+                    src_path=self.plan.src,
+                    dst_path=self.plan.dest,
                     algo="",
                     overwrite=_OVERWRITE_CODES[self.plan.overwrite],
                     threads=self.plan.threads,

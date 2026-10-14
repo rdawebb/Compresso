@@ -51,20 +51,22 @@ deps = [
 
 csrc = '../../src/compresso/csrc'
 inc = include_directories('support', 'unity', csrc)
+fsutil_platform = host_machine.system() == 'windows' ? 'fsutil_win32.c' : 'fsutil_posix.c'
 
 unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 
-# _core.c and archives.c are left out: they reach libarchive/libzip;
-# support/test_stubs.c supplies the exception globals and archive backends instead
+# _core.c and archives/ are left out: they reach libarchive/libzip;
+# support/test_stubs.c supplies the exception objects and archive backends instead
 under_test = static_library('under_test',
   'support/test_stubs.c',
   'support/backend_io.c',
   'support/files.c',
   csrc / 'common.c',
-  csrc / 'compress.c',
+  csrc / 'comp_format.c',
   csrc / 'formats.c',
   csrc / 'standalone.c',
   csrc / 'fsutil.c',
+  csrc / fsutil_platform,
   csrc / 'pipeline.c',
   csrc / 'registry.c',
   csrc / 'strategy.c',
@@ -126,7 +128,7 @@ suites = {
   'test_crc32c.c': 'codec',
   'test_snappy.c': 'codec',
   'test_backends.c': 'compression',
-  'test_compress.c': 'compression',
+  'test_comp_format.c': 'compression',
   'test_standalone.c': 'standalone',
 }
 

@@ -51,12 +51,17 @@ typedef struct CArchive {
   int (*supports_compression)(void);
   int (*supports_streaming)(void);
 
+  // Each create_* keeps `ctx->errors` for what it creates, so a later call's
+  // `ctx` only carries progress and warnings, and may be NULL
+
   // Writing (Creating Archives)
-  void *(*create_writer)(const char *output_path, int compression_level);
+  void *(*create_writer)(const char *output_path, int compression_level,
+                         CoreContext *ctx);
 
   // As create_writer, but writing through `stream`, which the caller closes
   // after close_writer; NULL for a backend that takes no codec stage
-  void *(*create_codec_writer)(CodecStream *stream, const char *output_path);
+  void *(*create_codec_writer)(CodecStream *stream, const char *output_path,
+                               CoreContext *ctx);
 
   // `ctx` is NULL-tolerant and covers this entry's data only
   // `source_path` is the entry's original filesystem path, valid for the
@@ -70,11 +75,12 @@ typedef struct CArchive {
   int (*close_writer)(void *writer, CoreContext *ctx, int discard);
 
   // Reading (Extracting Archives)
-  void *(*create_reader)(const char *input_path);
+  void *(*create_reader)(const char *input_path, CoreContext *ctx);
 
   // As create_reader, through `stream`, which the caller closes after
   // close_reader; a stream failure is returned and raised by that close
-  void *(*create_codec_reader)(CodecStream *stream, const char *input_path);
+  void *(*create_codec_reader)(CodecStream *stream, const char *input_path,
+                               CoreContext *ctx);
 
   // `ctx` (NULL-tolerant) only receives warnings about a still-usable entry
   int (*get_next_entry)(void *reader, ArchiveEntry *entry, CoreContext *ctx);
@@ -117,10 +123,8 @@ PyObject *get_archive_capabilities(void);
 
 // ---- Format Detection ----
 
-Format detect_format_from_path(const char *path);
-
-// Opens `path` to read and detects its format as detect_format_from_path does;
-// returns the stream rewound to the start, or NULL with OSError set
+// Opens `path` to read and detects its format from its magic bytes, else its
+// extension; returns the stream rewound to the start, or NULL with OSError set
 FILE *open_source(const char *path, Format *format);
 
 // ---- Compression Pipeline ----
@@ -166,8 +170,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files,
                     const ExtractionPolicy *policy, CoreContext *ctx);
 
-// `ctx` (NULL-tolerant) carries signal checks and warnings; there is no
-// progress to report
+// `ctx` carries signal checks and warnings; there is no progress to report
 PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx);
 
 #endif // ARCHIVE_H

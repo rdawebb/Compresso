@@ -62,11 +62,12 @@ static inline uint64_t read_le64(const uint8_t *buf) {
 }
 
 // Closes both streams, and on failure or cancellation unlinks the half-written
-// output; sets `failure_message` unless cancelled or pending exception; pass
-// NULL when every failing path sets its own; returns `err`, or -1 with an
-// OSError when it was 0 but the output couldn't be flushed or closed
+// output; raises `failure_message` as `errors->backend` unless cancelled or
+// pending exception; pass NULL when every failing path sets its own; returns
+// `err`, or -1 with OSError when 0 but the output couldn't be flushed or closed
 int codec_finish_file(int err, FILE *input, FILE *output,
-                      const char *output_path, const char *failure_message);
+                      const char *output_path, const CompErrors *errors,
+                      const char *failure_message);
 
 // ---- Outputs ----
 // Every file output is written to a temp beside its path and committed only on
@@ -88,7 +89,8 @@ int output_commit(const char *temp, const OutputTarget *out);
 // codec_finish_file on the temp, then commits it under `out`'s scheme, filling
 // `actual`; the temp never survives; `output` may be NULL if never opened
 int output_finish(int err, FILE *input, FILE *output, const char *temp,
-                  const OutputTarget *out, const char *failure_message);
+                  const OutputTarget *out, const CompErrors *errors,
+                  const char *failure_message);
 
 // ---- Header ----
 
@@ -160,8 +162,7 @@ typedef struct CBackend {
 // Ends with a row whose name is NULL
 extern const CBackend BACKENDS[];
 
-// `ctx` is NULL-tolerant: NULL means no progress reporting or cancellation;
-// return 0, -1 or COMP_CANCELLED; `max_ratio` is set for that strategy
+// Return 0, -1 or COMP_CANCELLED; `max_ratio` is set for that strategy
 int backend_compress(const CBackend *backend, FILE *src, FILE *dst, int level,
                      int max_ratio, CoreContext *ctx);
 
@@ -187,13 +188,16 @@ const CBackend *choose_backend(Strategy strat);
 
 // ---- Exception Objects ----
 
-extern PyObject *comp_Error;
-extern PyObject *comp_HeaderError;
-extern PyObject *comp_BackendError;
-extern PyObject *comp_CorruptDataError;
-extern PyObject *comp_ExtractionPolicyError;
-extern PyObject *comp_Cancelled;
-extern PyObject *comp_TrailingDataWarning;
+// Kept in the module's state, so each module object raises its own
+struct CompErrors {
+  PyObject *error;
+  PyObject *header;
+  PyObject *backend;
+  PyObject *corrupt_data;
+  PyObject *extraction_policy;
+  PyObject *cancelled;
+  PyObject *trailing_data_warning;
+};
 
 // ---- Helpers ----
 
@@ -209,8 +213,8 @@ void *safe_malloc(size_t size);
 
 // ---- Backend Error Helper ----
 
-void set_backend_error(const CBackend *backend, const char *op,
-                       const char *context);
+void set_backend_error(const CompErrors *errors, const CBackend *backend,
+                       const char *op, const char *context);
 
 // ---- Public API ----
 

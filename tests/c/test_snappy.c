@@ -24,7 +24,6 @@ void setUp(void) {
   if (!Py_IsInitialized()) {
     Py_Initialize();
   }
-  ensure_comp_exceptions();
   crc32c_init();
   PyErr_Clear();
 }
@@ -39,7 +38,7 @@ void tearDown(void) {
 static int run(int decompress, const char *in, const char *out) {
   CodecParams params = {0};
   return codec_run_file(codec_snappy_ops(), &params, decompress, in,
-                        OVERWRITE_TO(out), NULL, "snappy run failed");
+                        OVERWRITE_TO(out), test_ctx(), "snappy run failed");
 }
 
 static void write_bytes(const char *path, const char *bytes, size_t n) {
@@ -62,9 +61,10 @@ static int decode(const char *stream, size_t n, const char *expected) {
 
 #define DECODE(stream, expected) decode(stream, sizeof(stream) - 1, expected)
 
-static void assert_corrupt(int rc) {
+static void assert_corrupt(int rc, const char *message) {
   TEST_ASSERT_EQUAL_INT(-1, rc);
-  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(test_errors()->corrupt_data));
+  TEST_ASSERT_TRUE(error_says(message));
 }
 
 static unsigned char head[11];
@@ -130,29 +130,36 @@ void test_decodes_empty_input_as_empty(void) {
 
 // HELLO with an unskippable type in place of its own
 void test_rejects_a_reserved_unskippable_chunk(void) {
-  assert_corrupt(DECODE(STREAM_ID "\x02\x09\x00\x00\xbb\x1f\x1c\x19hello", ""));
+  assert_corrupt(DECODE(STREAM_ID "\x02\x09\x00\x00\xbb\x1f\x1c\x19hello", ""),
+                 "reserved unskippable chunk");
 }
 
 void test_rejects_a_bad_checksum(void) {
-  assert_corrupt(DECODE(STREAM_ID "\x01\x09\x00\x00\xbc\x1f\x1c\x19hello", ""));
+  assert_corrupt(DECODE(STREAM_ID "\x01\x09\x00\x00\xbc\x1f\x1c\x19hello", ""),
+                 "checksum mismatch");
 }
 
 void test_rejects_a_missing_stream_identifier(void) {
-  assert_corrupt(DECODE(HELLO, ""));
+  assert_corrupt(DECODE(HELLO, ""),
+                 "missing stream identifier");
 }
 
 void test_rejects_padding_before_the_stream_identifier(void) {
-  assert_corrupt(DECODE("\xfe\x00\x00\x00" STREAM_ID HELLO, ""));
+  assert_corrupt(DECODE("\xfe\x00\x00\x00" STREAM_ID HELLO, ""),
+                 "missing stream identifier");
 }
 
 void test_rejects_a_wrong_stream_identifier(void) {
-  assert_corrupt(DECODE("\xff\x06\x00\x00sNaPpX" HELLO, ""));
+  assert_corrupt(DECODE("\xff\x06\x00\x00sNaPpX" HELLO, ""),
+                 "invalid stream identifier");
 }
 
 void test_rejects_a_truncated_chunk(void) {
-  assert_corrupt(DECODE(STREAM_ID "\x01\x09\x00\x00\xbb\x1f\x1c\x19hel", ""));
+  assert_corrupt(DECODE(STREAM_ID "\x01\x09\x00\x00\xbb\x1f\x1c\x19hel", ""),
+                 "Truncated or incomplete snappy stream");
 }
 
 void test_rejects_a_truncated_skippable_chunk(void) {
-  assert_corrupt(DECODE(STREAM_ID "\x80\x04\x00\x00xx", ""));
+  assert_corrupt(DECODE(STREAM_ID "\x80\x04\x00\x00xx", ""),
+                 "Truncated or incomplete snappy stream");
 }

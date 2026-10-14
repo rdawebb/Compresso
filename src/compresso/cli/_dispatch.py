@@ -7,22 +7,6 @@ from pathlib import Path
 from .._core import detect_format, format_is_archive
 from ..frontend.api import STANDALONE_FORMATS, canonical_standalone_format
 
-# Formats whose container holds many entries
-ARCHIVE_FORMATS: frozenset[str] = frozenset(
-    {
-        "tar",
-        "tar.gz",
-        "tgz",
-        "tar.bz2",
-        "tbz2",
-        "tar.xz",
-        "txz",
-        "tar.zst",
-        "tzst",
-        "zip",
-    }
-)
-
 # What `compress` reaches for when given several inputs and no format
 DEFAULT_ARCHIVE_FORMAT = "zip"
 
@@ -40,19 +24,15 @@ def infer_format(output: Path | None) -> str | None:
     if output is None:
         return None
 
-    name: str = output.name.lower()
-
-    known: list[str] = sorted(
-        ARCHIVE_FORMATS | set(STANDALONE_FORMATS), key=len, reverse=True
-    )
-    for candidate in known:
-        if name.endswith(f".{candidate}"):
-            return candidate
-
-    # A container the core detects but cannot write yet (e.g. 7z) must still
-    # be named, or the default format would be written under its suffix
+    # Mirrors the core (`x.tar.lz4` is tar in lz4); unwritable formats
+    # still match, so the default is never written under their suffix
     suffix: str = output.suffix.lower().lstrip(".")
-    if suffix and format_is_archive(suffix):
+    if Path(output.stem).suffix.lower() == ".tar" and format_is_archive(
+        f"tar.{suffix}"
+    ):
+        return f"tar.{suffix}"
+
+    if suffix in STANDALONE_FORMATS or format_is_archive(suffix):
         return suffix
 
     return None
@@ -68,7 +48,7 @@ def looks_like_archive(path: Path) -> bool:
         True if the path looks like an archive, False otherwise.
     """
     try:
-        return bool(format_is_archive(detect_format(str(object=path))))
+        return bool(format_is_archive(detect_format(path)))
 
     except Exception:
         return False
@@ -83,12 +63,8 @@ def is_archive_format(fmt: str | None) -> bool:
     Returns:
         True if `fmt` names an archive format, False otherwise.
     """
-    if fmt is None:
-        return False
-
-    # The core also knows containers it detects but cannot write yet (e.g. 7z),
-    # so they reach the archive path and its "not supported yet" error
-    return fmt.lower() in ARCHIVE_FORMATS or format_is_archive(fmt.lower())
+    # Includes currently unwritable formats (e.g. 7z)
+    return fmt is not None and format_is_archive(fmt.lower())
 
 
 def default_archive_output(first_input: Path, fmt: str) -> Path:

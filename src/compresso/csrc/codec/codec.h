@@ -85,7 +85,7 @@ typedef struct CodecOps {
 
 // A codec run driven a call at a time: a writer compresses what is pushed to
 // `sink`, a reader decompresses `source` as it is pulled; open and close need
-// the GIL; write and read don't; `params` is copied; `ctx` is NULL-tolerant
+// the GIL; write and read don't; `params` is copied
 typedef struct CodecStream CodecStream;
 
 // NULL with a Python exception set on failure
@@ -111,8 +111,7 @@ int codec_read(CodecStream *s, void *buf, size_t n, size_t *got);
 // warning is raised as an error
 int codec_reader_close(CodecStream *s);
 
-// `ctx` is NULL-tolerant; returns 0, -1 with a Python exception set, or
-// COMP_CANCELLED
+// Returns 0, -1 with a Python exception set, or COMP_CANCELLED
 int codec_run_stream(const CodecOps *ops, const CodecParams *params,
                      int decompress, FILE *src, FILE *dst, CoreContext *ctx);
 

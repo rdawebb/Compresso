@@ -136,7 +136,7 @@ def inspect(path: str | Path) -> InspectResult:
         )
 
     cap = get_by_id(cid=algo_id)
-    backend_available: bool = cap is not None and cap.is_available()
+    backend_available: bool = cap is not None
     algo_name: str | None = cap.name if cap else None
 
     can_decompress: bool = backend_available

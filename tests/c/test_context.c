@@ -24,7 +24,7 @@ static int record_progress(CoreContext *ctx, uint64_t done, uint64_t total) {
 }
 
 static CoreContext ctx;
-static volatile int cancel_flag;
+static COMPRESSO_ATOMIC_INT cancel_flag;
 
 void setUp(void) {
   memset(&log_state, 0, sizeof(log_state));

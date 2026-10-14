@@ -14,24 +14,11 @@ from .._core import (
     check_level,
     create_archive,
     extract_archive,
+    format_is_archive,
     list_archive_contents,
 )
 from .._levels import to_core_level
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
-
-# Formats whose container cannot hold multiple entries
-_NON_ARCHIVE_FORMATS = {
-    "gz",
-    "gzip",
-    "bz2",
-    "bzip2",
-    "xz",
-    "zst",
-    "zstd",
-    "lz4",
-    "sz",
-    "snappy",
-}
 
 
 @dataclass(frozen=True)
@@ -192,18 +179,6 @@ class ExtractPlan:
     reason_if_unavailable: str | None
 
 
-def _format_supports_archive(fmt: str) -> bool:
-    """Return whether a format's container can hold multiple entries.
-
-    Args:
-        fmt: The archive format string.
-
-    Returns:
-        True if the format supports multiple entries, False otherwise.
-    """
-    return fmt.lower() not in _NON_ARCHIVE_FORMATS
-
-
 def plan_archive(
     sources: Sequence[str | Path],
     output: str | Path,
@@ -266,7 +241,7 @@ def plan_archive(
             reason_if_unavailable=f"Source path does not exist: {missing[0]}",
         )
 
-    if not _format_supports_archive(options.format):
+    if not format_is_archive(options.format):
         return ArchivePlan(
             sources=source_paths,
             output=output_path,
@@ -392,7 +367,7 @@ def plan_extraction(
                 crc=raw.get("crc"),
                 method=raw.get("method"),
             )
-            for raw in list_archive_contents(str(archive_path))
+            for raw in list_archive_contents(archive_path)
         ]
 
     except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
@@ -479,9 +454,9 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
         total: int = self.plan.total_input_size
         try:
             actual_path = create_archive(
-                str(self.plan.output),
+                self.plan.output,
                 self.plan.options.format,
-                [str(s) for s in self.plan.sources],
+                self.plan.sources,
                 to_core_level(self.plan.options.compression_level),
                 overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
                 threads=self.plan.options.threads,
@@ -576,8 +551,8 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
             options = self.plan.options
             self.plan.output_dir.mkdir(parents=True, exist_ok=True)
             extract_archive(
-                str(self.plan.archive),
-                str(self.plan.output_dir),
+                self.plan.archive,
+                self.plan.output_dir,
                 self.plan.files or [],
                 overwrite=_OVERWRITE_CODES[options.overwrite],
                 max_total_size=options.max_total_size,

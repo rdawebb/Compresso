@@ -9,8 +9,8 @@
 // The KIND_CONTAINER row for `format`, or NULL
 const FormatDesc *find_standalone_format(Format format);
 
-// Compress a file to `fmt`'s container through `out`; `ctx` is NULL-tolerant;
-// returns 0 (including a SKIP), -1 with an exception set, or COMP_CANCELLED
+// Compress a file to `fmt`'s container through `out`; returns 0 (including a
+// SKIP), -1 with an exception set, or COMP_CANCELLED
 int standalone_compress(const FormatDesc *fmt, const char *input_path,
                         const OutputTarget *out, int level, CoreContext *ctx);
 

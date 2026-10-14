@@ -29,7 +29,6 @@ void setUp(void) {
   if (!Py_IsInitialized()) {
     Py_Initialize();
   }
-  ensure_comp_exceptions();
   crc32c_init();
 }
 
@@ -38,7 +37,7 @@ void tearDown(void) { PyErr_Clear(); }
 static int compress(const char *src, const char *dst, AlgoID algo, int level,
                     int overwrite, char *actual, size_t actual_size) {
   return compress_file(src, dst, algo, STRAT_BALANCED, level, overwrite, actual,
-                       actual_size, NULL);
+                       actual_size, test_ctx());
 }
 
 static CHeader read_header(const char *path) {
@@ -98,7 +97,7 @@ void test_round_trip(int index) {
   TEST_ASSERT_EQUAL_INT(
       0, compress(TEST_INPUT, comp, algo, -1, OW_OVERWRITE, NULL, 0));
   TEST_ASSERT_EQUAL_INT(
-      0, decompress_file(comp, out, ALGO_NONE, 2, NULL, 0, NULL));
+      0, decompress_file(comp, out, ALGO_NONE, 2, NULL, 0, test_ctx()));
   TEST_ASSERT_TRUE(files_equal(TEST_INPUT, out));
 
   remove(comp);
@@ -133,7 +132,7 @@ void test_strategy_picks_the_backend_without_an_algo(void) {
   const char *comp = "tmp_cmp_strategy.comp";
   TEST_ASSERT_EQUAL_INT(0,
                         compress_file(TEST_INPUT, comp, ALGO_NONE, STRAT_FAST,
-                                      -1, OW_OVERWRITE, NULL, 0, NULL));
+                                      -1, OW_OVERWRITE, NULL, 0, test_ctx()));
   TEST_ASSERT_EQUAL_UINT8(choose_backend(STRAT_FAST)->id,
                           read_header(comp).algo);
   remove(comp);
@@ -203,8 +202,8 @@ void test_overwrite_rename_writes_beside_the_existing_file(void) {
 void test_decompress_rejects_an_unknown_format(void) {
   write_file("tmp_cmp_plain.txt", "not compressed at all");
   assert_error(decompress_file("tmp_cmp_plain.txt", "tmp_cmp_plain.out",
-                               ALGO_NONE, 2, NULL, 0, NULL),
-               comp_Error);
+                               ALGO_NONE, 2, NULL, 0, test_ctx()),
+               test_errors()->error);
   remove("tmp_cmp_plain.txt");
 }
 
@@ -214,8 +213,8 @@ void test_decompress_rejects_an_unsupported_version(void) {
   write_comp("tmp_cmp_v2.comp", &header);
 
   assert_error(decompress_file("tmp_cmp_v2.comp", "tmp_cmp_v2.out", ALGO_NONE,
-                               2, NULL, 0, NULL),
-               comp_HeaderError);
+                               2, NULL, 0, test_ctx()),
+               test_errors()->header);
   TEST_ASSERT_EQUAL_INT(-1, file_size("tmp_cmp_v2.out"));
 
   remove("tmp_cmp_v2.comp");
@@ -229,7 +228,7 @@ void test_decompress_decodes_with_the_header_algo(void) {
 
   // Naming the right algorithm is allowed, as a check
   TEST_ASSERT_EQUAL_INT(
-      0, decompress_file(comp, out, ALGO_ZSTD, 2, NULL, 0, NULL));
+      0, decompress_file(comp, out, ALGO_ZSTD, 2, NULL, 0, test_ctx()));
   TEST_ASSERT_TRUE(files_equal(TEST_INPUT, out));
 
   remove(comp);
@@ -242,7 +241,7 @@ void test_decompress_refuses_an_algo_the_header_contradicts(void) {
   TEST_ASSERT_EQUAL_INT(
       0, compress(TEST_INPUT, comp, ALGO_ZSTD, -1, OW_OVERWRITE, NULL, 0));
 
-  assert_error(decompress_file(comp, out, ALGO_LZ4, 2, NULL, 0, NULL),
+  assert_error(decompress_file(comp, out, ALGO_LZ4, 2, NULL, 0, test_ctx()),
                PyExc_ValueError);
   TEST_ASSERT_EQUAL_INT(-1, file_size(out));
 
@@ -255,8 +254,8 @@ void test_decompress_rejects_an_unknown_header_algo(void) {
   write_comp("tmp_cmp_algo.comp", &header);
 
   assert_error(decompress_file("tmp_cmp_algo.comp", "tmp_cmp_algo.out",
-                               ALGO_NONE, 2, NULL, 0, NULL),
-               comp_HeaderError);
+                               ALGO_NONE, 2, NULL, 0, test_ctx()),
+               test_errors()->header);
   TEST_ASSERT_EQUAL_INT(-1, file_size("tmp_cmp_algo.out"));
 
   remove("tmp_cmp_algo.comp");
@@ -266,8 +265,8 @@ void test_decompress_rejects_a_truncated_header(void) {
   write_file("tmp_cmp_short.comp", "COMP\x01\x01");
 
   assert_error(decompress_file("tmp_cmp_short.comp", "tmp_cmp_short.out",
-                               ALGO_NONE, 2, NULL, 0, NULL),
-               comp_HeaderError);
+                               ALGO_NONE, 2, NULL, 0, test_ctx()),
+               test_errors()->header);
   TEST_ASSERT_EQUAL_INT(-1, file_size("tmp_cmp_short.out"));
 
   remove("tmp_cmp_short.comp");
@@ -291,8 +290,8 @@ void test_decompress_removes_output_of_a_corrupt_payload(void) {
   fclose(f);
 
   TEST_ASSERT_EQUAL_INT(
-      -1, decompress_file(comp, out, ALGO_NONE, 2, NULL, 0, NULL));
-  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(comp_CorruptDataError));
+      -1, decompress_file(comp, out, ALGO_NONE, 2, NULL, 0, test_ctx()));
+  TEST_ASSERT_TRUE(PyErr_ExceptionMatches(test_errors()->corrupt_data));
   TEST_ASSERT_EQUAL_INT(-1, file_size(out));
 
   remove(comp);
@@ -309,8 +308,8 @@ void test_decompress_rejects_data_after_the_payload(void) {
 
   // .comp holds exactly one stream, so has no trailing data to tolerate
   assert_error(decompress_file(comp, "tmp_cmp_trailing.out", ALGO_NONE, 2, NULL,
-                               0, NULL),
-               comp_CorruptDataError);
+                               0, test_ctx()),
+               test_errors()->corrupt_data);
   TEST_ASSERT_EQUAL_INT(-1, file_size("tmp_cmp_trailing.out"));
 
   remove(comp);
@@ -342,9 +341,9 @@ static void assert_size_refused(int index, int delta) {
   compress_with_recorded_size(comp, algo, delta);
 
   remove(out); // Left by a failed run, it would read as written
-  assert_error(decompress_file(comp, out, ALGO_NONE, OW_OVERWRITE, NULL, 0,
-                               NULL),
-               comp_CorruptDataError);
+  assert_error(
+      decompress_file(comp, out, ALGO_NONE, OW_OVERWRITE, NULL, 0, test_ctx()),
+      test_errors()->corrupt_data);
   TEST_ASSERT_EQUAL_INT(-1, file_size(out));
 
   remove(comp);
@@ -421,9 +420,9 @@ void test_checksum_catches_a_changed_byte(int index) {
   fclose(f);
 
   remove(out); // Left by a failed run, it would read as written
-  assert_error(decompress_file(comp, out, ALGO_NONE, OW_OVERWRITE, NULL, 0,
-                               NULL),
-               comp_CorruptDataError);
+  assert_error(
+      decompress_file(comp, out, ALGO_NONE, OW_OVERWRITE, NULL, 0, test_ctx()),
+      test_errors()->corrupt_data);
   TEST_ASSERT_EQUAL_INT(-1, file_size(out));
 
   remove("tmp_cmp_noise");
@@ -450,14 +449,14 @@ void test_payload_without_a_checksum_still_decodes(int index) {
   TEST_ASSERT_NOT_NULL(dst);
   fwrite(buf, 1, sizeof(buf), dst);
   CodecParams params = {.level = -1};
-  const CodecOps *ops =
-      algo == ALGO_ZSTD ? codec_zstd_ops() : codec_lz4_ops();
-  TEST_ASSERT_EQUAL_INT(0, codec_run_stream(ops, &params, 0, src, dst, NULL));
+  const CodecOps *ops = algo == ALGO_ZSTD ? codec_zstd_ops() : codec_lz4_ops();
+  TEST_ASSERT_EQUAL_INT(
+      0, codec_run_stream(ops, &params, 0, src, dst, test_ctx()));
   fclose(src);
   fclose(dst);
 
-  TEST_ASSERT_EQUAL_INT(
-      0, decompress_file(comp, out, ALGO_NONE, OW_OVERWRITE, NULL, 0, NULL));
+  TEST_ASSERT_EQUAL_INT(0, decompress_file(comp, out, ALGO_NONE, OW_OVERWRITE,
+                                           NULL, 0, test_ctx()));
   TEST_ASSERT_TRUE(files_equal(TEST_INPUT, out));
 
   remove(comp);

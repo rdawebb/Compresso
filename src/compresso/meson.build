@@ -1,16 +1,18 @@
+fsutil_platform = host_machine.system() == 'windows' ? 'fsutil_win32.c' : 'fsutil_posix.c'
+
 py.extension_module('_core',
   files(
     'csrc/_core.c',
     'csrc/common.c',
-    'csrc/compress.c',
+    'csrc/comp_format.c',
     'csrc/pipeline.c',
     'csrc/formats.c',
     'csrc/standalone.c',
     'csrc/registry.c',
     'csrc/strategy.c',
-    'csrc/archives.c',
     'csrc/validate.c',
     'csrc/fsutil.c',
+    'csrc' / fsutil_platform,
     # Shared codec core
     'csrc/codec/codec.c',
     'csrc/codec/zstd.c',
@@ -21,7 +23,9 @@ py.extension_module('_core',
     'csrc/codec/snappy.c',
     'csrc/codec/crc32c.c',
     'csrc/backends.c',
-    # Archive backends
+    # Archives
+    'csrc/archives/archive_ops.c',
+    'csrc/archives/extract.c',
     'csrc/archives/tar.c',
     'csrc/archives/zip.c',
     'csrc/archives/walk.c',

@@ -28,8 +28,8 @@ typedef struct {
 } WalkList;
 
 // Every input and everything below it, depth-first, one lstat each; special
-// files and `own` are skipped with a warning; -1 sets OSError, and `out` needs
-// walk_list_free either way
+// files and `own` are skipped with a warning; returns COMP_CANCELLED, or -1 with
+// an exception set, and `out` needs walk_list_free either way
 int walk_sources(const char **input_paths, size_t num_paths,
                  const OwnFiles *own, CoreContext *ctx, WalkList *out);
 

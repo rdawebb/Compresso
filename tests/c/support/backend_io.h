@@ -10,9 +10,9 @@
 // Read a whole fixture into a malloc'd buffer, or NULL on failure
 unsigned char *read_fixture(const char *path, size_t *out_size);
 
-// Run `input` through the backend's stream op via tmpfile()s with a NULL
-// context; returns 0 with *output malloc'd (non-NULL even when empty), or
-// non-zero with *output NULL
+// Run `input` through the backend's stream op via tmpfile()s with test_ctx();
+// returns 0 with *output malloc'd (non-NULL even when empty), or non-zero with
+// *output NULL
 int stream_compress_bytes(const CBackend *backend, const unsigned char *input,
                           size_t input_size, int level, unsigned char **output,
                           size_t *output_size);

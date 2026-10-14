@@ -25,9 +25,9 @@ void *safe_malloc(size_t size) {
   return ptr;
 }
 
-void set_backend_error(const CBackend *backend, const char *op,
-                       const char *context) {
-  PyErr_Format(comp_BackendError, "Backend '%s' %s failed (%s)",
+void set_backend_error(const CompErrors *errors, const CBackend *backend,
+                       const char *op, const char *context) {
+  PyErr_Format(errors->backend, "Backend '%s' %s failed (%s)",
                backend && backend->name ? backend->name : "unknown", op,
                context);
 }
@@ -76,6 +76,10 @@ void ctx_begin_stage(CoreContext *ctx, uint64_t total) {
       interval > CTX_MIN_INTERVAL ? interval : CTX_MIN_INTERVAL;
 }
 
+int ctx_cancelled(const CoreContext *ctx) {
+  return ctx && ctx->cancel_flag && comp_atomic_load(ctx->cancel_flag);
+}
+
 // Shared tail of ctx_advance and ctx_set_position: done_bytes is already up to
 // date, so check for cancellation and decide whether to report
 static int ctx_check(CoreContext *ctx) {
@@ -85,7 +89,7 @@ static int ctx_check(CoreContext *ctx) {
   }
 
   // Checked every chunk, so cancellation lands within one chunk
-  if (ctx->cancel_flag && *ctx->cancel_flag) {
+  if (ctx_cancelled(ctx)) {
     return COMP_CANCELLED;
   }
 
@@ -147,7 +151,8 @@ int ctx_set_position(CoreContext *ctx, uint64_t done) {
 }
 
 int codec_finish_file(int err, FILE *input, FILE *output,
-                      const char *output_path, const char *failure_message) {
+                      const char *output_path, const CompErrors *errors,
+                      const char *failure_message) {
   if (input) {
     fclose(input);
   }
@@ -184,7 +189,7 @@ int codec_finish_file(int err, FILE *input, FILE *output,
   // A NULL message means the caller has already set a more specific exception
   // on every path that can fail, so there is no fallback to apply
   if (failure_message && err != COMP_CANCELLED && !PyErr_Occurred()) {
-    PyErr_SetString(comp_BackendError, failure_message);
+    PyErr_SetString(errors->backend, failure_message);
   }
 
   return err;
@@ -277,7 +282,8 @@ int output_commit(const char *temp, const OutputTarget *out) {
 }
 
 int output_finish(int err, FILE *input, FILE *output, const char *temp,
-                  const OutputTarget *out, const char *failure_message) {
+                  const OutputTarget *out, const CompErrors *errors,
+                  const char *failure_message) {
   // Flushed first, as a later write would move the mtime again; a failed flush
   // is left for codec_finish_file to report; best-effort, as in extraction
   fs_stat src;
@@ -287,7 +293,7 @@ int output_finish(int err, FILE *input, FILE *output, const char *temp,
     fs_fchmod(output, src.mode);
   }
 
-  err = codec_finish_file(err, input, output, output ? temp : NULL,
+  err = codec_finish_file(err, input, output, output ? temp : NULL, errors,
                           failure_message);
   if (err != 0 || !output) {
     return err;

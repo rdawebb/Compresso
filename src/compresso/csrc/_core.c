@@ -6,32 +6,22 @@
 #include "standalone.h"
 #include "validate.h"
 
-// Error Objects
-PyObject *comp_Error;
-PyObject *comp_HeaderError;
-PyObject *comp_BackendError;
-PyObject *comp_CorruptDataError;
-PyObject *comp_ExtractionPolicyError;
-PyObject *comp_Cancelled;
-PyObject *comp_TrailingDataWarning;
-
 // ---- Cancel Token ----
 
 // A cancellation flag the C loops can poll without holding the GIL
 typedef struct {
   PyObject_HEAD
-  // One-way and a single machine word
-  volatile int flag;
+  COMPRESSO_ATOMIC_INT flag; // One-way
 } CancelTokenObject;
 
 static PyObject *cancel_token_cancel(PyObject *self, PyObject *ignored UNUSED) {
-  ((CancelTokenObject *)self)->flag = 1;
+  comp_atomic_store(&((CancelTokenObject *)self)->flag, 1);
   Py_RETURN_NONE;
 }
 
 static PyObject *cancel_token_get_cancelled(PyObject *self,
                                             void *closure UNUSED) {
-  return PyBool_FromLong(((CancelTokenObject *)self)->flag);
+  return PyBool_FromLong(comp_atomic_load(&((CancelTokenObject *)self)->flag));
 }
 
 static PyMethodDef cancel_token_methods[] = {
@@ -130,14 +120,16 @@ static void log_bridge(CoreContext *ctx, int level, const char *message) {
   PyGILState_Release(gstate);
 }
 
-// Populates `ctx` from the optional progress=, cancel= and threads= arguments;
-// returns -1 with an exception set if one is invalid
+// Populates `ctx` from `module`'s exceptions and optional progress=, cancel=
+// and threads= arguments; returns -1 with an exception set if one is invalid
 //
 // The bridge is installed even without progress= or cancel=, since it is also
 // where PyErr_CheckSignals runs
-static int core_context_init(CoreContext *ctx, PyObject *progress,
-                             PyObject *cancel, int threads) {
+static int core_context_init(CoreContext *ctx, PyObject *module,
+                             PyObject *progress, PyObject *cancel,
+                             int threads) {
   memset(ctx, 0, sizeof(*ctx));
+  ctx->errors = PyModule_GetState(module);
 
   if (threads < 0) {
     PyErr_Format(PyExc_ValueError,
@@ -169,63 +161,71 @@ static int core_context_init(CoreContext *ctx, PyObject *progress,
 
 // Call only on a non-zero return; an exception already raised by the callback
 // or a signal handler is more specific
-static void set_cancelled_error(int return_code) {
+static void set_cancelled_error(PyObject *module, int return_code) {
   if (return_code == COMP_CANCELLED && !PyErr_Occurred()) {
-    PyErr_SetString(comp_Cancelled, "Operation cancelled");
+    const CompErrors *errors = PyModule_GetState(module);
+    PyErr_SetString(errors->cancelled, "Operation cancelled");
   }
 }
 
-// ---- Path Encoding Helpers ----
+// ---- Path Conversion ----
 
-// Returns a new bytes reference (caller Py_DECREFs) with *out pointing into its
-// buffer; PyUnicode_EncodeFSDefault honours the configured filesystem encoding
-static PyObject *encode_fs_path(PyObject *obj, const char **out) {
-  PyObject *bytes = PyUnicode_EncodeFSDefault(obj);
-  if (!bytes)
-    return NULL;
-  *out = PyBytes_AsString(bytes);
-  return bytes;
-}
+// Paths are parsed with O& and PyUnicode_FSConverter, which takes str, bytes
+// or os.PathLike and rejects embedded NULs; the caller Py_DECREFs the bytes
 
-// Returns a list holding the backing bytes objects; *out_paths (caller frees)
-// and *out_count are filled on success
-static PyObject *encode_fs_path_list(PyObject *list, const char ***out_paths,
-                                     size_t *out_count) {
-  Py_ssize_t n = PyList_Size(list);
-  const char **paths = NULL;
-  if (n > 0) {
-    paths = safe_malloc((size_t)n * sizeof(char *));
-    if (!paths)
-      return NULL;
+typedef struct {
+  PyObject *keepalive; // Tuple of the bytes backing paths
+  const char **paths;
+  size_t count;
+} PathList;
+
+// O& converter for a sequence of paths; call with obj NULL to release
+static int path_list_converter(PyObject *obj, void *out) {
+  PathList *list = out;
+  if (!obj) {
+    Py_CLEAR(list->keepalive);
+    free(list->paths);
+    list->paths = NULL;
+    return 1;
   }
 
-  PyObject *keepalive = PyList_New(n);
-  if (!keepalive) {
-    free(paths);
-    return NULL;
+  // Prevents a bare path from being treated as a sequence of characters
+  if (PyUnicode_Check(obj) || PyBytes_Check(obj)) {
+    PyErr_Format(PyExc_TypeError,
+                 "input_paths must be a sequence of paths, not %s",
+                 Py_TYPE(obj)->tp_name);
+    return 0;
+  }
+
+  PyObject *items = PySequence_Tuple(obj);
+  if (!items) {
+    return 0;
+  }
+
+  Py_ssize_t n = PyTuple_GET_SIZE(items);
+  list->keepalive = PyTuple_New(n);
+  list->paths = n > 0 ? safe_malloc((size_t)n * sizeof(char *)) : NULL;
+  list->count = (size_t)n;
+  if (!list->keepalive || (n > 0 && !list->paths)) {
+    goto fail;
   }
 
   for (Py_ssize_t i = 0; i < n; i++) {
-    PyObject *item = PyList_GetItem(list, i); // borrowed
-    if (!PyUnicode_Check(item)) {
-      PyErr_SetString(PyExc_TypeError, "input_paths must be a list of strings");
-      Py_DECREF(keepalive);
-      free(paths);
-      return NULL;
+    PyObject *bytes = NULL;
+    if (!PyUnicode_FSConverter(PyTuple_GET_ITEM(items, i), &bytes)) {
+      goto fail;
     }
-    PyObject *bytes = PyUnicode_EncodeFSDefault(item);
-    if (!bytes) {
-      Py_DECREF(keepalive);
-      free(paths);
-      return NULL;
-    }
-    PyList_SET_ITEM(keepalive, i, bytes); // steals reference
-    paths[i] = PyBytes_AsString(bytes);
+    PyTuple_SET_ITEM(list->keepalive, i, bytes); // Steals the reference
+    list->paths[i] = PyBytes_AS_STRING(bytes);
   }
 
-  *out_paths = paths;
-  *out_count = (size_t)n;
-  return keepalive;
+  Py_DECREF(items);
+  return Py_CLEANUP_SUPPORTED;
+
+fail:
+  Py_DECREF(items);
+  path_list_converter(NULL, list);
+  return 0;
 }
 
 // ---- Argument Parsing ----
@@ -244,14 +244,14 @@ static int parse_strategy(const char *name, Strategy *out) {
 
 // ---- Module Methods ----
 
-static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_compress_file(PyObject *self, PyObject *args,
                                   PyObject *kwargs) {
   static char *kwlist[] = {"src_path", "dst_path",  "algo",    "strategy",
                            "level",    "overwrite", "threads", "progress",
                            "cancel",   NULL};
 
-  PyObject *src_path_obj;
-  PyObject *dst_path_obj;
+  PyObject *src_path_bytes = NULL;
+  PyObject *dst_path_bytes = NULL;
   const char *algo_name = NULL;
   const char *strategy_name = NULL;
   int level = -1;
@@ -260,66 +260,45 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|ssi$iiOO", kwlist,
-                                   &src_path_obj, &dst_path_obj, &algo_name,
-                                   &strategy_name, &level, &overwrite_existing,
-                                   &threads, &progress, &cancel)) {
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "O&O&|ssi$iiOO", kwlist, PyUnicode_FSConverter,
+          &src_path_bytes, PyUnicode_FSConverter, &dst_path_bytes, &algo_name,
+          &strategy_name, &level, &overwrite_existing, &threads, &progress,
+          &cancel)) {
     return NULL; // Error already set
   }
-
-  if (validate_overwrite_arg(overwrite_existing) != 0) {
-    return NULL;
-  }
-
-  CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
-    return NULL;
-  }
-
-  PyObject *src_path_bytes = PyUnicode_EncodeFSDefault(src_path_obj);
-  PyObject *dst_path_bytes = PyUnicode_EncodeFSDefault(dst_path_obj);
-  if (!src_path_bytes || !dst_path_bytes) {
-    Py_XDECREF(src_path_bytes);
-    Py_XDECREF(dst_path_bytes);
-    return NULL; // Error already set
-  }
-
-  const char *src_path = PyBytes_AsString(src_path_bytes);
-  const char *dst_path = PyBytes_AsString(dst_path_bytes);
 
   AlgoID algo = algo_from_string(algo_name);
   Strategy strat;
+  CoreContext ctx;
+  int result = -1;
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    goto done;
+  }
 
   if (algo_name && algo_name[0] != '\0' && algo == ALGO_NONE) {
     PyErr_Format(PyExc_ValueError, "Unknown compression algorithm: %s",
                  algo_name);
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
+    goto done;
   }
 
-  if (parse_strategy(strategy_name, &strat) != 0) {
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
-  }
-
-  if (validate_compression_request(algo, strat, level, NULL) != 0) {
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
+  if (parse_strategy(strategy_name, &strat) != 0 ||
+      validate_compression_request(algo, strat, level, NULL) != 0 ||
+      core_context_init(&ctx, self, progress, cancel, threads) != 0) {
+    goto done;
   }
 
   char actual_path[FS_PATH_MAX];
-  int return_code =
-      compress_file(src_path, dst_path, algo, strat, level, overwrite_existing,
-                    actual_path, sizeof(actual_path), &ctx);
+  result =
+      compress_file(PyBytes_AS_STRING(src_path_bytes),
+                    PyBytes_AS_STRING(dst_path_bytes), algo, strat, level,
+                    overwrite_existing, actual_path, sizeof(actual_path), &ctx);
 
+done:
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
-
-  if (return_code != 0) {
-    set_cancelled_error(return_code);
+  if (result != 0) {
+    set_cancelled_error(self, result);
     return NULL; // Error already set
   }
 
@@ -331,13 +310,13 @@ static PyObject *py_compress_file(PyObject *self UNUSED, PyObject *args,
   return PyUnicode_DecodeFSDefault(actual_path);
 }
 
-static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_decompress_file(PyObject *self, PyObject *args,
                                     PyObject *kwargs) {
   static char *kwlist[] = {"src_path", "dst_path", "algo",   "overwrite",
                            "threads",  "progress", "cancel", NULL};
 
-  PyObject *src_path_obj;
-  PyObject *dst_path_obj;
+  PyObject *src_path_bytes = NULL;
+  PyObject *dst_path_bytes = NULL;
   const char *algo_name = NULL;
   int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
   int threads = 0;            // One per core
@@ -345,51 +324,39 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
   PyObject *cancel = NULL;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OO|s$iiOO", kwlist, &src_path_obj, &dst_path_obj,
-          &algo_name, &overwrite_existing, &threads, &progress, &cancel)) {
+          args, kwargs, "O&O&|s$iiOO", kwlist, PyUnicode_FSConverter,
+          &src_path_bytes, PyUnicode_FSConverter, &dst_path_bytes, &algo_name,
+          &overwrite_existing, &threads, &progress, &cancel)) {
     return NULL; // Error already set
   }
-
-  if (validate_overwrite_arg(overwrite_existing) != 0) {
-    return NULL;
-  }
-
-  CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
-    return NULL;
-  }
-
-  PyObject *src_path_bytes = PyUnicode_EncodeFSDefault(src_path_obj);
-  PyObject *dst_path_bytes = PyUnicode_EncodeFSDefault(dst_path_obj);
-  if (!src_path_bytes || !dst_path_bytes) {
-    Py_XDECREF(src_path_bytes);
-    Py_XDECREF(dst_path_bytes);
-    return NULL; // Error already set
-  }
-
-  const char *src_path = PyBytes_AsString(src_path_bytes);
-  const char *dst_path = PyBytes_AsString(dst_path_bytes);
 
   AlgoID algo = algo_from_string(algo_name);
+  CoreContext ctx;
+  int result = -1;
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    goto done;
+  }
 
   if (algo_name && algo_name[0] != '\0' && algo == ALGO_NONE) {
     PyErr_Format(PyExc_ValueError, "Unknown decompression algorithm: %s",
                  algo_name);
-    Py_DECREF(src_path_bytes);
-    Py_DECREF(dst_path_bytes);
-    return NULL;
+    goto done;
+  }
+
+  if (core_context_init(&ctx, self, progress, cancel, threads) != 0) {
+    goto done;
   }
 
   char actual_path[FS_PATH_MAX];
-  int return_code =
-      decompress_file(src_path, dst_path, algo, overwrite_existing, actual_path,
-                      sizeof(actual_path), &ctx);
+  result = decompress_file(
+      PyBytes_AS_STRING(src_path_bytes), PyBytes_AS_STRING(dst_path_bytes),
+      algo, overwrite_existing, actual_path, sizeof(actual_path), &ctx);
 
+done:
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
-
-  if (return_code != 0) {
-    set_cancelled_error(return_code);
+  if (result != 0) {
+    set_cancelled_error(self, result);
     return NULL; // Error already set
   }
 
@@ -403,82 +370,57 @@ static PyObject *py_decompress_file(PyObject *self UNUSED, PyObject *args,
 
 // ---- Archive Operations ----
 
-static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_create_archive(PyObject *self, PyObject *args,
                                    PyObject *kwargs) {
   static char *kwlist[] = {"output_path",       "format",    "input_paths",
                            "compression_level", "overwrite", "threads",
                            "progress",          "cancel",    NULL};
 
-  PyObject *output_path_obj = NULL;
+  PyObject *output_path_bytes = NULL;
   const char *format_name = NULL;
-  PyObject *input_paths_obj = NULL;
+  PathList inputs = {0};
   int compression_level = -1;
   int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
   int threads = 0;            // One per core
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OsO|i$iiOO", kwlist, &output_path_obj, &format_name,
-          &input_paths_obj, &compression_level, &overwrite_existing, &threads,
-          &progress, &cancel)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O&sO&|i$iiOO", kwlist,
+                                   PyUnicode_FSConverter, &output_path_bytes,
+                                   &format_name, path_list_converter, &inputs,
+                                   &compression_level, &overwrite_existing,
+                                   &threads, &progress, &cancel)) {
     return NULL; // Error already set
-  }
-
-  if (validate_overwrite_arg(overwrite_existing) != 0) {
-    return NULL;
   }
 
   CompressionPipeline pipe = pipeline_from_name(format_name, compression_level);
+  CoreContext ctx;
+  int result = -1;
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    goto done;
+  }
+
   if (pipe.archive == ARCHIVE_NONE && pipe.codec == FORMAT_UNKNOWN) {
     PyErr_Format(PyExc_ValueError, "Unknown archive format: %s", format_name);
-    return NULL;
+    goto done;
   }
 
   if (validate_compression_request(ALGO_NONE, STRAT_BALANCED, compression_level,
-                                   &pipe) != 0) {
-    return NULL;
-  }
-
-  if (!PyList_Check(input_paths_obj)) {
-    PyErr_SetString(PyExc_TypeError, "input_paths must be a list");
-    return NULL;
-  }
-
-  const char **input_paths = NULL;
-  size_t num_paths = 0;
-  PyObject *paths_keepalive =
-      encode_fs_path_list(input_paths_obj, &input_paths, &num_paths);
-  if (!paths_keepalive) {
-    return NULL; // Error already set
-  }
-
-  const char *output_path = NULL;
-  PyObject *output_path_bytes = encode_fs_path(output_path_obj, &output_path);
-  if (!output_path_bytes) {
-    Py_DECREF(paths_keepalive);
-    free(input_paths);
-    return NULL; // Error already set
-  }
-
-  CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
-    Py_DECREF(output_path_bytes);
-    Py_DECREF(paths_keepalive);
-    free(input_paths);
-    return NULL;
+                                   &pipe) != 0 ||
+      core_context_init(&ctx, self, progress, cancel, threads) != 0) {
+    goto done;
   }
 
   char actual_path[FS_PATH_MAX];
-  int result = create_archive(output_path, &pipe, input_paths, num_paths,
-                              overwrite_existing, actual_path,
-                              sizeof(actual_path), &ctx);
+  result = create_archive(PyBytes_AS_STRING(output_path_bytes), &pipe,
+                          inputs.paths, inputs.count, overwrite_existing,
+                          actual_path, sizeof(actual_path), &ctx);
 
+done:
   Py_DECREF(output_path_bytes);
-  Py_DECREF(paths_keepalive);
-  free(input_paths);
+  path_list_converter(NULL, &inputs);
   if (result != 0) {
-    set_cancelled_error(result);
+    set_cancelled_error(self, result);
     return NULL; // Error already set
   }
 
@@ -491,7 +433,7 @@ static PyObject *py_create_archive(PyObject *self UNUSED, PyObject *args,
   return PyUnicode_DecodeFSDefault(actual_path);
 }
 
-static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_extract_archive(PyObject *self, PyObject *args,
                                     PyObject *kwargs) {
   static char *kwlist[] = {"archive_path",
                            "output_dir",
@@ -509,8 +451,8 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
                            "cancel",
                            NULL};
 
-  PyObject *archive_path_obj = NULL;
-  PyObject *output_dir_obj = NULL;
+  PyObject *archive_path_bytes = NULL;
+  PyObject *output_dir_bytes = NULL;
   PyObject *files_obj = NULL;
   int threads = 0; // One per core
   PyObject *progress = NULL;
@@ -525,20 +467,26 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   unsigned int max_depth = (unsigned int)policy.max_depth;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OOO|$iKIpppipiOO", kwlist, &archive_path_obj,
-          &output_dir_obj, &files_obj, &policy.overwrite_existing,
-          &max_total_size, &max_depth, &policy.preserve_permissions,
-          &policy.exact_permissions, &policy.preserve_timestamps,
-          &policy.allow_symlinks, &policy.overwrite_dir_metadata, &threads,
-          &progress, &cancel)) {
+          args, kwargs, "O&O&O|$iKIpppipiOO", kwlist, PyUnicode_FSConverter,
+          &archive_path_bytes, PyUnicode_FSConverter, &output_dir_bytes,
+          &files_obj, &policy.overwrite_existing, &max_total_size, &max_depth,
+          &policy.preserve_permissions, &policy.exact_permissions,
+          &policy.preserve_timestamps, &policy.allow_symlinks,
+          &policy.overwrite_dir_metadata, &threads, &progress, &cancel)) {
     return NULL; // Error already set
   }
 
   policy.max_total_size = (uint64_t)max_total_size;
   policy.max_depth = (uint32_t)max_depth;
 
+  PyObject *files_tuple = NULL;
+  const char **files = NULL;
+  size_t num_files = 0;
+  CoreContext ctx;
+  int result = -1;
+
   if (validate_overwrite_arg(policy.overwrite_existing) != 0) {
-    return NULL;
+    goto done;
   }
 
   if (policy.allow_symlinks < 0 || policy.allow_symlinks > 2) {
@@ -546,30 +494,28 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
                  "allow_symlinks must be 0 (deny), 1 (allow) or 2 (rewrite), "
                  "not %d",
                  policy.allow_symlinks);
-    return NULL;
+    goto done;
   }
 
   // Prevents a bare string from being treated as a sequence of characters
   if (PyUnicode_Check(files_obj) || PyBytes_Check(files_obj)) {
     PyErr_Format(PyExc_TypeError, "files must be a sequence of str, not %s",
                  Py_TYPE(files_obj)->tp_name);
-    return NULL;
+    goto done;
   }
 
   // Private tuple, so a progress callback that mutates the caller's list
   // can't free the names out from under the extraction
-  PyObject *files_tuple = PySequence_Tuple(files_obj);
+  files_tuple = PySequence_Tuple(files_obj);
   if (!files_tuple) {
-    return NULL;
+    goto done;
   }
 
-  size_t num_files = (size_t)PyTuple_GET_SIZE(files_tuple);
-  const char **files = NULL;
+  num_files = (size_t)PyTuple_GET_SIZE(files_tuple);
   if (num_files > 0) {
     files = safe_malloc(num_files * sizeof(char *));
     if (!files) {
-      Py_DECREF(files_tuple);
-      return NULL;
+      goto done;
     }
   }
 
@@ -580,49 +526,29 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
     if (!PyUnicode_Check(item)) {
       PyErr_Format(PyExc_TypeError, "files must contain only str, not %s",
                    Py_TYPE(item)->tp_name);
-      free(files);
-      Py_DECREF(files_tuple);
-      return NULL;
+      goto done;
     }
     files[i] = PyUnicode_AsUTF8(item);
     if (!files[i]) {
-      free(files);
-      Py_DECREF(files_tuple);
-      return NULL;
+      goto done;
     }
   }
 
-  const char *archive_path = NULL;
-  const char *output_dir = NULL;
-  PyObject *archive_path_bytes =
-      encode_fs_path(archive_path_obj, &archive_path);
-  PyObject *output_dir_bytes = encode_fs_path(output_dir_obj, &output_dir);
-  if (!archive_path_bytes || !output_dir_bytes) {
-    Py_XDECREF(archive_path_bytes);
-    Py_XDECREF(output_dir_bytes);
-    free(files);
-    Py_DECREF(files_tuple);
-    return NULL; // Error already set
+  if (core_context_init(&ctx, self, progress, cancel, threads) != 0) {
+    goto done;
   }
 
-  CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
-    Py_DECREF(archive_path_bytes);
-    Py_DECREF(output_dir_bytes);
-    free(files);
-    Py_DECREF(files_tuple);
-    return NULL;
-  }
+  result = extract_archive(PyBytes_AS_STRING(archive_path_bytes),
+                           PyBytes_AS_STRING(output_dir_bytes), files,
+                           num_files, &policy, &ctx);
 
-  int result = extract_archive(archive_path, output_dir, files, num_files,
-                               &policy, &ctx);
-
+done:
   Py_DECREF(archive_path_bytes);
   Py_DECREF(output_dir_bytes);
   free(files);
-  Py_DECREF(files_tuple);
+  Py_XDECREF(files_tuple);
   if (result != 0) {
-    set_cancelled_error(result);
+    set_cancelled_error(self, result);
     return NULL; // Error already set
   }
 
@@ -633,40 +559,34 @@ static PyObject *py_extract_archive(PyObject *self UNUSED, PyObject *args,
   Py_RETURN_NONE;
 }
 
-static PyObject *py_list_archive_contents(PyObject *self UNUSED,
-                                          PyObject *args) {
-  PyObject *archive_path_obj = NULL;
+static PyObject *py_list_archive_contents(PyObject *self, PyObject *args) {
+  PyObject *archive_path_bytes = NULL;
 
-  if (!PyArg_ParseTuple(args, "O", &archive_path_obj)) {
-    return NULL; // Error already set
-  }
-
-  const char *archive_path = NULL;
-  PyObject *archive_path_bytes =
-      encode_fs_path(archive_path_obj, &archive_path);
-  if (!archive_path_bytes) {
+  if (!PyArg_ParseTuple(args, "O&", PyUnicode_FSConverter,
+                        &archive_path_bytes)) {
     return NULL; // Error already set
   }
 
   // No progress to report, but the bridge still logs and checks for signals
   CoreContext ctx;
-  core_context_init(&ctx, NULL, NULL, 0);
+  core_context_init(&ctx, self, NULL, NULL, 0);
 
-  PyObject *file_list = list_archive_contents(archive_path, &ctx);
+  PyObject *file_list =
+      list_archive_contents(PyBytes_AS_STRING(archive_path_bytes), &ctx);
   Py_DECREF(archive_path_bytes);
   return file_list; // NULL propagates the already-set exception
 }
 
 // ---- Standalone Methods ----
 
-static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_compress_standalone(PyObject *self, PyObject *args,
                                         PyObject *kwargs) {
   static char *kwlist[] = {"input_path",        "output_path", "format",
                            "compression_level", "overwrite",   "threads",
                            "progress",          "cancel",      NULL};
 
-  PyObject *input_path_obj = NULL;
-  PyObject *output_path_obj = NULL;
+  PyObject *input_path_bytes = NULL;
+  PyObject *output_path_bytes = NULL;
   const char *format_name = NULL;
   int compression_level = -1;
   int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
@@ -675,60 +595,52 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
   PyObject *cancel = NULL;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OOs|i$iiOO", kwlist, &input_path_obj, &output_path_obj,
+          args, kwargs, "O&O&s|i$iiOO", kwlist, PyUnicode_FSConverter,
+          &input_path_bytes, PyUnicode_FSConverter, &output_path_bytes,
           &format_name, &compression_level, &overwrite_existing, &threads,
           &progress, &cancel)) {
     return NULL; // Error already set
   }
 
-  if (validate_overwrite_arg(overwrite_existing) != 0) {
-    return NULL;
-  }
-
   CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
-    return NULL;
+  char actual_path[FS_PATH_MAX];
+  int rc = -1;
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    goto done;
   }
 
   const FormatDesc *desc = format_by_name(format_name);
   if (!desc) {
     PyErr_Format(PyExc_ValueError, "Unknown standalone format: %s",
                  format_name);
-    return NULL;
+    goto done;
   }
 
   const FormatDesc *fmt = find_standalone_format(desc->id);
   if (!fmt) {
     PyErr_Format(PyExc_ValueError, "Format cannot compress a single file: %s",
                  desc->name);
-    return NULL;
+    goto done;
   }
 
-  if (validate_level(fmt->name, fmt->levels, compression_level) != 0) {
-    return NULL;
+  if (validate_level(fmt->name, fmt->levels, compression_level) != 0 ||
+      core_context_init(&ctx, self, progress, cancel, threads) != 0) {
+    goto done;
   }
 
-  const char *input_path = NULL;
-  const char *output_path = NULL;
-  PyObject *input_path_bytes = encode_fs_path(input_path_obj, &input_path);
-  PyObject *output_path_bytes = encode_fs_path(output_path_obj, &output_path);
-  if (!input_path_bytes || !output_path_bytes) {
-    Py_XDECREF(input_path_bytes);
-    Py_XDECREF(output_path_bytes);
-    return NULL; // Error already set
-  }
-
-  char actual_path[FS_PATH_MAX];
-  OutputTarget out = {.path = output_path,
+  OutputTarget out = {.path = PyBytes_AS_STRING(output_path_bytes),
                       .overwrite = overwrite_existing,
                       .actual = actual_path,
                       .actual_size = sizeof(actual_path),
                       .keep_source_metadata = 1};
-  int rc = standalone_compress(fmt, input_path, &out, compression_level, &ctx);
+  rc = standalone_compress(fmt, PyBytes_AS_STRING(input_path_bytes), &out,
+                           compression_level, &ctx);
+
+done:
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
   if (rc != 0) {
-    set_cancelled_error(rc);
+    set_cancelled_error(self, rc);
     return NULL; // Error already set
   }
 
@@ -741,13 +653,13 @@ static PyObject *py_compress_standalone(PyObject *self UNUSED, PyObject *args,
   return PyUnicode_DecodeFSDefault(actual_path);
 }
 
-static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_decompress_standalone(PyObject *self, PyObject *args,
                                           PyObject *kwargs) {
   static char *kwlist[] = {"input_path", "output_path", "format", "overwrite",
                            "threads",    "progress",    "cancel", NULL};
 
-  PyObject *input_path_obj = NULL;
-  PyObject *output_path_obj = NULL;
+  PyObject *input_path_bytes = NULL;
+  PyObject *output_path_bytes = NULL;
   const char *format_name = NULL;
   int overwrite_existing = 0; // ERROR by default; frontends opt into RENAME
   int threads = 0;            // One per core
@@ -758,69 +670,71 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
   FILE *src = NULL;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OO|s$iiOO", kwlist, &input_path_obj, &output_path_obj,
+          args, kwargs, "O&O&|s$iiOO", kwlist, PyUnicode_FSConverter,
+          &input_path_bytes, PyUnicode_FSConverter, &output_path_bytes,
           &format_name, &overwrite_existing, &threads, &progress, &cancel)) {
     return NULL; // Error already set
   }
 
-  if (validate_overwrite_arg(overwrite_existing) != 0) {
-    return NULL;
-  }
-
+  const char *input_path = PyBytes_AS_STRING(input_path_bytes);
+  const FormatDesc *named = NULL;
   CoreContext ctx;
-  if (core_context_init(&ctx, progress, cancel, threads) != 0) {
-    return NULL;
+  char actual_path[FS_PATH_MAX];
+  int rc = -1;
+  if (validate_overwrite_arg(overwrite_existing) != 0) {
+    goto done;
   }
 
-  const char *input_path = NULL;
-  const char *output_path = NULL;
-  PyObject *input_path_bytes = encode_fs_path(input_path_obj, &input_path);
-  PyObject *output_path_bytes = encode_fs_path(output_path_obj, &output_path);
-  if (!input_path_bytes || !output_path_bytes) {
-    goto fail; // Error already set
+  if (format_name) {
+    named = format_by_name(format_name);
+    if (!named) {
+      PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
+      goto done;
+    }
+  }
+
+  if (core_context_init(&ctx, self, progress, cancel, threads) != 0) {
+    goto done;
   }
 
   src = open_source(input_path, &format);
   if (!src) {
-    goto fail;
+    goto done;
   }
 
-  if (format_name) {
-    const FormatDesc *desc = format_by_name(format_name);
-    if (!desc) {
-      PyErr_Format(PyExc_ValueError, "Unknown format: %s", format_name);
-      goto fail;
-    }
-    format = desc->id;
+  if (named) {
+    format = named->id;
   } else if (format == FORMAT_UNKNOWN) {
     PyErr_Format(PyExc_ValueError, "Could not detect format for: %s",
                  input_path);
-    goto fail;
+    goto done;
   }
 
   const FormatDesc *fmt = find_standalone_format(format);
-
   if (!fmt) {
     PyErr_Format(PyExc_ValueError, "Format cannot decompress a single file: %s",
                  format_by_id(format)->name);
-    goto fail;
+    goto done;
   }
 
-  char actual_path[FS_PATH_MAX];
-  OutputTarget out = {.path = output_path,
+  OutputTarget out = {.path = PyBytes_AS_STRING(output_path_bytes),
                       .overwrite = overwrite_existing,
                       .actual = actual_path,
                       .actual_size = sizeof(actual_path),
                       .keep_source_metadata = 1};
-  int rc = standalone_decompress(fmt, input_path, src, &out, &ctx);
-  src = NULL;
-  if (rc != 0) {
-    set_cancelled_error(rc);
-    goto fail; // Error already set
-  }
+  rc = standalone_decompress(fmt, input_path, src, &out, &ctx);
+  src = NULL; // Closed by standalone_decompress
 
+done:
+  if (src) {
+    fclose(src);
+  }
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
+  if (rc != 0) {
+    set_cancelled_error(self, rc);
+    return NULL; // Error already set
+  }
 
   if (ctx_finish(&ctx) != 0) {
     return NULL;
@@ -828,33 +742,27 @@ static PyObject *py_decompress_standalone(PyObject *self UNUSED, PyObject *args,
 
   // The path actually written, which RENAME may have changed vs asked for
   return PyUnicode_DecodeFSDefault(actual_path);
-
-fail:
-  if (src) {
-    fclose(src);
-  }
-  Py_XDECREF(input_path_bytes);
-  Py_XDECREF(output_path_bytes);
-  return NULL;
 }
 
 // ---- Format Detection Methods ----
 
 static PyObject *py_detect_format(PyObject *self UNUSED, PyObject *args) {
-  PyObject *file_path_obj = NULL;
+  PyObject *file_path_bytes = NULL;
 
-  if (!PyArg_ParseTuple(args, "O", &file_path_obj)) {
+  if (!PyArg_ParseTuple(args, "O&", PyUnicode_FSConverter, &file_path_bytes)) {
     return NULL; // Error already set
   }
 
-  const char *file_path = NULL;
-  PyObject *file_path_bytes = encode_fs_path(file_path_obj, &file_path);
-  if (!file_path_bytes) {
-    return NULL; // Error already set
+  const char *file_path = PyBytes_AS_STRING(file_path_bytes);
+  Format format;
+  FILE *f = open_source(file_path, &format);
+  if (!f) {
+    Py_DECREF(file_path_bytes);
+    return NULL;
   }
+  fclose(f);
 
-  CompressionPipeline pipe =
-      pipeline_from_format(detect_format_from_path(file_path), file_path);
+  CompressionPipeline pipe = pipeline_from_format(format, file_path);
   char name[32];
   pipeline_display_name(&pipe, name, sizeof(name));
 
@@ -871,11 +779,38 @@ static PyObject *py_format_is_archive(PyObject *self UNUSED, PyObject *args) {
 
   CompressionPipeline pipe = pipeline_from_name(format_name, -1);
 
-  if (pipe.archive != ARCHIVE_NONE) {
-    Py_RETURN_TRUE;
-  }
+  return PyBool_FromLong(pipeline_is_valid(&pipe) &&
+                         pipe.archive != ARCHIVE_NONE);
+}
 
-  Py_RETURN_FALSE;
+// The set entries of a FormatDesc name slot, which fill from the front
+static PyObject *names_to_py(const char *const names[2]) {
+  if (!names[0])
+    return PyTuple_New(0);
+  return names[1] ? Py_BuildValue("(ss)", names[0], names[1])
+                  : Py_BuildValue("(s)", names[0]);
+}
+
+static PyObject *py_standalone_formats(PyObject *self UNUSED,
+                                       PyObject *Py_UNUSED(ignored)) {
+  PyObject *list = PyList_New(0);
+  if (!list)
+    return NULL;
+
+  for (const FormatDesc *d = FORMATS; d->name; d++) {
+    if (d->kind != KIND_CONTAINER)
+      continue;
+    PyObject *item = Py_BuildValue("{s:s,s:N,s:N}", "name", d->name,
+                                   "aliases", names_to_py(d->aliases), "exts",
+                                   names_to_py(d->exts));
+    if (!item || PyList_Append(list, item) < 0) {
+      Py_XDECREF(item);
+      Py_DECREF(list);
+      return NULL;
+    }
+    Py_DECREF(item);
+  }
+  return list;
 }
 
 // ---- Capabilities Methods ----
@@ -989,6 +924,9 @@ static PyMethodDef CoreMethods[] = {
      "Detect the format of a file."},
     {"format_is_archive", (PyCFunction)py_format_is_archive, METH_VARARGS,
      "Check if a format is an archive format."},
+    {"standalone_formats", (PyCFunction)py_standalone_formats, METH_NOARGS,
+     "Describe each single-file container format as a dict (name, aliases, "
+     "exts)."},
 
     {"get_capabilities", (PyCFunction)py_get_capabilities, METH_NOARGS,
      "Get the capabilities of available compression backends."},
@@ -1006,136 +944,90 @@ static PyMethodDef CoreMethods[] = {
     {NULL, NULL, 0, NULL} // Sentinel
 };
 
-static struct PyModuleDef coremodule = {
-    PyModuleDef_HEAD_INIT,
-    "_core",
-    "Compresso core extension",
-    -1,
-    CoreMethods,
-    NULL, // m_slots
-    NULL, // m_traverse
-    NULL, // m_clear
-    NULL  // m_free
-};
-
 // ---- Module Initialisation ----
 
-PyMODINIT_FUNC PyInit__core(void) {
+static int core_exec(PyObject *module) {
   crc32c_init();
 
-  PyObject *module = PyModule_Create(&coremodule);
-  if (module == NULL) {
-    return NULL;
+  // Built at run time: on Windows, &PyExc_UserWarning isn't a constant
+  // expression; each base must precede the exceptions derived from it;
+  // failure leaves the rest to core_free
+  CompErrors *errors = PyModule_GetState(module);
+  const struct {
+    PyObject **slot;
+    const char *name;
+    PyObject **base;
+  } exceptions[] = {
+      {&errors->error, "compresso.Error", NULL},
+      {&errors->header, "compresso.HeaderError", &errors->error},
+      {&errors->backend, "compresso.BackendError", &errors->error},
+      {&errors->cancelled, "compresso.Cancelled", &errors->error},
+      {&errors->corrupt_data, "compresso.CorruptDataError", &errors->error},
+      {&errors->extraction_policy, "compresso.ExtractionPolicyError",
+       &errors->error},
+      {&errors->trailing_data_warning, "compresso.TrailingDataWarning",
+       &PyExc_UserWarning},
+  };
+
+  for (size_t i = 0; i < sizeof exceptions / sizeof exceptions[0]; i++) {
+    PyObject *base = exceptions[i].base ? *exceptions[i].base : NULL;
+    *exceptions[i].slot = PyErr_NewException(exceptions[i].name, base, NULL);
+    if (*exceptions[i].slot == NULL ||
+        PyModule_AddObjectRef(module, strrchr(exceptions[i].name, '.') + 1,
+                              *exceptions[i].slot) < 0) {
+      return -1;
+    }
   }
 
-  comp_Error = PyErr_NewException("compresso.Error", NULL, NULL);
-  if (!comp_Error) {
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_HeaderError =
-      PyErr_NewException("compresso.HeaderError", comp_Error, NULL);
-  if (!comp_HeaderError) {
-    Py_DECREF(comp_Error);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_BackendError =
-      PyErr_NewException("compresso.BackendError", comp_Error, NULL);
-  if (!comp_BackendError) {
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_Error);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_Cancelled = PyErr_NewException("compresso.Cancelled", comp_Error, NULL);
-  if (!comp_Cancelled) {
-    Py_DECREF(comp_BackendError);
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_Error);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_CorruptDataError =
-      PyErr_NewException("compresso.CorruptDataError", comp_Error, NULL);
-  if (!comp_CorruptDataError ||
-      PyModule_AddObjectRef(module, "CorruptDataError", comp_CorruptDataError) <
-          0) {
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_ExtractionPolicyError =
-      PyErr_NewException("compresso.ExtractionPolicyError", comp_Error, NULL);
-  if (!comp_ExtractionPolicyError ||
-      PyModule_AddObjectRef(module, "ExtractionPolicyError",
-                            comp_ExtractionPolicyError) < 0) {
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  comp_TrailingDataWarning = PyErr_NewException("compresso.TrailingDataWarning",
-                                                PyExc_UserWarning, NULL);
-  if (!comp_TrailingDataWarning ||
-      PyModule_AddObjectRef(module, "TrailingDataWarning",
-                            comp_TrailingDataWarning) < 0) {
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  Py_INCREF(comp_Error);
-  if (PyModule_AddObject(module, "Error", comp_Error) < 0) {
-    Py_DECREF(comp_Error);
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_BackendError);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  Py_INCREF(comp_HeaderError);
-  if (PyModule_AddObject(module, "HeaderError", comp_HeaderError) < 0) {
-    Py_DECREF(comp_Error);
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_BackendError);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  Py_INCREF(comp_BackendError);
-  if (PyModule_AddObject(module, "BackendError", comp_BackendError) < 0) {
-    Py_DECREF(comp_Error);
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_BackendError);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  Py_INCREF(comp_Cancelled);
-  if (PyModule_AddObject(module, "Cancelled", comp_Cancelled) < 0) {
-    Py_DECREF(comp_Error);
-    Py_DECREF(comp_HeaderError);
-    Py_DECREF(comp_BackendError);
-    Py_DECREF(comp_Cancelled);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  if (PyType_Ready(&CancelTokenType) < 0) {
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  Py_INCREF(&CancelTokenType);
-  if (PyModule_AddObject(module, "CancelToken", (PyObject *)&CancelTokenType) <
-      0) {
-    Py_DECREF(&CancelTokenType);
-    Py_DECREF(module);
-    return NULL;
-  }
-
-  return module;
+  return PyModule_AddType(module, &CancelTokenType);
 }
+
+static int core_traverse(PyObject *module, visitproc visit, void *arg) {
+  CompErrors *errors = PyModule_GetState(module);
+  Py_VISIT(errors->error);
+  Py_VISIT(errors->header);
+  Py_VISIT(errors->backend);
+  Py_VISIT(errors->corrupt_data);
+  Py_VISIT(errors->extraction_policy);
+  Py_VISIT(errors->cancelled);
+  Py_VISIT(errors->trailing_data_warning);
+  return 0;
+}
+
+static int core_clear(PyObject *module) {
+  CompErrors *errors = PyModule_GetState(module);
+  Py_CLEAR(errors->error);
+  Py_CLEAR(errors->header);
+  Py_CLEAR(errors->backend);
+  Py_CLEAR(errors->corrupt_data);
+  Py_CLEAR(errors->extraction_policy);
+  Py_CLEAR(errors->cancelled);
+  Py_CLEAR(errors->trailing_data_warning);
+  return 0;
+}
+
+static void core_free(void *module) { core_clear((PyObject *)module); }
+
+static PyModuleDef_Slot core_slots[] = {
+    {Py_mod_exec, core_exec},
+#if PY_VERSION_HEX >= 0x030C0000
+    // Progress and log bridges take the GIL through PyGILState, which only
+    // knows the main interpreter
+    {Py_mod_multiple_interpreters, Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED},
+#endif
+    {0, NULL},
+};
+
+static struct PyModuleDef coremodule = {
+    PyModuleDef_HEAD_INIT,
+    .m_name = "_core",
+    .m_doc = "Compresso core extension",
+    .m_size = sizeof(CompErrors),
+    .m_methods = CoreMethods,
+    .m_slots = core_slots,
+    .m_traverse = core_traverse,
+    .m_clear = core_clear,
+    .m_free = core_free,
+};
+
+PyMODINIT_FUNC PyInit__core(void) { return PyModuleDef_Init(&coremodule); }

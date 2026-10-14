@@ -181,6 +181,22 @@ class TestArchiveCancellation:
 
         assert not output.exists()
 
+    def test_cancel_lands_during_the_walk(
+        self, temp_dir: Path, archive_format: tuple[str, str]
+    ) -> None:
+        """Test that a cancel lands while walking a tree with no file data."""
+        fmt, ext = archive_format
+        source = temp_dir / "dirs"
+        (source / "a" / "b").mkdir(parents=True)
+        output = temp_dir / f"never{ext}"
+        token = CancelToken()
+        token.cancel()
+
+        with pytest.raises(Cancelled):
+            create_archive(str(output), fmt, [str(source)], cancel=token)
+
+        assert not output.exists()
+
     def test_cancel_during_extraction(
         self, source_tree: Path, temp_dir: Path, archive_format: tuple[str, str]
     ) -> None:
@@ -264,6 +280,35 @@ class TestArchiveCancellation:
         finally:
             started.set()
             thread.join(timeout=10)
+
+        assert not output.exists()
+
+    # Threaded codecs buffer the input, so most of their work follows it
+    @pytest.mark.parametrize("fmt", ["tar.zst", "tar.xz"])
+    def test_cancel_after_the_last_source_byte(
+        self, source_tree: Path, temp_dir: Path, fmt: str
+    ) -> None:
+        """Test that a cancel still lands while the codec flushes.
+
+        The last report inside the data loop is at the total, after which no
+        source bytes are left to poll from.
+        """
+        output = temp_dir / f"flushing.{fmt}"
+        token = CancelToken()
+
+        def cancel_at_end(done: int, total: int) -> None:
+            """Cancel once every source byte is counted."""
+            if done >= total:
+                token.cancel()
+
+        with pytest.raises(Cancelled):
+            create_archive(
+                str(output),
+                fmt,
+                [str(source_tree)],
+                progress=cancel_at_end,
+                cancel=token,
+            )
 
         assert not output.exists()
 
