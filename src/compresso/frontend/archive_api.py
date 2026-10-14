@@ -14,24 +14,11 @@ from .._core import (
     check_level,
     create_archive,
     extract_archive,
+    format_is_archive,
     list_archive_contents,
 )
 from .._levels import to_core_level
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
-
-# Formats whose container cannot hold multiple entries
-_NON_ARCHIVE_FORMATS = {
-    "gz",
-    "gzip",
-    "bz2",
-    "bzip2",
-    "xz",
-    "zst",
-    "zstd",
-    "lz4",
-    "sz",
-    "snappy",
-}
 
 
 @dataclass(frozen=True)
@@ -192,18 +179,6 @@ class ExtractPlan:
     reason_if_unavailable: str | None
 
 
-def _format_supports_archive(fmt: str) -> bool:
-    """Return whether a format's container can hold multiple entries.
-
-    Args:
-        fmt: The archive format string.
-
-    Returns:
-        True if the format supports multiple entries, False otherwise.
-    """
-    return fmt.lower() not in _NON_ARCHIVE_FORMATS
-
-
 def plan_archive(
     sources: Sequence[str | Path],
     output: str | Path,
@@ -266,7 +241,7 @@ def plan_archive(
             reason_if_unavailable=f"Source path does not exist: {missing[0]}",
         )
 
-    if not _format_supports_archive(options.format):
+    if not format_is_archive(options.format):
         return ArchivePlan(
             sources=source_paths,
             output=output_path,

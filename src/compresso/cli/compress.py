@@ -39,6 +39,7 @@ def _compress_one_file(
     strategy: str,
     level: int | None,
     overwrite: OverwriteMode,
+    threads: int,
     quiet: bool,
 ) -> None:
     """Compress a single file into a one-file container.
@@ -51,6 +52,7 @@ def _compress_one_file(
         strategy: The strategy to use for compression.
         level: The compression level to use.
         overwrite: What to do when the destination file already exists.
+        threads: Worker threads, or 0 for one per core.
         quiet: Whether to suppress progress output.
     """
     algo_lower: str | None = algo.lower() if algo else None
@@ -60,6 +62,7 @@ def _compress_one_file(
         level=level,
         format=fmt,
         overwrite=overwrite,
+        threads=threads,
     )
 
     job = CompressionJob.from_file(src=source, dest=None, options=options)
@@ -130,6 +133,7 @@ def _archive_many(
     fmt: str,
     level: int | None,
     overwrite: OverwriteMode,
+    threads: int,
     quiet: bool,
 ) -> None:
     """Pack several paths, or a directory, into one archive.
@@ -140,6 +144,7 @@ def _archive_many(
         fmt: The format to use for compression.
         level: The compression level to use.
         overwrite: What to do when the destination archive already exists.
+        threads: Worker threads, or 0 for one per core.
         quiet: Whether to suppress progress output.
     """
     destination: Path = (
@@ -147,7 +152,10 @@ def _archive_many(
     )
 
     options = ArchiveOptions(
-        format=fmt.lower(), compression_level=level, overwrite=overwrite
+        format=fmt.lower(),
+        compression_level=level,
+        overwrite=overwrite,
+        threads=threads,
     )
     job = ArchiveJob.from_paths(sources=sources, output=destination, options=options)
     plan = job.plan
@@ -256,6 +264,15 @@ def compress(
             help="Fail instead of renaming a clashing output archive",
         ),
     ] = False,
+    threads: Annotated[
+        int,
+        app.Option(
+            "--threads",
+            "-T",
+            min=0,
+            help="Worker threads for zstd and xz, or 0 for one per core",
+        ),
+    ] = 0,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
@@ -283,8 +300,8 @@ def compress(
         level: Compression level (default: the format's own).
         overwrite: If True, replace an existing output.
         skip_existing: If True, leave an existing output untouched.
-        error_on_conflict: If True, fail instead of renaming a clashing
-            output.
+        error_on_conflict: If True, fail instead of renaming a clashing output.
+        threads: Worker threads for zstd and xz (default: one per core).
         quiet: If True, suppress all output.
     """
     if sum([overwrite, skip_existing, error_on_conflict]) > 1:
@@ -324,6 +341,7 @@ def compress(
                 fmt=chosen or DEFAULT_ARCHIVE_FORMAT,
                 level=level,
                 overwrite=overwrite_mode,
+                threads=threads,
                 quiet=quiet,
             )
 
@@ -336,6 +354,7 @@ def compress(
                 strategy=strategy,
                 level=level,
                 overwrite=overwrite_mode,
+                threads=threads,
                 quiet=quiet,
             )
 

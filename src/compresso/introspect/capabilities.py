@@ -24,14 +24,6 @@ class BackendCapabilities:
     min_level: int | None
     max_level: int | None
 
-    def is_available(self) -> bool:
-        """Check if the backend is available for use
-
-        Returns:
-            bool: Always True if the backend is compiled and listed.
-        """
-        return True
-
     def accepts_level(self, level: int | None) -> bool:
         """Check whether the backend accepts a compression level
 

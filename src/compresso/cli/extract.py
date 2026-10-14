@@ -125,6 +125,7 @@ def _decompress_one_file(
     output: Path | None,
     list_only: bool,
     overwrite: OverwriteMode,
+    threads: int,
     quiet: bool,
 ) -> None:
     """Unpack one single-file container: a `.comp` or a standalone codec.
@@ -134,6 +135,7 @@ def _decompress_one_file(
         output: The output path.
         list_only: Whether to list entries only.
         overwrite: What to do when the destination file already exists.
+        threads: Worker threads for xz, or 0 for one per core.
         quiet: Whether to suppress output.
     """
     if list_only:
@@ -142,10 +144,14 @@ def _decompress_one_file(
             EXIT_USAGE,
         )
 
-    job = DecompressionJob.from_file(src=source, dest=None, overwrite=overwrite)
+    job = DecompressionJob.from_file(
+        src=source, dest=None, overwrite=overwrite, threads=threads
+    )
     dest: Path = resolve_single_output(output, job.plan.dest)
     if dest != job.plan.dest:
-        job = DecompressionJob.from_file(src=source, dest=dest, overwrite=overwrite)
+        job = DecompressionJob.from_file(
+            src=source, dest=dest, overwrite=overwrite, threads=threads
+        )
 
     plan = job.plan
 
@@ -242,6 +248,15 @@ def extract(
             help="Restore modes exactly, keeping setuid/setgid/sticky and ignoring the umask",
         ),
     ] = False,
+    threads: Annotated[
+        int,
+        app.Option(
+            "--threads",
+            "-T",
+            min=0,
+            help="Worker threads for xz, or 0 for one per core",
+        ),
+    ] = 0,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
@@ -272,6 +287,7 @@ def extract(
         max_total_size: Cap on total extracted bytes (default: no cap).
         same_permissions: If True, restore archive entries' modes exactly;
             single-file outputs are unaffected.
+        threads: Worker threads for xz (default: one per core).
         quiet: If True, suppress all output.
     """
     if sum([overwrite, skip_existing, error_on_conflict]) > 1:
@@ -297,6 +313,7 @@ def extract(
         overwrite=mode,
         max_total_size=max_total_size or 0,
         exact_permissions=same_permissions,
+        threads=threads,
     )
 
     try:
@@ -305,7 +322,7 @@ def extract(
                 _extract_archive(source, output, list_only, options, quiet)
 
             else:
-                _decompress_one_file(source, output, list_only, mode, quiet)
+                _decompress_one_file(source, output, list_only, mode, threads, quiet)
 
     except KeyboardInterrupt:
         cancelled("Extraction")

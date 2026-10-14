@@ -11,6 +11,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import orjson
 import pytest
@@ -33,8 +34,13 @@ from compresso.cli._render import (
 )
 from compresso.cli.extract import list_entries
 from compresso.frontend._job import ProgressCallback
-from compresso.frontend.api import CompressionJob
-from compresso.frontend.archive_api import ArchiveEntry, ArchiveJob, ArchiveOptions
+from compresso.frontend.api import CompressionJob, DecompressionJob
+from compresso.frontend.archive_api import (
+    ArchiveEntry,
+    ArchiveJob,
+    ArchiveOptions,
+    ExtractJob,
+)
 
 from .helpers import renamed
 
@@ -993,11 +999,14 @@ class TestSmartCompress:
 
         assert output.read_bytes().startswith(b"\x28\xb5\x2f\xfd")
 
-    def test_tar_zst_beats_zst_in_the_name(
-        self, source_tree: Path, temp_dir: Path
+    @pytest.mark.parametrize(
+        "name", ["out.tar.zst", "out.tar.lz4", "out.tlz4", "out.tar.sz"]
+    )
+    def test_tar_inside_a_codec_is_an_archive(
+        self, source_tree: Path, temp_dir: Path, name: str
     ) -> None:
-        """Test that the longest matching suffix wins, so out.tar.zst is an archive."""
-        output = temp_dir / "out.tar.zst"
+        """Test that two-part extensions name an archive, not their codec alone."""
+        output = temp_dir / name
 
         invoke("compress", source_tree, "-o", output, "-q")
 
@@ -1025,6 +1034,47 @@ class TestSmartCompress:
     def test_unknown_format_is_refused(self, payload: Path) -> None:
         """Test that an unrecognised -f names neither container."""
         invoke("compress", payload, "-f", "bogus", expect=EXIT_USAGE)
+
+
+class TestThreads:
+    """Test that -T reaches each kind of job, and refuses a negative count."""
+
+    def test_threads_reach_every_job(
+        self,
+        payload: Path,
+        source_tree: Path,
+        make_archive: Callable[[str], Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that compress and extract pass -T on, one file or many."""
+        archive = make_archive("tar")
+        seen: list[int] = []
+
+        # Record the count each job was planned with, then stop before it runs
+        def record(**kwargs: Any) -> None:
+            options = kwargs.get("options")
+            seen.append(kwargs["threads"] if options is None else options.threads)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(CompressionJob, "from_file", record)
+        monkeypatch.setattr(ArchiveJob, "from_paths", record)
+        monkeypatch.setattr(DecompressionJob, "from_file", record)
+        monkeypatch.setattr(ExtractJob, "from_archive", record)
+
+        for command, source in [
+            ("compress", payload),
+            ("compress", source_tree),
+            ("extract", payload),
+            ("extract", archive),
+        ]:
+            invoke(command, source, "-T", "3", expect=EXIT_CANCELLED)
+
+        assert seen == [3, 3, 3, 3]
+
+    @pytest.mark.parametrize("command", ["compress", "extract"])
+    def test_negative_threads_is_usage(self, payload: Path, command: str) -> None:
+        """Test that a count below 0 is refused before any work starts."""
+        invoke(command, payload, "-T", "-1", expect=EXIT_USAGE)
 
 
 class TestSmartExtract:
