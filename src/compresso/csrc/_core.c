@@ -783,6 +783,36 @@ static PyObject *py_format_is_archive(PyObject *self UNUSED, PyObject *args) {
                          pipe.archive != ARCHIVE_NONE);
 }
 
+// The set entries of a FormatDesc name slot, which fill from the front
+static PyObject *names_to_py(const char *const names[2]) {
+  if (!names[0])
+    return PyTuple_New(0);
+  return names[1] ? Py_BuildValue("(ss)", names[0], names[1])
+                  : Py_BuildValue("(s)", names[0]);
+}
+
+static PyObject *py_standalone_formats(PyObject *self UNUSED,
+                                       PyObject *Py_UNUSED(ignored)) {
+  PyObject *list = PyList_New(0);
+  if (!list)
+    return NULL;
+
+  for (const FormatDesc *d = FORMATS; d->name; d++) {
+    if (d->kind != KIND_CONTAINER)
+      continue;
+    PyObject *item = Py_BuildValue("{s:s,s:N,s:N}", "name", d->name,
+                                   "aliases", names_to_py(d->aliases), "exts",
+                                   names_to_py(d->exts));
+    if (!item || PyList_Append(list, item) < 0) {
+      Py_XDECREF(item);
+      Py_DECREF(list);
+      return NULL;
+    }
+    Py_DECREF(item);
+  }
+  return list;
+}
+
 // ---- Capabilities Methods ----
 
 static PyObject *py_get_capabilities(PyObject *self UNUSED,
@@ -894,6 +924,9 @@ static PyMethodDef CoreMethods[] = {
      "Detect the format of a file."},
     {"format_is_archive", (PyCFunction)py_format_is_archive, METH_VARARGS,
      "Check if a format is an archive format."},
+    {"standalone_formats", (PyCFunction)py_standalone_formats, METH_NOARGS,
+     "Describe each single-file container format as a dict (name, aliases, "
+     "exts)."},
 
     {"get_capabilities", (PyCFunction)py_get_capabilities, METH_NOARGS,
      "Get the capabilities of available compression backends."},

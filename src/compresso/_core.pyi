@@ -194,6 +194,17 @@ def detect_format(file_path: StrOrBytesPath) -> str:
 def format_is_archive(format: str) -> bool:
     """Return whether a format's container can hold more than one entry."""
 
+class _StandaloneFormatDict(TypedDict):
+    """One single file container format, as defined by `standalone_formats`."""
+
+    name: str
+    aliases: tuple[str, ...]
+    # Without the dot; an output is named with the first part
+    exts: tuple[str, ...]
+
+def standalone_formats() -> list[_StandaloneFormatDict]:
+    """Describe each single-file container format, e.g. gzip."""
+
 EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "hardlink", "special"]
 
 class ArchiveEntryDict(TypedDict):
