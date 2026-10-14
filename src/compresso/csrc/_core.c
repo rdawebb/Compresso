@@ -779,11 +779,8 @@ static PyObject *py_format_is_archive(PyObject *self UNUSED, PyObject *args) {
 
   CompressionPipeline pipe = pipeline_from_name(format_name, -1);
 
-  if (pipe.archive != ARCHIVE_NONE) {
-    Py_RETURN_TRUE;
-  }
-
-  Py_RETURN_FALSE;
+  return PyBool_FromLong(pipeline_is_valid(&pipe) &&
+                         pipe.archive != ARCHIVE_NONE);
 }
 
 // ---- Capabilities Methods ----

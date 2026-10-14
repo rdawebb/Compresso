@@ -374,6 +374,20 @@ class TestDetectFormat:
             _core.detect_format(temp_dir / "missing.gz")
 
 
+class TestFormatIsArchive:
+    """Test that format_is_archive agrees with what create_archive accepts."""
+
+    @pytest.mark.parametrize(
+        ("fmt", "expected"),
+        [("tar.gz", True), ("tgz", True), ("zip", True), ("zip.gz", False)],
+    )
+    def test_only_a_valid_pipeline_is_an_archive(
+        self, fmt: str, expected: bool
+    ) -> None:
+        """Test that zip, which compresses its own entries, takes no codec."""
+        assert _core.format_is_archive(fmt) is expected
+
+
 class TestPathArguments:
     """Test how the entry points convert filesystem paths."""
 
