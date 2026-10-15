@@ -170,6 +170,12 @@ int fs_rename(const char *from, const char *to, int replace);
 // filesystems)
 int fs_link(const char *existing, const char *new_path);
 
+// Symlink `link_path` to `target`, stored unresolved; -1 with errno set
+// (EEXIST if `link_path` exists, EPERM on Windows without Developer Mode or
+// admin rights); on Windows, a target that is already a directory gets a
+// directory link
+int fs_symlink(const char *target, const char *link_path);
+
 // Current read/write offset in an open stream, as a 64-bit value on every
 // platform (plain ftell() is 32-bit on Windows); returns -1 on failure
 int64_t fs_ftell(FILE *stream);

@@ -31,6 +31,7 @@ from .frontend.archive_api import (
     ExtractOptions,
     ExtractPlan,
     OverwriteMode,
+    SymlinkMode,
     plan_archive,
     plan_extraction,
 )
@@ -64,6 +65,7 @@ __all__: list[str] = [
     "JobResult",
     "OverwriteMode",
     "ProgressCallback",
+    "SymlinkMode",
     "TrailingDataWarning",
     "benchmark_file",
     "compress_file",

@@ -20,6 +20,7 @@ from .archive_api import (
     ExtractOptions,
     ExtractPlan,
     OverwriteMode,
+    SymlinkMode,
     plan_archive,
     plan_extraction,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "JobResult",
     "OverwriteMode",
     "ProgressCallback",
+    "SymlinkMode",
     "plan_archive",
     "plan_compression",
     "plan_decompression",

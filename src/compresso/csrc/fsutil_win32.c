@@ -468,7 +468,16 @@ int fs_unlink(const char *path) {
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
     return -1;
 
-  return _wremove(wpath);
+  if (_wremove(wpath) == 0)
+    return 0;
+
+  // A directory symlink is removed as a directory
+  DWORD attrs = GetFileAttributesW(wpath);
+  if (attrs != INVALID_FILE_ATTRIBUTES &&
+      (attrs & FILE_ATTRIBUTE_REPARSE_POINT) &&
+      (attrs & FILE_ATTRIBUTE_DIRECTORY))
+    return _wrmdir(wpath);
+  return -1;
 }
 
 int fs_rmdir(const char *path) {
@@ -504,6 +513,62 @@ int fs_link(const char *existing, const char *new_path) {
     errno = EACCES;
     break;
   default: // e.g. a FAT volume, which has no hardlinks
+    errno = EPERM;
+    break;
+  }
+  return -1;
+}
+
+#ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+#define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
+#endif
+
+int fs_symlink(const char *target, const char *link_path) {
+  wchar_t wtarget[FS_PATH_MAX], wlink[FS_PATH_MAX], wresolved[FS_PATH_MAX];
+  if (fs_widen(target, wtarget, FS_PATH_MAX) != 0 ||
+      fs_widen(link_path, wlink, FS_PATH_MAX) != 0)
+    return -1;
+
+  // A relative link resolves only through backslashes
+  for (wchar_t *p = wtarget; *p; p++)
+    if (*p == L'/')
+      *p = L'\\';
+
+  // Resolved from link's own directory; a target not there yet gets a file link
+  DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+  wchar_t *sep = wcsrchr(wlink, L'\\');
+  wchar_t *fwd = wcsrchr(wlink, L'/');
+  if (fwd && (!sep || fwd > sep))
+    sep = fwd;
+  size_t dir_len = sep ? (size_t)(sep - wlink) + 1 : 0;
+  if (dir_len + wcslen(wtarget) < FS_PATH_MAX) {
+    wmemcpy(wresolved, wlink, dir_len);
+    wcscpy(wresolved + dir_len, wtarget);
+    DWORD attrs = GetFileAttributesW(wresolved);
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+      flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+  }
+
+  BOOLEAN ok = CreateSymbolicLinkW(wlink, wtarget, flags);
+  // Windows before 10 1703 rejects the unprivileged flag
+  if (!ok && GetLastError() == ERROR_INVALID_PARAMETER)
+    ok = CreateSymbolicLinkW(
+        wlink, wtarget, flags & ~SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE);
+  if (ok)
+    return 0;
+
+  switch (GetLastError()) {
+  case ERROR_ALREADY_EXISTS:
+  case ERROR_FILE_EXISTS:
+    errno = EEXIST;
+    break;
+  case ERROR_PATH_NOT_FOUND:
+    errno = ENOENT;
+    break;
+  case ERROR_ACCESS_DENIED:
+    errno = EACCES;
+    break;
+  default: // e.g. ERROR_PRIVILEGE_NOT_HELD
     errno = EPERM;
     break;
   }

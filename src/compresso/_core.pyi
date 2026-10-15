@@ -180,7 +180,8 @@ def extract_archive(
     value in `extraction_policy_default()` in the C extension.
 
     `overwrite` is 0 = error, 1 = skip, 2 = overwrite, 3 = rename;
-    `allow_symlinks` is 0 = deny, 1 = allow, 2 = rewrite to regular files;
+    `allow_symlinks` is 0 = deny, 1 = allow if the target stays inside
+    output_dir, 2 = rewrite to regular files;
     `max_total_size` and `max_depth` treat 0 as unlimited;
     `overwrite_dir_metadata` also restores the mode and mtime of a directory
     that already exists, as GNU tar does, except when `overwrite` is 1 (skip);

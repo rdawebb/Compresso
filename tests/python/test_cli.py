@@ -566,6 +566,21 @@ class TestArchiveRoundTrip:
         expected = 0o777 if exact else 0o777 & ~umask
         assert (dest / "a.txt").stat().st_mode & 0o7777 == expected
 
+    def test_symlinks_flag_reaches_the_policy(self, temp_dir: Path) -> None:
+        """Test that a symlink refused by default extracts with `--symlinks file`."""
+        archive = temp_dir / "link.tar"
+        info = tarfile.TarInfo("link")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "target"
+        with tarfile.open(archive, "w") as tar:
+            tar.addfile(info)
+        dest = temp_dir / "dest"
+
+        invoke("extract", archive, "-o", dest, "-q", expect=EXIT_FAILED)
+        invoke("extract", archive, "-o", dest, "--symlinks", "file", "-q")
+
+        assert (dest / "link").read_bytes() == b"target"
+
 
 class TestCompressConflicts:
     """Test what `compress` does when its output already exists."""

@@ -253,13 +253,60 @@ static int validate_entry_path(const CompErrors *errors, const char *output_dir,
   return 0;
 }
 
-// A hardlink's target names another entry, so it gets the same checks as an
-// entry's own path; anything else has no target to check
+// `base_depth` is the link's directory depth below the root; a ".." after a
+// name is refused, as that name may be a symlink the textual check can't follow
+static int check_symlink_target(const CompErrors *errors,
+                                const ArchiveEntry *entry,
+                                uint32_t base_depth) {
+  const char *target = entry->link_target;
+  if (!target || !*target) {
+    PyErr_Format(errors->extraction_policy, "Symlink has no target: %s",
+                 entry->path);
+    return -1;
+  }
+
+  int contained = !fs_is_absolute(target) && !fs_is_stream_path(target);
+  uint32_t depth = base_depth;
+  int seen_name = 0;
+  for (const char *p = target; contained && *p;) {
+    while (*p && FS_IS_SEP(*p))
+      p++;
+
+    const char *start = p;
+    while (*p && !FS_IS_SEP(*p))
+      p++;
+
+    size_t len = (size_t)(p - start);
+    if (len == 2 && start[0] == '.' && start[1] == '.') {
+      contained = !seen_name && depth > 0;
+      if (contained)
+        depth--;
+    } else if (len > 0 && !(len == 1 && start[0] == '.')) {
+      seen_name = 1;
+    }
+  }
+
+  if (!contained) {
+    PyErr_Format(errors->extraction_policy,
+                 "Path traversal detected in symlink target: %s -> %s",
+                 entry->path, target);
+    return -1;
+  }
+  return 0;
+}
+
+// A hardlink's target names another entry, so gets an entry path's checks; a
+// symlink's is checked from its written path; nothing else has a target
 static int validate_link_target(const CompErrors *errors,
                                 const char *output_dir,
                                 const char *resolved_root,
                                 const ArchiveEntry *entry, const char *target,
                                 const ExtractionPolicy *policy) {
+  if (entry->type == ENTRY_SYMLINK && policy->allow_symlinks == 1) {
+    uint32_t depth = path_depth(entry->path);
+    return check_symlink_target(errors, entry, depth > 0 ? depth - 1 : 0);
+  }
+
   if (entry->type != ENTRY_HARDLINK)
     return 0;
 
@@ -276,20 +323,11 @@ static int validate_link_target(const CompErrors *errors,
 static int check_entry_policy(const CompErrors *errors,
                               const ArchiveEntry *entry,
                               const ExtractionPolicy *policy) {
-  if (entry->type == ENTRY_SYMLINK) {
-    if (!policy->allow_symlinks) {
-      PyErr_Format(errors->extraction_policy,
-                   "Archive contains symlink, but policy denies it: %s",
-                   entry->path);
-      return -1;
-    }
-
-    // Refuse symlinks (creation not implemented yet)
-    if (policy->allow_symlinks == 1) {
-      PyErr_Format(PyExc_NotImplementedError,
-                   "Symlink extraction is not implemented: %s", entry->path);
-      return -1;
-    }
+  if (entry->type == ENTRY_SYMLINK && !policy->allow_symlinks) {
+    PyErr_Format(errors->extraction_policy,
+                 "Archive contains symlink, but policy denies it: %s",
+                 entry->path);
+    return -1;
   }
 
   if (entry->type == ENTRY_SPECIAL) {
@@ -646,8 +684,57 @@ static int rename_conflicting_dir(const char *output_dir, const char *out_path,
   return -1;
 }
 
-// Links `out_path` to the already-extracted `target`, applying the overwrite
-// mode as for a file; returns 0, or -1 with an exception set
+// Runs `make(source, out_path)` under the overwrite mode, as for a file;
+// returns 0, or -1 with an exception set
+static int place_link(int (*make)(const char *, const char *),
+                      const char *source, const char *out_path,
+                      const char *entry_path, int overwrite_existing,
+                      Changes *changes) {
+  if (make(source, out_path) == 0)
+    return record_change(changes, out_path, NULL, 0);
+  if (errno != EEXIST) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+    return -1;
+  }
+
+  switch (overwrite_existing) {
+  case 1: // SKIP
+    return 0;
+  case 2: // OVERWRITE
+    if (move_aside(changes, out_path) != 0)
+      return -1;
+    if (make(source, out_path) != 0) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+      return -1;
+    }
+    return record_change(changes, out_path, NULL, 0);
+  case 3: { // RENAME: each attempt is its own atomic link, as for a file
+    char candidate[FS_PATH_MAX];
+    for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
+      if (fs_conflict_path(out_path, n, candidate, sizeof(candidate)) != 0) {
+        PyErr_Format(PyExc_ValueError,
+                     "Archive entry path too long to rename: %s", entry_path);
+        return -1;
+      }
+      if (make(source, candidate) == 0)
+        return record_change(changes, candidate, NULL, 0);
+      if (errno != EEXIST) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, candidate);
+        return -1;
+      }
+    }
+    PyErr_Format(PyExc_OSError, "Too many conflicting names for entry: %s",
+                 entry_path);
+    return -1;
+  }
+  default: // ERROR
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+    return -1;
+  }
+}
+
+// Links `out_path` to the already-extracted `target`; returns 0, or -1 with an
+// exception set
 static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
                             const char *output_dir, const char *out_path,
                             const char *target, const char *entry_path,
@@ -695,47 +782,39 @@ static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
       return -1;
   }
 
-  if (fs_link(target_path, out_path) == 0)
-    return record_change(changes, out_path, NULL, 0);
-  if (errno != EEXIST) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
-    return -1;
+  return place_link(fs_link, target_path, out_path, entry_path,
+                    overwrite_existing, changes);
+}
+
+// Checks the target from the link's resolved directory, which a symlinked
+// ancestor can make shallower than its path suggests
+static int extract_symlink(const CompErrors *errors, const char *resolved_root,
+                           const char *out_path, const ArchiveEntry *entry,
+                           int overwrite_existing, Changes *changes) {
+  char parent[FS_PATH_MAX], resolved_parent[FS_PATH_MAX];
+  memcpy(parent, out_path, strlen(out_path) + 1);
+  char *sep = fs_last_sep(parent);
+  if (sep) {
+    *sep = '\0';
+    if (prepare_output_dir(errors, resolved_root, parent, DIR_CREATE_MODE,
+                           entry->path, changes) != 0)
+      return -1;
   }
 
-  switch (overwrite_existing) {
-  case 1: // SKIP
-    return 0;
-  case 2: // OVERWRITE
-    if (move_aside(changes, out_path) != 0)
-      return -1;
-    if (fs_link(target_path, out_path) != 0) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
-      return -1;
-    }
-    return record_change(changes, out_path, NULL, 0);
-  case 3: { // RENAME: each attempt is its own atomic link, as for a file
-    char candidate[FS_PATH_MAX];
-    for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
-      if (fs_conflict_path(out_path, n, candidate, sizeof(candidate)) != 0) {
-        PyErr_Format(PyExc_ValueError,
-                     "Archive entry path too long to rename: %s", entry_path);
-        return -1;
-      }
-      if (fs_link(target_path, candidate) == 0)
-        return record_change(changes, candidate, NULL, 0);
-      if (errno != EEXIST) {
-        PyErr_SetFromErrnoWithFilename(PyExc_OSError, candidate);
-        return -1;
-      }
-    }
-    PyErr_Format(PyExc_OSError, "Too many conflicting names for entry: %s",
-                 entry_path);
+  if (fs_realpath(parent, resolved_parent) != 0) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, parent);
     return -1;
   }
-  default: // ERROR
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+  uint32_t parent_depth = path_depth(resolved_parent);
+  uint32_t root_depth = path_depth(resolved_root);
+  if (check_symlink_target(errors, entry,
+                           parent_depth > root_depth
+                               ? parent_depth - root_depth
+                               : 0) != 0)
     return -1;
-  }
+
+  return place_link(fs_symlink, entry->link_target, out_path, entry->path,
+                    overwrite_existing, changes);
 }
 
 // Returns 0, 1 if the entry's data should be skipped, or -1 with an exception
@@ -992,6 +1071,12 @@ static int extract_entries(const CArchive *archive, void *reader,
     if (entry.type == ENTRY_DIR)
       rc = extract_dir(ctx->errors, output_dir, resolved_root, out_path, &entry,
                        policy, mode_mask, &renames, changes, deferred);
+    else if (entry.type == ENTRY_SYMLINK && policy->allow_symlinks == 1)
+      // Link mtimes aren't restored, as lutimes isn't portable
+      rc = extract_symlink(ctx->errors, resolved_root, out_path, &entry,
+                           policy->overwrite_existing, changes) != 0
+               ? -1
+               : 1;
     else if (entry.type == ENTRY_FILE || entry.type == ENTRY_SYMLINK)
       rc = extract_file(archive, reader, ctx->errors, resolved_root, out_path,
                         &entry, policy, mode_mask, data_ctx, &written_total,

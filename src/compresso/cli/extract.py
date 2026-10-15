@@ -13,6 +13,7 @@ from ..frontend.archive_api import (
     ExtractJob,
     ExtractOptions,
     OverwriteMode,
+    SymlinkMode,
 )
 from ._app import app
 from ._dispatch import looks_like_archive, resolve_single_output
@@ -248,6 +249,15 @@ def extract(
             help="Restore modes exactly, keeping setuid/setgid/sticky and ignoring the umask",
         ),
     ] = False,
+    symlinks: Annotated[
+        SymlinkMode,
+        app.Option(
+            "--symlinks",
+            case_sensitive=False,
+            help="Refuse symlinks, create those staying inside the output, "
+            "or write each as a file holding its target",
+        ),
+    ] = SymlinkMode.DENY,
     threads: Annotated[
         int,
         app.Option(
@@ -287,6 +297,7 @@ def extract(
         max_total_size: Cap on total extracted bytes (default: no cap).
         same_permissions: If True, restore archive entries' modes exactly;
             single-file outputs are unaffected.
+        symlinks: What to do with a symlink entry (default: refuse the archive).
         threads: Worker threads for xz (default: one per core).
         quiet: If True, suppress all output.
     """
@@ -313,6 +324,7 @@ def extract(
         overwrite=mode,
         max_total_size=max_total_size or 0,
         exact_permissions=same_permissions,
+        symlinks=symlinks,
         threads=threads,
     )
 

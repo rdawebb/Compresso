@@ -259,3 +259,7 @@ int fs_rmdir(const char *path) { return rmdir(path); }
 int fs_link(const char *existing, const char *new_path) {
   return linkat(AT_FDCWD, existing, AT_FDCWD, new_path, 0);
 }
+
+int fs_symlink(const char *target, const char *link_path) {
+  return symlink(target, link_path);
+}

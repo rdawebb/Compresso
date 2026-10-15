@@ -1319,6 +1319,83 @@ class TestSymlinksAsFiles:
         assert list(out.iterdir()) == []
 
 
+def _symlinks_work(where: Path) -> bool:
+    """Whether this process may create symlinks, which Windows restricts.
+
+    Args:
+        where: Directory to create, then remove, a dangling probe link in.
+
+    Returns:
+        True if the link was created, False if the OS refused it.
+    """
+    try:
+        (where / "probe").symlink_to("x")
+
+    except OSError:
+        return False
+
+    (where / "probe").unlink()
+
+    return True
+
+
+class TestSymlinkExtraction:
+    """Test allow_symlinks=1, which creates links whose targets stay inside."""
+
+    def test_link_is_created_as_stored(self, temp_dir: Path) -> None:
+        """Test that the link holds its target verbatim, and resolves to it."""
+        if not _symlinks_work(temp_dir):
+            pytest.skip("symlinks need privilege")
+        archive = temp_dir / "links.tar"
+        _tar_with_hardlink(archive, "a", kind=tarfile.SYMTYPE)
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
+
+        link = out / "d" / "b"
+        assert link.is_symlink()
+        assert os.readlink(link) == "a"
+        assert link.read_bytes() == b"x"
+
+    @pytest.mark.parametrize(
+        "target", ["../../x", "/etc/passwd", "C:x", "a/../a", "../d/../a", ""]
+    )
+    def test_target_that_may_escape_is_refused(
+        self, temp_dir: Path, target: str
+    ) -> None:
+        """Test escapes, absolute targets and a ".." after a name, before any write."""
+        archive = temp_dir / "links.tar"
+        _tar_with_hardlink(archive, target, kind=tarfile.SYMTYPE)
+        out = temp_dir / "out"
+
+        with pytest.raises(ExtractionPolicyError, match="symlink|Symlink"):
+            _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
+
+        assert list(out.iterdir()) == []
+
+    def test_target_counts_from_where_the_link_lands(self, temp_dir: Path) -> None:
+        """Test that a link under an extracted `s -> .` can't climb out.
+
+        `s/l -> ../x` looks contained, but `s` is the root itself, so the
+        target resolves outside it.
+        """
+        if not _symlinks_work(temp_dir):
+            pytest.skip("symlinks need privilege")
+        archive = temp_dir / "links.tar"
+        with tarfile.open(archive, "w", format=tarfile.GNU_FORMAT) as tf:
+            for name, target in (("s", "."), ("s/l", "../x")):
+                info = tarfile.TarInfo(name)
+                info.type = tarfile.SYMTYPE
+                info.linkname = target
+                tf.addfile(info)
+        out = temp_dir / "out"
+
+        with pytest.raises(ExtractionPolicyError, match="symlink target"):
+            _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
+
+        assert list(out.iterdir()) == []
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX symlinks")
 class TestOverwriteReplacesSymlinks:
     """Test that OVERWRITE replaces a symlink at an entry's path."""

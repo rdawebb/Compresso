@@ -566,6 +566,30 @@ class TestExtractionRefusesDeniedEntryTypes:
         assert isinstance(result.error, ExtractionPolicyError)
         assert f"contains {kind}, but policy denies it" in str(result.error)
 
+    def test_symlink_mode_reaches_the_policy(self, temp_dir: Path) -> None:
+        """Test that `symlinks`, given as a plain string, is passed through."""
+        archive_path = temp_dir / "link.tar"
+        with tarfile.open(archive_path, "w", format=tarfile.GNU_FORMAT) as tf:
+            info = tarfile.TarInfo("entry")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "target"
+            tf.addfile(info)
+        out = temp_dir / "out"
+
+        options = ExtractOptions(symlinks="file")  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+        result = ExtractJob.from_archive(archive_path, out, options=options).run()
+
+        assert result.ok is True
+        assert (out / "entry").read_bytes() == b"target"
+
+    def test_unknown_symlink_mode_is_unavailable(self, temp_dir: Path) -> None:
+        """Test that a misspelt mode is refused when planning, naming the field."""
+        options = ExtractOptions(symlinks="follow")  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+        plan = plan_extraction(temp_dir / "a.tar", temp_dir, options=options)
+
+        assert plan.can_run is False
+        assert "Unknown symlinks mode: 'follow'" in (plan.reason_if_unavailable or "")
+
 
 class TestExtractionRefusesUnsafePaths:
     """Test that extraction refuses entry names that escape the output directory.

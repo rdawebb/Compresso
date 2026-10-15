@@ -83,6 +83,27 @@ _OVERWRITE_CODES: dict[OverwriteMode, int] = {
 }
 
 
+class SymlinkMode(StrEnum):
+    """What extraction does with a symlink entry.
+
+    Attributes:
+        DENY: Refuse the archive.
+        ALLOW: Create the link, if its target stays inside the output directory.
+        FILE: Write a regular file holding the link's target.
+    """
+
+    DENY = "deny"
+    ALLOW = "allow"
+    FILE = "file"
+
+
+_SYMLINK_CODES: dict[SymlinkMode, int] = {
+    SymlinkMode.DENY: 0,
+    SymlinkMode.ALLOW: 1,
+    SymlinkMode.FILE: 2,
+}
+
+
 @dataclass
 class ArchiveOptions:
     """Represents the options for an archive operation.
@@ -142,6 +163,7 @@ class ExtractOptions:
         overwrite_dir_metadata: Whether a directory that already exists also
             gets the archive's mode and modification time; by default only directories
             the extraction creates get them; never applies with `OverwriteMode.SKIP`.
+        symlinks: What to do with a symlink entry.
         threads: Worker threads for tar.xz, or 0 for one per core.
     """
 
@@ -152,6 +174,7 @@ class ExtractOptions:
     exact_permissions: bool = False
     preserve_timestamps: bool = True
     overwrite_dir_metadata: bool = False
+    symlinks: SymlinkMode = SymlinkMode.DENY
     threads: int = 0
 
 
@@ -322,23 +345,25 @@ def plan_extraction(
     out_dir = archive_path.resolve().parent if output_dir is None else Path(output_dir)
     opts = ExtractOptions() if options is None else options
 
-    try:
-        # Plain strings still work at runtime
-        opts = replace(opts, overwrite=OverwriteMode(opts.overwrite))
+    # Plain strings still work at runtime
+    for field, mode in (("overwrite", OverwriteMode), ("symlinks", SymlinkMode)):
+        value = getattr(opts, field)
+        try:
+            opts = replace(opts, **{field: mode(value)})
 
-    except ValueError:
-        return ExtractPlan(
-            archive=archive_path,
-            output_dir=out_dir,
-            files=files,
-            options=opts,
-            entries=[],
-            can_run=False,
-            reason_if_unavailable=(
-                f"Unknown overwrite mode: {opts.overwrite!r} "
-                f"(expected one of {', '.join(OverwriteMode)})"
-            ),
-        )
+        except ValueError:
+            return ExtractPlan(
+                archive=archive_path,
+                output_dir=out_dir,
+                files=files,
+                options=opts,
+                entries=[],
+                can_run=False,
+                reason_if_unavailable=(
+                    f"Unknown {field} mode: {value!r} "
+                    f"(expected one of {', '.join(mode)})"
+                ),
+            )
 
     if not archive_path.is_file():
         return ExtractPlan(
@@ -561,6 +586,7 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
                 exact_permissions=options.exact_permissions,
                 preserve_timestamps=options.preserve_timestamps,
                 overwrite_dir_metadata=options.overwrite_dir_metadata,
+                allow_symlinks=_SYMLINK_CODES[options.symlinks],
                 threads=options.threads,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
