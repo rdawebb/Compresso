@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import random
 import shutil
 import sys
-from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import NamedTuple
@@ -28,6 +28,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # The extension is imported from the source tree, so a `build_ext --inplace`
 # build is what gets measured
 sys.path.insert(0, str(REPO_ROOT / "src"))
+
+# ZIP stores DOS times in local time; C's localtime rereads TZ
+os.environ["TZ"] = "UTC"
 
 from compresso import _core
 
@@ -45,9 +48,23 @@ COMP_ALGOS = ("zlib", "bzip2", "lzma", "zstd", "lz4", "snappy")
 # Standalone containers via the format table's engines
 STANDALONE_FORMATS = ("gzip", "bzip2", "xz", "zstd", "lz4", "snappy")
 
+# Archives of the fixed tree; tar has no level of its own
+ARCHIVE_FORMATS = {"zip": LEVELS, "tar": (-1,), "tar.gz": (-1,)}
+
+# Passed in this order, and `docs` holds a single file, since a walked
+# directory comes out in readdir order, which differs between filesystems
+TREE_INPUTS = ("docs", "alice29.txt", "empty", "link")
+TREE_MTIME = 1_750_000_000
+
 # Deterministic, so reproducible without committing 2 MB of noise
 RANDOM_SEED = 20260922
 RANDOM_SIZE = 2 * 1024 * 1024
+
+DECODERS = {
+    "comp": _core.decompress_file,
+    "standalone": _core.decompress_standalone,
+    "archive": lambda a, d, _: _core.extract_archive(a, d, [], allow_symlinks=1),
+}
 
 
 def build_corpus(corpus_dir: Path) -> dict[str, Path]:
@@ -83,6 +100,33 @@ def build_corpus(corpus_dir: Path) -> dict[str, Path]:
     }
 
 
+def build_tree(corpus_dir: Path, corpus: dict[str, Path]) -> Path:
+    """Build the archive input tree, with every mode and mtime pinned.
+
+    Args:
+        corpus_dir: Directory to build the tree in.
+        corpus: The single-file corpus, whose inputs the tree reuses.
+
+    Returns:
+        The tree's root, holding the entries named in `TREE_INPUTS`.
+    """
+    tree = corpus_dir / "tree"
+    shutil.rmtree(tree, ignore_errors=True)
+    (tree / "docs").mkdir(parents=True)
+
+    for name, case in (("docs/xargs.1", "xargs"), ("alice29.txt", "alice")):
+        (tree / name).write_bytes(corpus[case].read_bytes())
+    (tree / "empty").write_bytes(b"")
+    (tree / "link").symlink_to("alice29.txt")
+
+    for path in tree.rglob("*"):
+        if not path.is_symlink():
+            path.chmod(0o755 if path.is_dir() else 0o644)
+        os.utime(path, (TREE_MTIME, TREE_MTIME), follow_symlinks=False)
+
+    return tree
+
+
 def sha256(path: Path) -> str:
     """Hash a file's contents.
 
@@ -92,44 +136,41 @@ def sha256(path: Path) -> str:
     Returns:
         The hex digest.
     """
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
-def record_outcome(write: Callable[[], object], dst: Path) -> str:
-    """Run one compression and describe what it produced.
-
-    A refusal is recorded rather than skipped, so a format that starts or stops
-    refusing an input shows up as a change.
+def tree_digest(root: Path) -> str:
+    """Hash a tree's names, types, file contents and link targets.
 
     Args:
-        write: Thunk performing the compression.
-        dst: Path the compression writes to.
+        root: Directory to hash.
 
     Returns:
-        The output's SHA-256, or an `error:` line naming the refusal.
+        The hex digest.
     """
-    try:
-        write()
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            digest.update(f"L {rel} {os.readlink(path)}\n".encode())
+        elif path.is_dir():
+            digest.update(f"D {rel}\n".encode())
+        else:
+            digest.update(f"F {rel} {sha256(path)}\n".encode())
 
-    except Exception as exc:  # noqa: BLE001 - any refusal is a result worth recording
-        return f"error:{type(exc).__name__}: {exc}"
-
-    return sha256(dst)
+    return digest.hexdigest()
 
 
 class Job(NamedTuple):
     """One compression for `compress_one` to run.
 
     Attributes:
-        kind: `comp` for `.comp` framing, or `standalone` for a container.
-        codec: The `.comp` algorithm or standalone format.
+        kind: `comp` for `.comp` framing, `standalone` for a container, or
+            `archive` for an archive.
+        codec: The `.comp` algorithm, standalone format or archive format.
         level: The compression level.
-        src: The input to compress.
+        src: The input to compress; for an archive, the tree's root.
         dst: Where to write the compressed output.
     """
 
@@ -140,43 +181,18 @@ class Job(NamedTuple):
     dst: Path
 
 
-def compress_one(job: Job) -> str:
-    """Run one compression in a worker process and describe what it produced.
-
-    Args:
-        job: The compression to run.
-
-    Returns:
-        The output's SHA-256, or an `error:` line naming the refusal.
-    """
-    src, dst = str(job.src), str(job.dst)
-    if job.kind == "comp":
-        return record_outcome(
-            # overwrite=2, so a re-run replaces rather than renaming
-            lambda: _core.compress_file(
-                src, dst, job.codec, "balanced", job.level, overwrite=2
-            ),
-            job.dst,
-        )
-
-    return record_outcome(
-        lambda: _core.compress_standalone(src, dst, job.codec, job.level, overwrite=2),
-        job.dst,
-    )
-
-
-def compress_all(corpus: dict[str, Path], out_dir: Path) -> dict[str, str]:
-    """Compress every corpus entry through both paths at every level.
+def plan(corpus: dict[str, Path], tree: Path, out_dir: Path) -> dict[str, Job]:
+    """List every compression: each corpus entry through both paths at every
+    level, and the tree in every archive format.
 
     Args:
         corpus: Mapping of case name to input path.
-        out_dir: Directory to write the compressed artifacts into.
+        tree: Root of the archive input tree.
+        out_dir: Directory the compressed artifacts live in.
 
     Returns:
-        A mapping of artifact key to SHA-256 digest, or to an `error:` line
-        where that combination is refused.
+        A mapping of manifest key to job.
     """
-    out_dir.mkdir(parents=True, exist_ok=True)
     jobs: dict[str, Job] = {}
 
     for case, src in sorted(corpus.items()):
@@ -191,6 +207,58 @@ def compress_all(corpus: dict[str, Path], out_dir: Path) -> dict[str, str]:
                     "standalone", fmt, level, src, dst
                 )
 
+    for fmt, levels in ARCHIVE_FORMATS.items():
+        for level in levels:
+            dst = out_dir / f"tree.{level}.{fmt}"
+            jobs[f"archive/{fmt}/{level}/tree"] = Job("archive", fmt, level, tree, dst)
+
+    return jobs
+
+
+def compress_one(job: Job) -> str:
+    """Run one compression in a worker process and describe what it produced.
+
+    A refusal is recorded rather than skipped, so a format that starts or stops
+    refusing an input shows up as a change.
+
+    Args:
+        job: The compression to run.
+
+    Returns:
+        The output's SHA-256, or an `error:` line naming the refusal.
+    """
+    src, dst = str(job.src), str(job.dst)
+    try:
+        # overwrite=2, so a re-run replaces rather than renaming
+        if job.kind == "comp":
+            _core.compress_file(src, dst, job.codec, "balanced", job.level, overwrite=2)
+        elif job.kind == "archive":
+            inputs = [str(job.src / name) for name in TREE_INPUTS]
+            _core.create_archive(dst, job.codec, inputs, job.level, overwrite=2)
+        else:
+            _core.compress_standalone(src, dst, job.codec, job.level, overwrite=2)
+
+    except Exception as exc:  # noqa: BLE001 - any refusal is a result worth recording
+        return f"error:{type(exc).__name__}: {exc}"
+
+    return sha256(job.dst)
+
+
+def compress_all(corpus: dict[str, Path], tree: Path, out_dir: Path) -> dict[str, str]:
+    """Run every job in `plan`.
+
+    Args:
+        corpus: Mapping of case name to input path.
+        tree: Root of the archive input tree.
+        out_dir: Directory to write the compressed artifacts into.
+
+    Returns:
+        A mapping of artifact key to SHA-256 digest, or to an `error:` line
+        where that combination is refused.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    jobs = plan(corpus, tree, out_dir)
+
     # Processes, since the `.comp` path holds the GIL; the largest inputs go
     # first, so none is left running alone at the end
     order = sorted(jobs, key=lambda key: jobs[key].src.stat().st_size, reverse=True)
@@ -201,12 +269,13 @@ def compress_all(corpus: dict[str, Path], out_dir: Path) -> dict[str, str]:
 
 
 def decode_all(
-    corpus: dict[str, Path], out_dir: Path, baseline: dict[str, str]
+    corpus: dict[str, Path], tree: Path, out_dir: Path, baseline: dict[str, str]
 ) -> list[str]:
     """Decompress every artifact in `out_dir` and compare against its input.
 
     Args:
         corpus: Mapping of case name to input path.
+        tree: Root of the archive input tree.
         out_dir: Directory holding artifacts written by a previous `record`.
         baseline: The recorded manifest, used to skip refused combinations.
 
@@ -214,66 +283,30 @@ def decode_all(
         A list of human-readable failures; empty when every artifact round-trips.
     """
     scratch = out_dir / "decoded"
-    scratch.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(scratch, ignore_errors=True)
+    scratch.mkdir(parents=True)
+    expected = {src: sha256(src) for src in corpus.values()} | {tree: tree_digest(tree)}
     failures: list[str] = []
 
-    def check(
-        key: str, artifact: Path, dst: Path, expected: str, decode: Callable[[], object]
-    ) -> None:
-        """Decode one artifact and record a failure if it does not match.
-
-        Args:
-            key: Manifest key for the artifact.
-            artifact: The compressed file to decode.
-            dst: Where to write the decoded output.
-            expected: SHA-256 of the original input.
-            decode: Thunk performing the decompression.
-        """
+    for key, job in plan(corpus, tree, out_dir).items():
         if baseline.get(key, "").startswith("error:"):
-            return  # Never written, because the recording build refused it
+            continue  # Never written, because the recording build refused it
 
-        if not artifact.is_file():
+        if not job.dst.is_file():
             failures.append(f"{key} (artifact missing)")
-            return
+            continue
 
+        dst = scratch / f"{job.dst.name}.out"
         try:
-            decode()
+            DECODERS[job.kind](str(job.dst), str(dst), job.codec)
 
         except Exception as exc:  # noqa: BLE001 - a refusal here is the failure
             failures.append(f"{key} ({type(exc).__name__}: {exc})")
-            return
+            continue
 
-        if sha256(dst) != expected:
+        digest = tree_digest(dst) if job.kind == "archive" else sha256(dst)
+        if digest != expected[job.src]:
             failures.append(key)
-
-    for case, src in sorted(corpus.items()):
-        expected = sha256(src)
-        for level in LEVELS:
-            for algo in COMP_ALGOS:
-                artifact = out_dir / f"{case}.{algo}.{level}.comp"
-                dst = scratch / f"{case}.{algo}.{level}.out"
-                check(
-                    f"comp/{algo}/{level}/{case}",
-                    artifact,
-                    dst,
-                    expected,
-                    lambda a=artifact, d=dst, al=algo: _core.decompress_file(
-                        str(a), str(d), al
-                    ),
-                )
-
-            for fmt in STANDALONE_FORMATS:
-                artifact = out_dir / f"{case}.{fmt}.{level}.bin"
-                dst = scratch / f"{case}.{fmt}.{level}.out"
-                check(
-                    f"standalone/{fmt}/{level}/{case}",
-                    artifact,
-                    dst,
-                    expected,
-                    lambda a=artifact, d=dst, f=fmt: _core.decompress_standalone(
-                        str(a), str(d), f
-                    ),
-                )
 
     return failures
 
@@ -320,45 +353,24 @@ def main() -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("record", "check", "decode"))
-    parser.add_argument(
-        "--work-dir",
-        type=Path,
-        default=WORK_DIR,
-        help="where corpus and artifacts live (default: build/codec-fixtures)",
-    )
-    args = parser.parse_args()
+    mode = parser.parse_args().mode
 
-    corpus_dir = args.work_dir / "corpus"
-    out_dir = args.work_dir / "artifacts"
+    corpus_dir = WORK_DIR / "corpus"
+    out_dir = WORK_DIR / "artifacts"
 
-    if args.mode == "decode":
-        if not out_dir.is_dir():
-            print(
-                f"no artifacts at {out_dir}; run `record` with an earlier build first"
-            )
-            return 1
+    if mode == "decode" and not out_dir.is_dir():
+        print(f"no artifacts at {out_dir}; run `record` with an earlier build first")
+        return 1
 
-        if not MANIFEST_PATH.is_file():
-            print(f"no manifest at {MANIFEST_PATH}; run `record` first")
-            return 1
-
-        corpus = build_corpus(corpus_dir)
-        baseline = orjson.loads(MANIFEST_PATH.read_bytes())["outputs"]
-        failures = decode_all(corpus, out_dir, baseline)
-        for key in failures:
-            print(f"MISMATCH {key}")
-
-        if failures:
-            print(f"\n{len(failures)} artifacts did not decode to their input")
-            return 1
-
-        print("every recorded artifact decoded back to its input")
-        return 0
+    if mode != "record" and not MANIFEST_PATH.is_file():
+        print(f"no manifest at {MANIFEST_PATH}; run `record` first")
+        return 1
 
     corpus = build_corpus(corpus_dir)
+    tree = build_tree(corpus_dir, corpus)
 
-    if args.mode == "record":
-        digests = compress_all(corpus, out_dir)
+    if mode == "record":
+        digests = compress_all(corpus, tree, out_dir)
         MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
         MANIFEST_PATH.write_bytes(
             orjson.dumps(
@@ -373,18 +385,26 @@ def main() -> int:
         )
         return 0
 
-    if not MANIFEST_PATH.is_file():
-        print(f"no manifest at {MANIFEST_PATH}; run `record` first")
-        return 1
-
     baseline = orjson.loads(MANIFEST_PATH.read_bytes())["outputs"]
+
+    if mode == "decode":
+        failures = decode_all(corpus, tree, out_dir, baseline)
+        for key in failures:
+            print(f"MISMATCH {key}")
+
+        if failures:
+            print(f"\n{len(failures)} artifacts did not decode to their input")
+            return 1
+
+        print("every recorded artifact decoded back to its input")
+        return 0
 
     # A check writes into its own directory, so it can never overwrite the
     # artifacts `decode` needs from the recording build
-    check_dir = args.work_dir / "check"
+    check_dir = WORK_DIR / "check"
     shutil.rmtree(check_dir, ignore_errors=True)
 
-    return report(baseline, compress_all(corpus, check_dir))
+    return report(baseline, compress_all(corpus, tree, check_dir))
 
 
 if __name__ == "__main__":

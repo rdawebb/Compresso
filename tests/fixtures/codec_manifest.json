@@ -1,5 +1,11 @@
 {
   "outputs": {
+    "archive/tar.gz/-1/tree": "ec682bda94ceb9918a3a6cf65a807eae5ab24f7d373f3413da46af8a4249df30",
+    "archive/tar/-1/tree": "9693cf876200e8752f0ceae0fdced79ac959e87ccc0c956fc47f6ee6185b8fed",
+    "archive/zip/-1/tree": "a696ed4b9a6e45075f38c1bebe81b2c1e599b6dd779095dc0d8cd727ce3d6cc3",
+    "archive/zip/1/tree": "c36a50654511b7bca4048390623b3f19484ae16a918edb33bb74e65980ad96cc",
+    "archive/zip/6/tree": "a696ed4b9a6e45075f38c1bebe81b2c1e599b6dd779095dc0d8cd727ce3d6cc3",
+    "archive/zip/9/tree": "98ae715e3ff8f352f5e4528384caa30945367ae3bf808d55c9380e31c86ae56b",
     "comp/bzip2/-1/alice": "12e2483ca01ff6ce955533e790bbc55bd5bb6afd45892df06e552874ef114e45",
     "comp/bzip2/-1/empty": "adcf31465a707129625ee559df71745960ca9180e33ac3d070f51f358a4480b2",
     "comp/bzip2/-1/one_byte": "b1a019e577ffd618c4775282a36d0ecb7f24b4c7733df3b5fc5522d129e4b77e",
