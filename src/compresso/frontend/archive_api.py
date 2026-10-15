@@ -163,7 +163,8 @@ class ExtractOptions:
         overwrite_dir_metadata: Whether a directory that already exists also
             gets the archive's mode and modification time; by default only directories
             the extraction creates get them; never applies with `OverwriteMode.SKIP`.
-        symlinks: What to do with a symlink entry.
+        symlinks: What to do with a symlink entry; by default a zip's are
+            written as files and any other archive's are refused.
         threads: Worker threads for tar.xz, or 0 for one per core.
     """
 
@@ -174,7 +175,7 @@ class ExtractOptions:
     exact_permissions: bool = False
     preserve_timestamps: bool = True
     overwrite_dir_metadata: bool = False
-    symlinks: SymlinkMode = SymlinkMode.DENY
+    symlinks: SymlinkMode | None = None
     threads: int = 0
 
 
@@ -348,6 +349,8 @@ def plan_extraction(
     # Plain strings still work at runtime
     for field, mode in (("overwrite", OverwriteMode), ("symlinks", SymlinkMode)):
         value = getattr(opts, field)
+        if value is None:
+            continue
         try:
             opts = replace(opts, **{field: mode(value)})
 
@@ -586,7 +589,9 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
                 exact_permissions=options.exact_permissions,
                 preserve_timestamps=options.preserve_timestamps,
                 overwrite_dir_metadata=options.overwrite_dir_metadata,
-                allow_symlinks=_SYMLINK_CODES[options.symlinks],
+                allow_symlinks=(
+                    -1 if options.symlinks is None else _SYMLINK_CODES[options.symlinks]
+                ),
                 threads=options.threads,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,

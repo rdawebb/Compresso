@@ -181,7 +181,7 @@ def extract_archive(
 
     `overwrite` is 0 = error, 1 = skip, 2 = overwrite, 3 = rename;
     `allow_symlinks` is 0 = deny, 1 = allow if the target stays inside
-    output_dir, 2 = rewrite to regular files;
+    output_dir, 2 = rewrite to regular files, -1 = the format's default (2 for zip, 0 otherwise);
     `max_total_size` and `max_depth` treat 0 as unlimited;
     `overwrite_dir_metadata` also restores the mode and mtime of a directory
     that already exists, as GNU tar does, except when `overwrite` is 1 (skip);

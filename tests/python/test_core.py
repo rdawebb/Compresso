@@ -1396,6 +1396,109 @@ class TestSymlinkExtraction:
         assert list(out.iterdir()) == []
 
 
+def _zip_with_unix_modes(path: Path) -> None:
+    """Write a zip holding a 0750 file, a 0700 directory, a link and a DOS file.
+
+    Args:
+        path: Where to write the zip.
+    """
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, unix_mode, data in (
+            ("d/", 0o040700, b""),
+            ("d/run", 0o100750, b"x"),
+            ("d/link", 0o120777, b"run"),
+            ("dos", 0, b"y"),
+        ):
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3 if unix_mode else 0
+            info.external_attr = unix_mode << 16
+            zf.writestr(info, data)
+
+
+class TestZipModesAndSymlinks:
+    """Test that zip keeps Unix modes and symlinks in its external attributes."""
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX modes")
+    def test_modes_are_stored(self, temp_dir: Path) -> None:
+        """Test that each entry's mode lands in the attributes, typed."""
+        src = temp_dir / "src"
+        src.mkdir()
+        (src / "run").write_bytes(b"x")
+        (src / "run").chmod(0o750)
+        src.chmod(0o750)
+        archive = temp_dir / "a.zip"
+
+        _core.create_archive(str(archive), "zip", [str(src)])
+
+        with zipfile.ZipFile(archive) as zf:
+            modes = {i.filename: i.external_attr >> 16 for i in zf.infolist()}
+        assert modes["src/run"] == 0o100750
+        assert modes["src/"] == 0o040750
+
+    def test_link_is_stored_as_a_link(self, temp_dir: Path) -> None:
+        """Test that a symlink is its target text, marked S_IFLNK."""
+        if not _symlinks_work(temp_dir):
+            pytest.skip("symlinks need privilege")
+        src = temp_dir / "src"
+        src.mkdir()
+        (src / "link").symlink_to("target")
+        archive = temp_dir / "a.zip"
+
+        _core.create_archive(str(archive), "zip", [str(src)])
+
+        with zipfile.ZipFile(archive) as zf:
+            info = zf.getinfo("src/link")
+            assert stat.S_ISLNK(info.external_attr >> 16)
+            assert zf.read(info) == b"target"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX modes")
+    def test_modes_are_restored(self, temp_dir: Path) -> None:
+        """Test the stored modes, and the usual default for a DOS entry."""
+        archive = temp_dir / "a.zip"
+        _zip_with_unix_modes(archive)
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), [], exact_permissions=True)
+
+        assert stat.S_IMODE((out / "d").stat().st_mode) == 0o700
+        assert stat.S_IMODE((out / "d" / "run").stat().st_mode) == 0o750
+        assert stat.S_IMODE((out / "dos").stat().st_mode) == 0o644
+
+    def test_link_is_listed_with_its_target(self, temp_dir: Path) -> None:
+        """Test that listing reports the link's type and target, not its data."""
+        archive = temp_dir / "a.zip"
+        _zip_with_unix_modes(archive)
+
+        entries = {e["path"]: e for e in _core.list_archive_contents(str(archive))}
+
+        assert entries["d/link"]["type"] == "symlink"
+        assert entries["d/link"]["link_target"] == "run"
+
+    def test_link_becomes_a_file_by_default(self, temp_dir: Path) -> None:
+        """Test that zip's default is mode 2, as before links were recognised."""
+        archive = temp_dir / "a.zip"
+        _zip_with_unix_modes(archive)
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert not (out / "d" / "link").is_symlink()
+        assert (out / "d" / "link").read_bytes() == b"run"
+
+    def test_link_is_created_on_request(self, temp_dir: Path) -> None:
+        """Test that allow_symlinks=1 creates the link itself."""
+        if not _symlinks_work(temp_dir):
+            pytest.skip("symlinks need privilege")
+        archive = temp_dir / "a.zip"
+        _zip_with_unix_modes(archive)
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
+
+        assert os.readlink(out / "d" / "link") == "run"
+        assert (out / "d" / "link").read_bytes() == b"x"
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX symlinks")
 class TestOverwriteReplacesSymlinks:
     """Test that OVERWRITE replaces a symlink at an entry's path."""

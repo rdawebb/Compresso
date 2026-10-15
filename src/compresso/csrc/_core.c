@@ -489,10 +489,10 @@ static PyObject *py_extract_archive(PyObject *self, PyObject *args,
     goto done;
   }
 
-  if (policy.allow_symlinks < 0 || policy.allow_symlinks > 2) {
+  if (policy.allow_symlinks < -1 || policy.allow_symlinks > 2) {
     PyErr_Format(PyExc_ValueError,
-                 "allow_symlinks must be 0 (deny), 1 (allow) or 2 (rewrite), "
-                 "not %d",
+                 "allow_symlinks must be 0 (deny), 1 (allow), 2 (rewrite) or "
+                 "-1 (the format's default), not %d",
                  policy.allow_symlinks);
     goto done;
   }

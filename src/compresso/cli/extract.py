@@ -250,14 +250,15 @@ def extract(
         ),
     ] = False,
     symlinks: Annotated[
-        SymlinkMode,
+        SymlinkMode | None,
         app.Option(
             "--symlinks",
             case_sensitive=False,
             help="Refuse symlinks, create those staying inside the output, "
-            "or write each as a file holding its target",
+            "or write each as a file holding its target "
+            "(default: file for zip, deny otherwise)",
         ),
-    ] = SymlinkMode.DENY,
+    ] = None,
     threads: Annotated[
         int,
         app.Option(
@@ -297,7 +298,8 @@ def extract(
         max_total_size: Cap on total extracted bytes (default: no cap).
         same_permissions: If True, restore archive entries' modes exactly;
             single-file outputs are unaffected.
-        symlinks: What to do with a symlink entry (default: refuse the archive).
+        symlinks: What to do with a symlink entry (default: write a zip's as
+            files, refuse any other archive's).
         threads: Worker threads for xz (default: one per core).
         quiet: If True, suppress all output.
     """

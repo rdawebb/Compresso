@@ -291,7 +291,6 @@ class TestZipSymlinks:
         assert not link.is_symlink()
         assert link.read_bytes() == b"target.txt"
 
-    @pytest.mark.xfail(reason="the external attributes aren't read")
     def test_symlink_is_listed_as_a_symlink(self) -> None:
         """Test that listing reports the stored link as a symlink with a target."""
         entries = {

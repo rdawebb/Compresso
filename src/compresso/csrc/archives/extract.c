@@ -14,7 +14,7 @@
 // ---- Default Extraction Policies ----
 
 static const ExtractionPolicy EXTRACTION_POLICY_DEFAULT = {
-    .allow_symlinks = 0,
+    .allow_symlinks = -1,
     .overwrite_existing = 0,
     .preserve_permissions = 1,
     .exact_permissions = 0,
@@ -1121,6 +1121,11 @@ int extract_archive(const char *archive_path, const char *output_dir,
     fclose(src);
     src = NULL;
   }
+
+  ExtractionPolicy resolved_policy = *policy;
+  if (resolved_policy.allow_symlinks < 0)
+    resolved_policy.allow_symlinks = archive->default_symlinks;
+  policy = &resolved_policy;
 
   // Canonicalised once rather than per entry, and after the directory exists;
   // fs_mkdir_p accepts an existing file, so the resolved root is checked too

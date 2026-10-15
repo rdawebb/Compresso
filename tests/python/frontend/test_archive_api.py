@@ -582,6 +582,21 @@ class TestExtractionRefusesDeniedEntryTypes:
         assert result.ok is True
         assert (out / "entry").read_bytes() == b"target"
 
+    def test_zip_symlink_becomes_a_file_by_default(self, temp_dir: Path) -> None:
+        """Test that leaving `symlinks` unset takes zip's own default."""
+        archive_path = temp_dir / "link.zip"
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            info = zipfile.ZipInfo("entry")
+            info.create_system = 3
+            info.external_attr = 0o120777 << 16
+            zf.writestr(info, b"target")
+        out = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out).run()
+
+        assert result.ok is True
+        assert (out / "entry").read_bytes() == b"target"
+
     def test_unknown_symlink_mode_is_unavailable(self, temp_dir: Path) -> None:
         """Test that a misspelt mode is refused when planning, naming the field."""
         options = ExtractOptions(symlinks="follow")  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
