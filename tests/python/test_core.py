@@ -1069,6 +1069,60 @@ class TestArchiveWalk:
                 assert listed[i + 1 : i + 1 + len(inside)] == inside, listed
 
 
+class TestTarSizeChange:
+    """Test a file whose size changes between the walk and its copy."""
+
+    @pytest.mark.parametrize(
+        ("change", "stored", "message"),
+        [
+            ("grow", b"x" * (4 << 20), "file grew while being archived"),
+            ("shrink", None, "file shrank by"),
+        ],
+    )
+    def test_tar_warns_and_keeps_the_header_size(
+        self,
+        temp_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+        change: str,
+        stored: bytes | None,
+        message: str,
+    ) -> None:
+        """Test that the entry keeps its walked size, with a warning."""
+        source = temp_dir / "f.bin"
+        source.write_bytes(b"x" * (4 << 20))
+        output = temp_dir / "out.tar"
+        changed = False
+
+        def change_source(done: int, total: int) -> None:
+            # The first report comes after about 1 MiB has been copied
+            nonlocal changed
+            if not changed:
+                changed = True
+                with source.open("r+b") as f:
+                    if change == "grow":
+                        f.seek(0, os.SEEK_END)
+                        f.write(b"y" * (1 << 20))
+                    else:
+                        f.truncate(0)
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            _core.create_archive(
+                str(output), "tar", [str(source)], progress=change_source
+            )
+
+        with tarfile.open(output) as tf:
+            member = tf.getmember("f.bin")
+            f = tf.extractfile(member)
+            assert f is not None
+            data = f.read()
+        assert member.size == 4 << 20
+        if stored is not None:
+            assert data == stored
+        else:
+            assert data.endswith(b"\0" * (2 << 20))
+        assert f"{source}: {message}" in caplog.text
+
+
 def _tar_of(path: Path, entries: list[tuple[str, int, int]]) -> None:
     """Write a tar of directories and files, each with a given mode and mtime.
 

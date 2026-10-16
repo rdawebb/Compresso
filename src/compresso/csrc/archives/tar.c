@@ -193,6 +193,8 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   // Write data for files
   if (entry->type == ENTRY_FILE && data) {
     size_t bytes_read;
+    uint64_t total = 0;
+    int grew = 0;
 
     int advance = 0;
 
@@ -208,9 +210,12 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
         archive_entry_free(ae);
         return -1;
       }
+      total += (uint64_t)bytes_written;
 
       advance = ctx_advance(ctx, bytes_read);
-      if (advance != 0) {
+      // libarchive drops whatever runs past the header's size
+      grew = (size_t)bytes_written < bytes_read;
+      if (advance != 0 || grew) {
         break;
       }
     }
@@ -227,6 +232,18 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
       PyErr_SetFromErrnoWithFilename(PyExc_OSError, source_path);
       archive_entry_free(ae);
       return -1;
+    }
+
+    // Archive is still valid, so warn and continue; libarchive pads a short
+    // entry with NULs
+    if (grew) {
+      ctx_log(ctx, CTX_LOG_WARNING,
+              "%s: file grew while being archived; truncated to %llu bytes",
+              source_path, (unsigned long long)entry->size);
+    } else if (total < entry->size) {
+      ctx_log(ctx, CTX_LOG_WARNING,
+              "%s: file shrank by %llu bytes; padded with zeros", source_path,
+              (unsigned long long)(entry->size - total));
     }
   }
 
