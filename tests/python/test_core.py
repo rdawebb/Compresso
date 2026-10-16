@@ -497,6 +497,55 @@ class TestExtractArchiveFilesArg:
             _core.extract_archive(str(two_files), str(temp_dir / "out"), files)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
 
 
+class TestSelectByPrefix:
+    """Test that a directory's name selects everything below it, as tar does."""
+
+    NAMES = ("d/", "d/x.txt", "d/sub/", "d/sub/y.txt", "dx.txt", "e.txt")
+
+    @pytest.fixture(params=["tar", "zip"])
+    def archive(self, request: pytest.FixtureRequest, temp_dir: Path) -> Path:
+        """A tar or zip holding NAMES.
+
+        Args:
+            request: Pytest request, carrying the format.
+            temp_dir: Pytest temporary path fixture.
+
+        Returns:
+            Path to the archive.
+        """
+        path = temp_dir / f"sel.{request.param}"
+        if request.param == "tar":
+            _tar_of(path, [(name, 0o755, 0) for name in self.NAMES])
+        else:
+            with zipfile.ZipFile(path, "w") as zf:
+                for name in self.NAMES:
+                    zf.writestr(name, "" if name.endswith("/") else "x")
+
+        return path
+
+    @pytest.mark.parametrize(
+        ("files", "expected"),
+        [
+            (["d"], ["d/sub/y.txt", "d/x.txt"]),
+            (["d/"], ["d/sub/y.txt", "d/x.txt"]),
+            (["d/sub"], ["d/sub/y.txt"]),
+            (["e.txt", "d/sub/y.txt"], ["d/sub/y.txt", "e.txt"]),
+            (["d/x"], []),
+        ],
+        ids=["dir", "trailing-slash", "nested", "files", "partial-name"],
+    )
+    def test_selects_at_component_boundaries(
+        self, archive: Path, temp_dir: Path, files: list[str], expected: list[str]
+    ) -> None:
+        """Test that a name matches whole components, never part of one."""
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), files)
+
+        extracted = [p.relative_to(out).as_posix() for p in out.rglob("*")]
+        assert sorted(p for p in extracted if (out / p).is_file()) == expected
+
+
 class TestRecognisedButUnsupportedArchive:
     """Test that a detected archive format without a backend names itself."""
 

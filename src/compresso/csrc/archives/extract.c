@@ -340,18 +340,58 @@ static int check_entry_policy(const CompErrors *errors,
   return 0;
 }
 
-// Whether `entry` is one of the requested `files`; an empty request means all
-static int entry_is_selected(const ArchiveEntry *entry, const char **files,
-                             size_t num_files) {
+// The requested names, sorted for bsearch; none means everything
+typedef struct {
+  const char *name;
+  size_t len; // Without trailing slashes
+} SelectedName;
+
+typedef struct {
+  SelectedName *items;
+  size_t count;
+} Selection;
+
+static int selected_name_cmp(const void *a, const void *b) {
+  const SelectedName *x = a, *y = b;
+  int c = memcmp(x->name, y->name, x->len < y->len ? x->len : y->len);
+  return c ? c : (x->len > y->len) - (x->len < y->len);
+}
+
+static int selection_init(Selection *sel, const char **files,
+                          size_t num_files) {
+  *sel = (Selection){0};
   if (num_files == 0)
-    return 1;
+    return 0;
+
+  sel->items = safe_malloc(num_files * sizeof(*sel->items));
+  if (!sel->items)
+    return -1;
 
   for (size_t i = 0; i < num_files; i++) {
-    if (strcmp(entry->path, files[i]) == 0)
-      return 1;
+    size_t len = strlen(files[i]);
+    while (len > 0 && files[i][len - 1] == '/')
+      len--;
+    sel->items[sel->count++] = (SelectedName){files[i], len};
   }
-
+  qsort(sel->items, sel->count, sizeof(*sel->items), selected_name_cmp);
   return 0;
+}
+
+// Whether `entry` or a directory above it was requested, as tar matches names
+static int entry_is_selected(const ArchiveEntry *entry, const Selection *sel) {
+  if (sel->count == 0)
+    return 1;
+
+  for (const char *p = entry->path;; p++) {
+    if ((*p == '/' || *p == '\0') && p > entry->path) {
+      SelectedName key = {entry->path, (size_t)(p - entry->path)};
+      if (bsearch(&key, sel->items, sel->count, sizeof(*sel->items),
+                  selected_name_cmp))
+        return 1;
+    }
+    if (*p == '\0')
+      return 0;
+  }
 }
 
 // Create a temp file in final_path's directory, which is known writable
@@ -377,9 +417,9 @@ static char *make_temp_path(const char *final_path) {
 // extract_entries counts the bytes it actually writes as well
 static int prevalidate_entries(const CArchive *archive, void *reader,
                                const char *output_dir,
-                               const char *resolved_root, const char **files,
-                               size_t num_files, const ExtractionPolicy *policy,
-                               CoreContext *ctx, uint64_t *out_declared_total) {
+                               const char *resolved_root, const Selection *sel,
+                               const ExtractionPolicy *policy, CoreContext *ctx,
+                               uint64_t *out_declared_total) {
   ArchiveEntry entry = {0};
   uint64_t declared_total = 0;
   int ret;
@@ -410,7 +450,7 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
     }
 
     // A link declares no data, but claims its path like a file
-    if (entry_is_selected(&entry, files, num_files) &&
+    if (entry_is_selected(&entry, sel) &&
         (entry.type == ENTRY_FILE || entry.type == ENTRY_HARDLINK ||
          entry.type == ENTRY_SYMLINK)) {
       declared_total += entry.type == ENTRY_FILE ? entry.size : 0;
@@ -808,9 +848,8 @@ static int extract_symlink(const CompErrors *errors, const char *resolved_root,
   uint32_t parent_depth = path_depth(resolved_parent);
   uint32_t root_depth = path_depth(resolved_root);
   if (check_symlink_target(errors, entry,
-                           parent_depth > root_depth
-                               ? parent_depth - root_depth
-                               : 0) != 0)
+                           parent_depth > root_depth ? parent_depth - root_depth
+                                                     : 0) != 0)
     return -1;
 
   return place_link(fs_symlink, entry->link_target, out_path, entry->path,
@@ -1004,10 +1043,9 @@ static int extract_file(const CArchive *archive, void *reader,
 // `deferred`; `data_ctx` counts bytes written, NULL if the caller counts input
 static int extract_entries(const CArchive *archive, void *reader,
                            const char *output_dir, const char *resolved_root,
-                           const char **files, size_t num_files,
-                           const ExtractionPolicy *policy, CoreContext *ctx,
-                           CoreContext *data_ctx, Changes *changes,
-                           DeferredDirs *deferred) {
+                           const Selection *sel, const ExtractionPolicy *policy,
+                           CoreContext *ctx, CoreContext *data_ctx,
+                           Changes *changes, DeferredDirs *deferred) {
   ArchiveEntry entry = {0};
   uint64_t written_total = 0;
   Renames renames = {0};
@@ -1055,7 +1093,7 @@ static int extract_entries(const CArchive *archive, void *reader,
         check_entry_policy(ctx->errors, &entry, policy) != 0)
       goto cleanup;
 
-    if (!entry_is_selected(&entry, files, num_files)) {
+    if (!entry_is_selected(&entry, sel)) {
       entry_reset(&entry);
       archive->skip_entry_data(reader);
       continue;
@@ -1145,6 +1183,13 @@ int extract_archive(const char *archive_path, const char *output_dir,
     return -1;
   }
 
+  Selection sel;
+  if (selection_init(&sel, files, num_files) != 0) {
+    if (src)
+      fclose(src);
+    return -1;
+  }
+
   // A plain file gets a validation pass first; a codec stream is decoded once,
   // counting its compressed bytes, and relies on the undo below
   uint64_t declared_total = 0;
@@ -1172,11 +1217,10 @@ int extract_archive(const char *archive_path, const char *output_dir,
 
     ret = pass == 0
               ? prevalidate_entries(archive, reader, output_dir, resolved_root,
-                                    files, num_files, policy, ctx,
-                                    &declared_total)
+                                    &sel, policy, ctx, &declared_total)
               : extract_entries(archive, reader, output_dir, resolved_root,
-                                files, num_files, policy, ctx, src ? NULL : ctx,
-                                &changes, &deferred);
+                                &sel, policy, ctx, src ? NULL : ctx, &changes,
+                                &deferred);
 
     // A failed pass keeps its own error
     if (archive->close_reader(reader, ret != 0) != 0 && ret == 0)
@@ -1190,6 +1234,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
   } else if (src) {
     fclose(src);
   }
+  free(sel.items);
 
   // Before directories get archived modes, which may not be writable; after an
   // undo, existing directories keep their own
