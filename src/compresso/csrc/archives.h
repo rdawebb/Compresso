@@ -50,6 +50,7 @@ typedef struct CArchive {
   LevelRange levels; // Applies when no external codec stage is present
   int default_symlinks; // allow_symlinks when the policy leaves it at -1
   int stores_specials;  // FIFOs and devices; otherwise the walk skips them
+  int reads_sources;    // Opens files itself from `source_path`; `data` is NULL
 
   // Capability checks
   int (*supports_compression)(void);

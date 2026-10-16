@@ -1069,32 +1069,36 @@ class TestArchiveWalk:
                 assert listed[i + 1 : i + 1 + len(inside)] == inside, listed
 
 
-class TestTarSizeChange:
+class TestSizeChange:
     """Test a file whose size changes between the walk and its copy."""
 
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
     @pytest.mark.parametrize(
-        ("change", "stored", "message"),
+        ("change", "fill", "message"),
         [
-            ("grow", b"x" * (4 << 20), "file grew while being archived"),
-            ("shrink", None, "file shrank by"),
+            ("grow", b"x", "file grew while being archived"),
+            ("shrink", b"\0", "file shrank by"),
         ],
     )
-    def test_tar_warns_and_keeps_the_header_size(
+    def test_warns_and_keeps_the_walked_size(
         self,
         temp_dir: Path,
         caplog: pytest.LogCaptureFixture,
+        fmt: str,
         change: str,
-        stored: bytes | None,
+        fill: bytes,
         message: str,
     ) -> None:
         """Test that the entry keeps its walked size, with a warning."""
+        first = temp_dir / "a.bin"
+        first.write_bytes(b"a" * (4 << 20))
         source = temp_dir / "f.bin"
         source.write_bytes(b"x" * (4 << 20))
-        output = temp_dir / "out.tar"
+        output = temp_dir / f"out.{fmt}"
         changed = False
 
         def change_source(done: int, total: int) -> None:
-            # The first report comes after about 1 MiB has been copied
+            # The first report comes while a.bin is still being read
             nonlocal changed
             if not changed:
                 changed = True
@@ -1107,20 +1111,39 @@ class TestTarSizeChange:
 
         with caplog.at_level(logging.WARNING, logger="compresso"):
             _core.create_archive(
-                str(output), "tar", [str(source)], progress=change_source
+                str(output), fmt, [str(first), str(source)], progress=change_source
             )
 
-        with tarfile.open(output) as tf:
-            member = tf.getmember("f.bin")
-            f = tf.extractfile(member)
-            assert f is not None
-            data = f.read()
-        assert member.size == 4 << 20
-        if stored is not None:
-            assert data == stored
+        if fmt == "zip":
+            with zipfile.ZipFile(output) as zf:
+                data = zf.read("f.bin")
         else:
-            assert data.endswith(b"\0" * (2 << 20))
+            with tarfile.open(output) as tf:
+                f = tf.extractfile("f.bin")
+                assert f is not None
+                data = f.read()
+        assert data == fill * (4 << 20)
         assert f"{source}: {message}" in caplog.text
+
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
+    def test_file_removed_before_its_read(self, temp_dir: Path, fmt: str) -> None:
+        """Test that a file gone by its turn names itself, and no output is left."""
+        first = temp_dir / "a.bin"
+        first.write_bytes(b"a" * (4 << 20))
+        source = temp_dir / "f.bin"
+        source.write_bytes(b"x")
+        output = temp_dir / f"out.{fmt}"
+
+        def remove_source(done: int, total: int) -> None:
+            source.unlink(missing_ok=True)
+
+        with pytest.raises(FileNotFoundError) as info:
+            _core.create_archive(
+                str(output), fmt, [str(first), str(source)], progress=remove_source
+            )
+
+        assert info.value.filename == str(source)
+        assert sorted(p.name for p in temp_dir.iterdir()) == ["a.bin"]
 
 
 def _tar_of(path: Path, entries: list[tuple[str, int, int]]) -> None:

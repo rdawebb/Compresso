@@ -171,7 +171,8 @@ static int add_walked_entries(const CArchive *archive, void *writer,
       return -1;
 
     FILE *f = NULL;
-    if (entry->type == ENTRY_FILE && !(f = fs_fopen(item->path, "rb"))) {
+    if (entry->type == ENTRY_FILE && !archive->reads_sources &&
+        !(f = fs_fopen(item->path, "rb"))) {
       PyErr_SetFromErrnoWithFilename(PyExc_OSError, item->path);
       entry_free(entry);
       return -1;
