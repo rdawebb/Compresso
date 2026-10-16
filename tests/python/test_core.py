@@ -1252,6 +1252,32 @@ class TestTarHeaderWarnings:
         assert len(caplog.records) == 1
 
 
+class TestTarUtf8Names:
+    """Test that tar names reach the archive as UTF-8, as pax requires."""
+
+    def test_names_outside_the_ansi_code_page_round_trip(self, temp_dir: Path) -> None:
+        """Test that a name and symlink target outside ASCII and cp1252 survive."""
+        name = "日本-ж"
+        tree = temp_dir / "tree"
+        tree.mkdir()
+        (tree / name).write_text("x")
+        has_symlink = sys.platform != "win32"
+        if has_symlink:
+            os.symlink(name, tree / f"{name}-sym")
+        names = sorted(os.listdir(tree))
+        output = temp_dir / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(tree)])
+
+        listed = [e["path"] for e in _core.list_archive_contents(str(output))]
+        assert sorted(listed) == ["tree/"] + [f"tree/{n}" for n in names]
+        with tarfile.open(output) as tf:
+            if has_symlink:
+                assert tf.getmember(f"tree/{name}-sym").linkname == name
+        _core.extract_archive(str(output), str(temp_dir / "out"), [], allow_symlinks=1)
+        assert sorted(os.listdir(temp_dir / "out" / "tree")) == names
+
+
 def _tar_with_hardlink(
     path: Path, target: str, *, link: str = "d/b", kind: bytes = tarfile.LNKTYPE
 ) -> None:
