@@ -114,6 +114,7 @@ def _extract_archive(
     exit_for_result(result, "Extraction")
 
     if not quiet:
+        print()
         succeed("Extraction successful!")
         print(
             f"  Entries: {len(plan.entries)}\n"

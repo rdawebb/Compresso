@@ -31,6 +31,11 @@ typedef struct {
   uint32_t mode; // POSIX permission bits (0777), best-effort on Windows
   fs_file_type type;
 
+  // A FIFO or device's S_IFMT bits, which are libarchive's AE_IF* values, and
+  // its device number; 0 for anything else, sockets and all of Windows included
+  uint32_t special;
+  uint64_t rdev;
+
   // Identity, for fs_same_file; on Windows only filled for regular files (the
   // volume serial and file index), and 0 wherever it is unknown
   uint64_t dev, ino;

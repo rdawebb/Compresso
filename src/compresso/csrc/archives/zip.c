@@ -251,6 +251,12 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
     return zip_set_metadata(writer, idx, entry, ZIP_UNIX_IFLNK);
   }
 
+  if (entry->type == ENTRY_SPECIAL) {
+    PyErr_Format(PyExc_ValueError,
+                 "zip archives cannot store FIFOs or devices: %s", entry->path);
+    return -1;
+  }
+
   PyErr_SetString(PyExc_ValueError, "Unknown entry type");
   return -1;
 }

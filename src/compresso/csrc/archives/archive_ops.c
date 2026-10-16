@@ -132,8 +132,13 @@ static ArchiveEntry *entry_from_walk(const WalkItem *item) {
       entry_free(entry);
       return NULL;
     }
+  } else if (st->type == FS_TYPE_OTHER) {
+    entry->type = ENTRY_SPECIAL; // Only those the walk kept
+    entry->special = st->special;
+    entry->rdev = st->rdev;
+    entry->size = 0;
   } else {
-    entry->type = ENTRY_FILE; // The walk skipped anything else
+    entry->type = ENTRY_FILE;
   }
 
   return entry;
@@ -252,7 +257,8 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   own_files_add(&own, output_path);
 
   WalkList walked = {0};
-  int ret = walk_sources(input_paths, num_paths, &own, ctx, &walked);
+  int ret = walk_sources(input_paths, num_paths, &own,
+                         archive->stores_specials, ctx, &walked);
   if (ret == 0) {
     ctx_begin_stage(ctx, walked.file_bytes);
     ret = add_walked_entries(archive, writer, &walked, ctx);

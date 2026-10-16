@@ -53,11 +53,12 @@ static int push(WalkList *list, char *path, size_t prefix_len) {
 }
 
 static int is_skipped(const WalkItem *item, const OwnFiles *own,
-                      CoreContext *ctx) {
-  if (item->st.type == FS_TYPE_OTHER) {
-    ctx_log(ctx, CTX_LOG_WARNING,
-            "Skipped %s: FIFOs, sockets and devices are not archived",
-            item->path);
+                      int keep_specials, CoreContext *ctx) {
+  if (item->st.type == FS_TYPE_OTHER &&
+      !(keep_specials && item->st.special)) {
+    ctx_log(ctx, CTX_LOG_WARNING, "Skipped %s: %s are not archived",
+            item->path,
+            keep_specials ? "sockets" : "FIFOs, sockets and devices");
     return 1;
   }
 
@@ -112,7 +113,8 @@ static int push_children(WalkList *pending, const WalkItem *dir) {
 }
 
 int walk_sources(const char **input_paths, size_t num_paths,
-                 const OwnFiles *own, CoreContext *ctx, WalkList *out) {
+                 const OwnFiles *own, int keep_specials, CoreContext *ctx,
+                 WalkList *out) {
   // Depth-first like the archive's order, on a heap stack rather than the C one
   WalkList pending = {0};
   int ret = 0;
@@ -138,7 +140,7 @@ int walk_sources(const char **input_paths, size_t num_paths,
       ret = -1;
       break;
     }
-    if (is_skipped(&item, own, ctx)) {
+    if (is_skipped(&item, own, keep_specials, ctx)) {
       free(item.path);
       continue;
     }

@@ -7,6 +7,7 @@ import logging
 import lzma
 import os
 import random
+import socket
 import stat
 import subprocess
 import sys
@@ -858,12 +859,12 @@ sys.stdout.buffer.write(orjson.dumps([e["path"] for e in _core.list_archive_cont
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs os.mkfifo")
-class TestArchiveSkipsSpecialFiles:
-    """Test that FIFOs are skipped with a warning instead of being read."""
+class TestArchiveSpecialFiles:
+    """Test that tar stores FIFOs and devices, zip skips them, and neither reads them."""
 
-    @pytest.mark.parametrize("fmt", ["tar", "zip", "tar.gz"])
-    def test_fifo_is_skipped_not_read(self, temp_dir: Path, fmt: str) -> None:
-        """Test that a FIFO in the tree, or named directly, is left out."""
+    def test_zip_skips_a_fifo(self, temp_dir: Path) -> None:
+        """Test that a FIFO in the tree, or named directly, is left out of a zip."""
+        fmt = "zip"
         tree = temp_dir / "tree"
         tree.mkdir()
         (tree / "a.txt").write_text("a")
@@ -885,16 +886,15 @@ class TestArchiveSkipsSpecialFiles:
         for skipped in (tree / "pipe", temp_dir / "named_pipe"):
             assert f"WARNING Skipped {skipped}:" in result.stderr
 
-    @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_nothing_left_to_archive_gives_an_empty_archive(
-        self, temp_dir: Path, fmt: str
+        self, temp_dir: Path
     ) -> None:
         """Test that an archive whose only input is skipped is written empty."""
         os.mkfifo(temp_dir / "pipe")
-        output = temp_dir / f"out.{fmt}"
+        output = temp_dir / "out.zip"
 
         result = subprocess.run(
-            [sys.executable, "-c", _ARCHIVE_AND_LIST, str(output), fmt]
+            [sys.executable, "-c", _ARCHIVE_AND_LIST, str(output), "zip"]
             + [str(temp_dir / "pipe")],
             capture_output=True,
             text=True,
@@ -904,9 +904,62 @@ class TestArchiveSkipsSpecialFiles:
 
         assert result.returncode == 0, result.stderr
         assert orjson.loads(result.stdout) == []
-        if fmt == "zip":
-            with zipfile.ZipFile(output) as zf:
-                assert zf.namelist() == []
+        with zipfile.ZipFile(output) as zf:
+            assert zf.namelist() == []
+
+    @pytest.mark.parametrize("fmt", ["tar", "tar.gz"])
+    def test_tar_stores_a_fifo_not_its_data(self, temp_dir: Path, fmt: str) -> None:
+        """Test that a FIFO is stored as a FIFO entry, as GNU tar stores one."""
+        tree = temp_dir / "tree"
+        tree.mkdir()
+        os.mkfifo(tree / "pipe")
+        output = temp_dir / f"out.{fmt}"
+
+        result = subprocess.run(
+            [sys.executable, "-c", _ARCHIVE_AND_LIST, str(output), fmt, str(tree)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        with tarfile.open(output) as tf:
+            member = tf.getmember("tree/pipe")
+        assert member.isfifo()
+        assert member.size == 0
+        assert member.mode == stat.S_IMODE((tree / "pipe").stat().st_mode)
+
+    @pytest.mark.skipif(not os.path.exists("/dev/null"), reason="needs /dev/null")
+    def test_tar_stores_a_device_with_its_number(self, temp_dir: Path) -> None:
+        """Test that a character device keeps its major and minor numbers."""
+        output = temp_dir / "out.tar"
+        rdev = os.stat("/dev/null").st_rdev
+
+        _core.create_archive(str(output), "tar", ["/dev/null"])
+
+        with tarfile.open(output) as tf:
+            member = tf.getmember("null")
+        assert member.ischr()
+        assert (member.devmajor, member.devminor) == (os.major(rdev), os.minor(rdev))
+
+    def test_tar_skips_a_socket(
+        self,
+        temp_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that a socket is left out of a tar with a warning, as GNU tar does."""
+        # A relative name, since a socket path's length is capped near 100 bytes
+        monkeypatch.chdir(temp_dir)
+        Path("tree").mkdir()
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.bind("tree/sock")
+            with caplog.at_level(logging.WARNING):
+                _core.create_archive("out.tar", "tar", ["tree"])
+
+        assert [e["path"] for e in _core.list_archive_contents("out.tar")] == ["tree/"]
+        assert "Skipped tree/sock: sockets are not archived" in caplog.text
 
 
 class TestArchiveSkipsItsOwnOutput:

@@ -6,8 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// The archive and its temp file, for the walk to skip: tar writes the temp
-// during the walk, and an output being overwritten still holds the old archive
+// The archive and its temp file, which the walk skips: tar fills the temp
+// mid-walk, and an output being replaced still holds the old archive
 typedef struct {
   fs_stat files[2];
   size_t count;
@@ -27,11 +27,12 @@ typedef struct {
   uint64_t file_bytes; // The regular files' total, for progress
 } WalkList;
 
-// Every input and everything below it, depth-first, one lstat each; special
-// files and `own` are skipped with a warning; returns COMP_CANCELLED, or -1 with
-// an exception set, and `out` needs walk_list_free either way
+// Every input and everything below it, depth-first, symlinks not followed;
+// skips `own`, sockets, FIFOs, and devices unless `keep_specials`, each with
+// a warning. Returns COMP_CANCELLED, or -1 with an exception set
 int walk_sources(const char **input_paths, size_t num_paths,
-                 const OwnFiles *own, CoreContext *ctx, WalkList *out);
+                 const OwnFiles *own, int keep_specials, CoreContext *ctx,
+                 WalkList *out);
 
 void walk_list_free(WalkList *list);
 

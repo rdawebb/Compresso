@@ -30,6 +30,11 @@ static void fs_fill_stat(const struct stat *st, fs_stat *out) {
     out->type = FS_TYPE_FILE;
   else
     out->type = FS_TYPE_OTHER;
+
+  int storable = S_ISFIFO(st->st_mode) || S_ISCHR(st->st_mode) ||
+                 S_ISBLK(st->st_mode);
+  out->special = storable ? (uint32_t)(st->st_mode & S_IFMT) : 0;
+  out->rdev = storable ? (uint64_t)st->st_rdev : 0;
 }
 
 int fs_stat_path(const char *path, fs_stat *out) {

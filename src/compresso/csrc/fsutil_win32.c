@@ -96,6 +96,8 @@ int fs_stat_path(const char *path, fs_stat *out) {
   out->size = (uint64_t)st.st_size;
   out->mtime = (int64_t)st.st_mtime;
   out->mode = (uint32_t)(st.st_mode & 0777);
+  out->special = 0;
+  out->rdev = 0;
   out->dev = 0;
   out->ino = 0;
 

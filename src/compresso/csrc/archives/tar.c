@@ -148,7 +148,9 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
     }
     break;
   case ENTRY_SPECIAL:
-    archive_entry_set_filetype(ae, AE_IFCHR);
+    archive_entry_set_filetype(ae, entry->special);
+    archive_entry_set_rdev(ae, (dev_t)entry->rdev);
+    archive_entry_set_size(ae, 0);
     break;
   case ENTRY_HARDLINK:
     // A link entry carries no data of its own
@@ -529,6 +531,7 @@ static int tar_supports_streaming(void) {
 const CArchive TAR_ARCHIVE = {
     .name = "tar",
     .levels = LEVELS_NONE,
+    .stores_specials = 1,
     .supports_compression = tar_supports_compression,
     .supports_streaming = tar_supports_streaming,
     .create_writer = tar_create_writer,
