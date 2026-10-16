@@ -192,6 +192,12 @@ def extract_archive(
 def detect_format(file_path: StrOrBytesPath) -> str:
     """Name a file's format, from its magic bytes and then its extension."""
 
+def gzip_stored_name(file_path: StrOrBytesPath) -> bytes | None:
+    """Return the name a gzip header stores (FNAME) as written, or None.
+
+    Always None for a non-gzip file.
+    """
+
 def format_is_archive(format: str) -> bool:
     """Return whether a format's container can hold more than one entry."""
 

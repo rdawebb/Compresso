@@ -666,6 +666,25 @@ class TestDecompressConflicts:
         assert restored.read_bytes() == payload.read_bytes()
 
 
+class TestDecompressName:
+    """Test that -N names a .gz file's output as its header does, as gzip -N does."""
+
+    @pytest.mark.parametrize(
+        ("flags", "expected"), [((), "renamed"), (("-N",), "orig.txt")]
+    )
+    def test_name_flag(
+        self, temp_dir: Path, flags: tuple[str, ...], expected: str
+    ) -> None:
+        """Test that the stored name is used only with -N."""
+        src = temp_dir / "renamed.gz"
+        with src.open("wb") as f, gzip.GzipFile("orig.txt", "wb", fileobj=f) as gz:
+            gz.write(b"payload")
+
+        invoke("extract", src, *flags, "-q")
+
+        assert (temp_dir / expected).read_bytes() == b"payload"
+
+
 class TestInspectAndList:
     """Test the read-only commands."""
 
