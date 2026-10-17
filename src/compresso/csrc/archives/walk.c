@@ -112,9 +112,51 @@ static int push_children(WalkList *pending, const WalkItem *dir) {
   return ret;
 }
 
+// Groups names of the same file together, each group in walk order, so the
+// first name walked keeps the data and the rest link to it
+static int by_identity(const void *a, const void *b) {
+  const WalkItem *x = *(const WalkItem *const *)a;
+  const WalkItem *y = *(const WalkItem *const *)b;
+  if (x->st.dev != y->st.dev)
+    return x->st.dev < y->st.dev ? -1 : 1;
+  if (x->st.ino != y->st.ino)
+    return x->st.ino < y->st.ino ? -1 : 1;
+  return (x > y) - (x < y);
+}
+
+static int find_hardlinks(WalkList *list) {
+  size_t n = 0;
+  for (size_t i = 0; i < list->count; i++)
+    n += list->items[i].st.type != FS_TYPE_DIR && list->items[i].st.nlink > 1;
+  if (n < 2)
+    return 0;
+
+  WalkItem **linked = malloc(n * sizeof(*linked));
+  if (!linked) {
+    PyErr_NoMemory();
+    return -1;
+  }
+  n = 0;
+  for (size_t i = 0; i < list->count; i++)
+    if (list->items[i].st.type != FS_TYPE_DIR && list->items[i].st.nlink > 1)
+      linked[n++] = &list->items[i];
+  qsort(linked, n, sizeof(*linked), by_identity);
+
+  for (size_t i = 1; i < n; i++) {
+    if (!fs_same_file(&linked[i]->st, &linked[i - 1]->st))
+      continue;
+    linked[i]->link =
+        linked[i - 1]->link ? linked[i - 1]->link : linked[i - 1];
+    if (linked[i]->st.type == FS_TYPE_FILE)
+      list->file_bytes -= linked[i]->st.size;
+  }
+  free(linked);
+  return 0;
+}
+
 int walk_sources(const char **input_paths, size_t num_paths,
-                 const OwnFiles *own, int keep_specials, CoreContext *ctx,
-                 WalkList *out) {
+                 const OwnFiles *own, int keep_specials, int link_hardlinks,
+                 CoreContext *ctx, WalkList *out) {
   // Depth-first like the archive's order, on a heap stack rather than the C one
   WalkList pending = {0};
   int ret = 0;
@@ -157,6 +199,8 @@ int walk_sources(const char **input_paths, size_t num_paths,
   }
 
   walk_list_free(&pending);
+  if (ret == 0 && link_hardlinks)
+    ret = find_hardlinks(out);
   return ret;
 }
 

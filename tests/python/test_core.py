@@ -1574,7 +1574,7 @@ class TestHardlinkExtraction:
         (temp_dir / "secret").write_text("secret")
         (out / "d" / "s").symlink_to(temp_dir / "secret")
 
-        with pytest.raises(ExtractionPolicyError, match="not a regular file"):
+        with pytest.raises(ExtractionPolicyError, match="not a file, FIFO or device"):
             _core.extract_archive(str(archive), str(out), [], overwrite=2)
 
     def test_existing_link_path_follows_the_overwrite_mode(
@@ -1774,6 +1774,56 @@ class TestHardlinkToSymlink:
             _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
 
         assert list(out.iterdir()) == []
+
+
+class TestHardlinkCreation:
+    """Test that tar stores a file's later names as links to its first."""
+
+    def _round_trip(self, temp_dir: Path, make: Callable[[Path], object]) -> Path:
+        """Archive src/a and its hardlink src/b, check the listing, and extract."""
+        src = temp_dir / "src"
+        src.mkdir()
+        make(src / "a")
+        os.link(src / "a", src / "b")
+        archive = temp_dir / "a.tar"
+
+        _core.create_archive(str(archive), "tar", [str(src)])
+
+        entries = {e["path"]: e for e in _core.list_archive_contents(str(archive))}
+        first, later = sorted(["src/a", "src/b"], key=list(entries).index)
+        assert entries[later]["type"] == "hardlink"
+        assert entries[later]["link_target"] == first
+        out = temp_dir / "out"
+        _core.extract_archive(str(archive), str(out), [])
+        return out / "src"
+
+    def test_file_is_stored_once(self, temp_dir: Path) -> None:
+        """Test that the extracted names share an inode."""
+        out = self._round_trip(temp_dir, lambda p: p.write_text("x"))
+
+        assert (out / "a").read_text() == "x"
+        assert (out / "a").stat().st_ino == (out / "b").stat().st_ino
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="no FIFOs on Windows")
+    def test_fifo_is_linked(self, temp_dir: Path) -> None:
+        """Test that a link naming a FIFO links it, as bsdtar does."""
+        out = self._round_trip(temp_dir, os.mkfifo)
+
+        assert stat.S_ISFIFO((out / "b").lstat().st_mode)
+        assert (out / "a").lstat().st_ino == (out / "b").lstat().st_ino
+
+    def test_zip_keeps_copies(self, temp_dir: Path) -> None:
+        """Test that zip stores each name in full, as Info-ZIP does."""
+        src = temp_dir / "src"
+        src.mkdir()
+        (src / "a").write_text("x")
+        os.link(src / "a", src / "b")
+        archive = temp_dir / "a.zip"
+
+        _core.create_archive(str(archive), "zip", [str(src)])
+
+        with zipfile.ZipFile(archive) as zf:
+            assert zf.read("src/b") == b"x"
 
 
 def _zip_with_unix_modes(path: Path) -> None:

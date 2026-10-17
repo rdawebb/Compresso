@@ -569,6 +569,7 @@ const CArchive TAR_ARCHIVE = {
     .name = "tar",
     .levels = LEVELS_NONE,
     .stores_specials = 1,
+    .stores_hardlinks = 1,
     .supports_compression = tar_supports_compression,
     .supports_streaming = tar_supports_streaming,
     .create_writer = tar_create_writer,

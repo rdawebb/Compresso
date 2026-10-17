@@ -39,6 +39,7 @@ typedef struct {
   // Identity, for fs_same_file; on Windows only filled for regular files (the
   // volume serial and file index), and 0 wherever it is unknown
   uint64_t dev, ino;
+  uint32_t nlink; // Its names' count; filled wherever the identity is
 } fs_stat;
 
 // True if both name the same file, e.g. through a hardlink; false whenever

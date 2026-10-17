@@ -822,9 +822,9 @@ static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
   }
   // A symlink is linked itself
   int is_symlink = st.type == FS_TYPE_SYMLINK && policy->allow_symlinks == 1;
-  if (st.type != FS_TYPE_FILE && !is_symlink) {
+  if (st.type != FS_TYPE_FILE && !is_symlink && !st.special) {
     PyErr_Format(errors->extraction_policy,
-                 "Hardlink %s names %s, which is not a regular file",
+                 "Hardlink %s names %s, which is not a file, FIFO or device",
                  entry_path, target);
     return -1;
   }

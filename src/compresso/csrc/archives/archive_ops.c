@@ -72,6 +72,42 @@ static int check_storable_entry_name(const char *name) {
 
 // ---- Helpers ----
 
+// A walked path's entry name, or NULL with an exception set
+static char *entry_name(const WalkItem *item) {
+  const char *rel_path = item->path + item->prefix_len;
+  while (FS_IS_SEP(*rel_path))
+    rel_path++;
+
+  char *name = strdup(rel_path);
+  if (!name) {
+    PyErr_NoMemory();
+    return NULL;
+  }
+
+  // Normalise to '/', collapsing runs and dropping a trailing one; writers add
+  // the trailing separator a directory needs
+  char *w = name;
+  for (const char *r = name; *r; r++) {
+    if (FS_IS_SEP(*r)) {
+      // Keep a leading separator so the absolute name is still rejected below
+      if (w > name && w[-1] == '/')
+        continue;
+      *w++ = '/';
+    } else {
+      *w++ = *r;
+    }
+  }
+  while (w > name + 1 && w[-1] == '/')
+    w--;
+  *w = '\0';
+
+  if (check_storable_entry_name(name) != 0) {
+    free(name);
+    return NULL;
+  }
+  return name;
+}
+
 static ArchiveEntry *entry_from_walk(const WalkItem *item) {
   const char *path = item->path;
   const fs_stat *st = &item->st;
@@ -80,35 +116,8 @@ static ArchiveEntry *entry_from_walk(const WalkItem *item) {
   if (!entry)
     return NULL;
 
-  const char *rel_path = path + item->prefix_len;
-  while (FS_IS_SEP(*rel_path))
-    rel_path++;
-
-  entry->path = strdup(rel_path);
+  entry->path = entry_name(item);
   if (!entry->path) {
-    entry_free(entry);
-    PyErr_NoMemory();
-    return NULL;
-  }
-
-  // Normalise to '/', collapsing runs and dropping a trailing one; writers add
-  // the trailing separator a directory needs themselves
-  char *w = entry->path;
-  for (const char *r = entry->path; *r; r++) {
-    if (FS_IS_SEP(*r)) {
-      // Keep a leading separator so the absolute name is still rejected below
-      if (w > entry->path && w[-1] == '/')
-        continue;
-      *w++ = '/';
-    } else {
-      *w++ = *r;
-    }
-  }
-  while (w > entry->path + 1 && w[-1] == '/')
-    w--;
-  *w = '\0';
-
-  if (check_storable_entry_name(entry->path) != 0) {
     entry_free(entry);
     return NULL;
   }
@@ -117,7 +126,15 @@ static ArchiveEntry *entry_from_walk(const WalkItem *item) {
   entry->mtime = st->mtime;
   entry->mode = st->mode;
 
-  if (st->type == FS_TYPE_DIR) {
+  if (item->link) {
+    entry->type = ENTRY_HARDLINK;
+    entry->size = 0;
+    entry->link_target = entry_name(item->link);
+    if (!entry->link_target) {
+      entry_free(entry);
+      return NULL;
+    }
+  } else if (st->type == FS_TYPE_DIR) {
     entry->type = ENTRY_DIR;
   } else if (st->type == FS_TYPE_SYMLINK) {
     entry->type = ENTRY_SYMLINK;
@@ -259,8 +276,8 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   own_files_add(&own, output_path);
 
   WalkList walked = {0};
-  int ret = walk_sources(input_paths, num_paths, &own,
-                         archive->stores_specials, ctx, &walked);
+  int ret = walk_sources(input_paths, num_paths, &own, archive->stores_specials,
+                         archive->stores_hardlinks, ctx, &walked);
   if (ret == 0) {
     ctx_begin_stage(ctx, walked.file_bytes);
     ret = add_walked_entries(archive, writer, &walked, ctx);
@@ -389,9 +406,9 @@ static PyObject *entry_to_dict(const ArchiveEntry *entry) {
   // "N" hands both references to the dict
   PyObject *item = Py_BuildValue(
       "{s:N, s:s, s:K, s:L, s:I, s:N}", "path", path, "type",
-      entry_type_name(entry), "size", (unsigned long long)entry->size,
-      "mtime", (long long)entry->mtime, "mode", (unsigned int)entry->mode,
-      "link_target", target);
+      entry_type_name(entry), "size", (unsigned long long)entry->size, "mtime",
+      (long long)entry->mtime, "mode", (unsigned int)entry->mode, "link_target",
+      target);
 
   if (!item || !entry->has_compression_detail)
     return item;

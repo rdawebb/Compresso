@@ -21,6 +21,7 @@ static void fs_fill_stat(const struct stat *st, fs_stat *out) {
   out->mode = (uint32_t)(st->st_mode & 0777);
   out->dev = (uint64_t)st->st_dev;
   out->ino = (uint64_t)st->st_ino;
+  out->nlink = (uint32_t)st->st_nlink;
 
   if (S_ISDIR(st->st_mode))
     out->type = FS_TYPE_DIR;

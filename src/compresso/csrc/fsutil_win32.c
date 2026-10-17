@@ -100,6 +100,7 @@ int fs_stat_path(const char *path, fs_stat *out) {
   out->rdev = 0;
   out->dev = 0;
   out->ino = 0;
+  out->nlink = 0;
 
   if (is_reparse)
     out->type = FS_TYPE_SYMLINK;
@@ -119,6 +120,7 @@ int fs_stat_path(const char *path, fs_stat *out) {
       if (GetFileInformationByHandle(h, &info)) {
         out->dev = info.dwVolumeSerialNumber;
         out->ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow;
+        out->nlink = info.nNumberOfLinks;
       }
       CloseHandle(h);
     }
