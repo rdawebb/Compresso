@@ -4,6 +4,7 @@
 #include "../fsutil.h"
 #include "../standalone.h"
 #include "archive_ops.h"
+#include <archive_entry.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -330,13 +331,6 @@ static int check_entry_policy(const CompErrors *errors,
     return -1;
   }
 
-  if (entry->type == ENTRY_SPECIAL) {
-    PyErr_Format(errors->extraction_policy,
-                 "Archive contains special file, but policy denies it: %s",
-                 entry->path);
-    return -1;
-  }
-
   return 0;
 }
 
@@ -449,10 +443,8 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
       return -1;
     }
 
-    // A link declares no data, but claims its path like a file
-    if (entry_is_selected(&entry, sel) &&
-        (entry.type == ENTRY_FILE || entry.type == ENTRY_HARDLINK ||
-         entry.type == ENTRY_SYMLINK)) {
+    // A link or node declares no data, but claims its path like a file
+    if (entry_is_selected(&entry, sel) && entry.type != ENTRY_DIR) {
       declared_total += entry.type == ENTRY_FILE ? entry.size : 0;
       if (policy->max_total_size > 0 &&
           declared_total > policy->max_total_size) {
@@ -731,10 +723,24 @@ static int link_made(Changes *changes, const char *path, int64_t mtime) {
   return record_change(changes, path, NULL, 0);
 }
 
+static int make_hardlink(const void *source, const char *out_path) {
+  return fs_link(source, out_path);
+}
+
+static int make_symlink(const void *target, const char *out_path) {
+  return fs_symlink(target, out_path);
+}
+
+// Creates `entry` with its `mode` as given
+static int make_node(const void *entry, const char *out_path) {
+  const ArchiveEntry *e = entry;
+  return fs_mknod(out_path, e->special, e->mode, e->rdev);
+}
+
 // Runs `make(source, out_path)` under the overwrite mode, as for a file;
 // returns 0, or -1 with an exception set
-static int place_link(int (*make)(const char *, const char *),
-                      const char *source, const char *out_path,
+static int place_link(int (*make)(const void *, const char *),
+                      const void *source, const char *out_path,
                       const char *entry_path, int overwrite_existing,
                       int64_t mtime, Changes *changes) {
   if (make(source, out_path) == 0)
@@ -862,7 +868,7 @@ static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
   }
 
   // Shares the target's inode, and so its metadata too
-  return place_link(fs_link, target_path, out_path, entry_path,
+  return place_link(make_hardlink, target_path, out_path, entry_path,
                     policy->overwrite_existing, 0, changes);
 }
 
@@ -882,10 +888,42 @@ static int extract_symlink(const CompErrors *errors, const char *resolved_root,
   if (check_target_from(errors, resolved_root, parent, entry) != 0)
     return -1;
 
-  return place_link(fs_symlink, entry->link_target, out_path, entry->path,
+  return place_link(make_symlink, entry->link_target, out_path, entry->path,
                     policy->overwrite_existing,
                     policy->preserve_timestamps ? (int64_t)entry->mtime : 0,
                     changes);
+}
+
+// A node this platform or user can't create is skipped with a warning; returns
+// 0, or -1 with an exception set
+static int extract_special(const CompErrors *errors, const char *resolved_root,
+                           const char *out_path, const ArchiveEntry *entry,
+                           const ExtractionPolicy *policy, uint32_t mode_mask,
+                           CoreContext *ctx, Changes *changes) {
+  if (!fs_can_mknod(entry->special)) {
+    ctx_log(ctx, CTX_LOG_WARNING, "Skipped %s: %s", entry->path,
+            !entry->special ? "sockets are not extracted"
+            : entry->special == AE_IFIFO
+                ? "FIFOs can't be created on this platform"
+                : "devices are only created by root, and not on Windows");
+    return 0;
+  }
+
+  char parent[FS_PATH_MAX];
+  memcpy(parent, out_path, strlen(out_path) + 1);
+  char *sep = fs_last_sep(parent);
+  if (sep) {
+    *sep = '\0';
+    if (prepare_output_dir(errors, resolved_root, parent, DIR_CREATE_MODE,
+                           entry->path, changes) != 0)
+      return -1;
+  }
+
+  ArchiveEntry node = *entry;
+  node.mode = policy->preserve_permissions ? entry->mode & mode_mask : 0666;
+  return place_link(
+      make_node, &node, out_path, entry->path, policy->overwrite_existing,
+      policy->preserve_timestamps ? (int64_t)entry->mtime : 0, changes);
 }
 
 // Returns 0, 1 if the entry's data should be skipped, or -1 with an exception
@@ -1153,6 +1191,11 @@ static int extract_entries(const CArchive *archive, void *reader,
     else if (entry.type == ENTRY_HARDLINK)
       rc = extract_hardlink(ctx->errors, resolved_root, output_dir, out_path,
                             effective_target, entry.path, policy, changes) != 0
+               ? -1
+               : 1;
+    else if (entry.type == ENTRY_SPECIAL)
+      rc = extract_special(ctx->errors, resolved_root, out_path, &entry, policy,
+                           mode_mask, ctx, changes) != 0
                ? -1
                : 1;
     if (rc < 0) {

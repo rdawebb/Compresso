@@ -578,3 +578,17 @@ int fs_symlink(const char *target, const char *link_path) {
   }
   return -1;
 }
+
+int fs_can_mknod(uint32_t type) {
+  (void)type;
+  return 0;
+}
+
+int fs_mknod(const char *path, uint32_t type, uint32_t mode, uint64_t rdev) {
+  (void)path;
+  (void)type;
+  (void)mode;
+  (void)rdev;
+  errno = ENOTSUP;
+  return -1;
+}

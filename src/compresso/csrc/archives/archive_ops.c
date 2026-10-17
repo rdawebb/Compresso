@@ -5,6 +5,7 @@
 #include "../fsutil.h"
 #include "../standalone.h"
 #include "walk.h"
+#include <archive_entry.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -342,15 +343,18 @@ int close_codec_source(CodecStream *stream, FILE *src, int drain) {
   return rc;
 }
 
-// Name an EntryType as the Python layer sees it
-static const char *entry_type_name(EntryType type) {
-  switch (type) {
+// Name an entry's type as the Python layer sees it
+static const char *entry_type_name(const ArchiveEntry *entry) {
+  switch (entry->type) {
   case ENTRY_DIR:
     return "dir";
   case ENTRY_SYMLINK:
     return "symlink";
   case ENTRY_SPECIAL:
-    return "special";
+    return entry->special == AE_IFIFO   ? "fifo"
+           : entry->special == AE_IFCHR ? "char"
+           : entry->special == AE_IFBLK ? "block"
+                                        : "special";
   case ENTRY_HARDLINK:
     return "hardlink";
   case ENTRY_FILE:
@@ -385,7 +389,7 @@ static PyObject *entry_to_dict(const ArchiveEntry *entry) {
   // "N" hands both references to the dict
   PyObject *item = Py_BuildValue(
       "{s:N, s:s, s:K, s:L, s:I, s:N}", "path", path, "type",
-      entry_type_name(entry->type), "size", (unsigned long long)entry->size,
+      entry_type_name(entry), "size", (unsigned long long)entry->size,
       "mtime", (long long)entry->mtime, "mode", (unsigned int)entry->mode,
       "link_target", target);
 

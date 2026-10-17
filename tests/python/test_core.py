@@ -1011,6 +1011,112 @@ class TestArchiveSpecialFiles:
         assert "Skipped tree/sock: sockets are not archived" in caplog.text
 
 
+def _tar_with_specials(path: Path, *kinds: bytes) -> None:
+    """Write a tar of file a then a node per kind, named by its listed type.
+
+    Each node has mode 0o640, mtime 1_000_000_000 and device number 1:3.
+
+    Args:
+        path: Where to write the tar.
+        kinds: The nodes' tar types.
+    """
+    names = {
+        tarfile.FIFOTYPE: "fifo",
+        tarfile.CHRTYPE: "char",
+        tarfile.BLKTYPE: "block",
+    }
+    with tarfile.open(path, "w", format=tarfile.GNU_FORMAT) as tf:
+        info = tarfile.TarInfo("a")
+        info.size = 1
+        tf.addfile(info, io.BytesIO(b"x"))
+        for kind in kinds:
+            node = tarfile.TarInfo(names[kind])
+            node.type = kind
+            node.mode = 0o640
+            node.mtime = 1_000_000_000
+            node.devmajor, node.devminor = 1, 3
+            tf.addfile(node)
+
+
+class TestSpecialExtraction:
+    """Test that FIFOs and devices are created as tar creates them."""
+
+    def test_listing_names_the_kind(self, temp_dir: Path) -> None:
+        """Test that each node is listed by its kind rather than as special."""
+        archive = temp_dir / "nodes.tar"
+        _tar_with_specials(archive, tarfile.FIFOTYPE, tarfile.CHRTYPE, tarfile.BLKTYPE)
+
+        entries = _core.list_archive_contents(str(archive))
+
+        assert [(e["path"], e["type"]) for e in entries] == [
+            ("a", "file"),
+            ("fifo", "fifo"),
+            ("char", "char"),
+            ("block", "block"),
+        ]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no FIFOs")
+    def test_fifo_is_created_with_its_metadata(self, temp_dir: Path) -> None:
+        """Test that a FIFO is made, with the stored mode under the umask, and mtime."""
+        archive = temp_dir / "nodes.tar"
+        _tar_with_specials(archive, tarfile.FIFOTYPE)
+        umask = os.umask(0)
+        os.umask(umask)
+
+        _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+
+        st = os.lstat(temp_dir / "out" / "fifo")
+        assert stat.S_ISFIFO(st.st_mode)
+        assert stat.S_IMODE(st.st_mode) == 0o640 & ~umask
+        assert st.st_mtime == 1_000_000_000
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX, not root"
+    )
+    def test_device_is_skipped_without_root(
+        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that a device is skipped with a warning, the rest still extracted."""
+        archive = temp_dir / "nodes.tar"
+        _tar_with_specials(archive, tarfile.CHRTYPE)
+        out = temp_dir / "out"
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            _core.extract_archive(str(archive), str(out), [])
+
+        assert os.listdir(out) == ["a"]
+        assert "Skipped char: devices are only created by root" in caplog.text
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or os.geteuid() != 0, reason="needs root"
+    )
+    def test_device_is_created_as_root(self, temp_dir: Path) -> None:
+        """Test that a device is made with its stored number."""
+        archive = temp_dir / "nodes.tar"
+        _tar_with_specials(archive, tarfile.CHRTYPE)
+
+        _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+
+        st = os.lstat(temp_dir / "out" / "char")
+        assert stat.S_ISCHR(st.st_mode)
+        assert st.st_rdev == os.makedev(1, 3)
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only")
+    def test_windows_skips_a_fifo(
+        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that a FIFO is skipped with a warning, the rest still extracted."""
+        archive = temp_dir / "nodes.tar"
+        _tar_with_specials(archive, tarfile.FIFOTYPE)
+        out = temp_dir / "out"
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            _core.extract_archive(str(archive), str(out), [])
+
+        assert os.listdir(out) == ["a"]
+        assert "Skipped fifo: FIFOs can't be created on this platform" in caplog.text
+
+
 class TestArchiveSkipsItsOwnOutput:
     """Test that archiving a tree into itself leaves the archive out."""
 

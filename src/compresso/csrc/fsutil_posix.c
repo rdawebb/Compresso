@@ -31,8 +31,8 @@ static void fs_fill_stat(const struct stat *st, fs_stat *out) {
   else
     out->type = FS_TYPE_OTHER;
 
-  int storable = S_ISFIFO(st->st_mode) || S_ISCHR(st->st_mode) ||
-                 S_ISBLK(st->st_mode);
+  int storable =
+      S_ISFIFO(st->st_mode) || S_ISCHR(st->st_mode) || S_ISBLK(st->st_mode);
   out->special = storable ? (uint32_t)(st->st_mode & S_IFMT) : 0;
   out->rdev = storable ? (uint64_t)st->st_rdev : 0;
 }
@@ -263,4 +263,20 @@ int fs_link(const char *existing, const char *new_path) {
 
 int fs_symlink(const char *target, const char *link_path) {
   return symlink(target, link_path);
+}
+
+int fs_can_mknod(uint32_t type) {
+  return type == S_IFIFO ||
+         ((type == S_IFCHR || type == S_IFBLK) && geteuid() == 0);
+}
+
+// mkfifo, as macOS's mknod needs root otherwise
+int fs_mknod(const char *path, uint32_t type, uint32_t mode, uint64_t rdev) {
+  if (type == S_IFIFO)
+    return mkfifo(path, (mode_t)mode);
+  if (type != S_IFCHR && type != S_IFBLK) {
+    errno = EINVAL;
+    return -1;
+  }
+  return mknod(path, (mode_t)(type | mode), (dev_t)rdev);
 }

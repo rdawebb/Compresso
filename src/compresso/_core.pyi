@@ -212,7 +212,9 @@ class _StandaloneFormatDict(TypedDict):
 def standalone_formats() -> list[_StandaloneFormatDict]:
     """Describe each single-file container format, e.g. gzip."""
 
-EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "hardlink", "special"]
+EntryTypeName: TypeAlias = Literal[
+    "file", "dir", "symlink", "hardlink", "fifo", "char", "block", "special"
+]
 
 class ArchiveEntryDict(TypedDict):
     """One archive entry, as `list_archive_contents` reports it.

@@ -181,6 +181,14 @@ int fs_link(const char *existing, const char *new_path);
 // directory link
 int fs_symlink(const char *target, const char *link_path);
 
+// Whether this process can create a node of `type` (fs_stat.special's values):
+// a FIFO, or a device as root; Windows has neither so N/A
+int fs_can_mknod(uint32_t type);
+
+// Create a FIFO or device at `path`; the umask still applies to `mode`; -1 with
+// errno set (EEXIST if `path` exists, EINVAL for any other type)
+int fs_mknod(const char *path, uint32_t type, uint32_t mode, uint64_t rdev);
+
 // Current read/write offset in an open stream, as a 64-bit value on every
 // platform (plain ftell() is 32-bit on Windows); returns -1 on failure
 int64_t fs_ftell(FILE *stream);

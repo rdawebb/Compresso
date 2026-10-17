@@ -463,8 +463,12 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
       }
     }
   } else {
-    // FIFOs, device nodes and sockets
     entry->type = ENTRY_SPECIAL;
+    // Sockets keep 0, as nothing can recreate them
+    if (filetype == AE_IFIFO || filetype == AE_IFCHR || filetype == AE_IFBLK) {
+      entry->special = filetype;
+      entry->rdev = (uint64_t)archive_entry_rdev(reader->current_entry);
+    }
   }
 
   return 1; // Entry retrieved successfully
