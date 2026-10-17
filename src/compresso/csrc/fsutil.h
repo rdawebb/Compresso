@@ -71,8 +71,7 @@ int fs_stat_path(const char *path, fs_stat *out);
 int fs_fstat(FILE *f, fs_stat *out);
 
 // Read a symlink's target into `buf` (NUL-terminated); -1/ENAMETOOLONG if it
-// doesn't fit, rather than truncating it
-// On Windows this is the resolved absolute target, not the literal link text
+// doesn't fit, rather than truncating; on Windows this is the literal link text
 int fs_readlink(const char *path, char *buf, size_t buf_size);
 
 // Directory iteration; fs_readdir skips "." and ".."
@@ -94,7 +93,8 @@ FILE *fs_fopen(const char *path, const char *mode);
 FILE *fs_fopen_exclusive(const char *path);
 
 // Set `path`'s modification time to `mtime` seconds since the Unix epoch
-// The access time is set to the same value, since archives do not carry one
+// The access time is set to the same value, since archives do not carry one;
+// a symlink is never followed, so it gets the time itself
 int fs_set_mtime(const char *path, int64_t mtime);
 
 // fs_set_mtime and fs_chmod on an open file, so they reach the file written

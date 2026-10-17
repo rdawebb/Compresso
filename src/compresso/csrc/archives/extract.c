@@ -724,14 +724,21 @@ static int rename_conflicting_dir(const char *output_dir, const char *out_path,
   return -1;
 }
 
+// Sets a positive `mtime` on the link made; best-effort
+static int link_made(Changes *changes, const char *path, int64_t mtime) {
+  if (mtime > 0)
+    fs_set_mtime(path, mtime);
+  return record_change(changes, path, NULL, 0);
+}
+
 // Runs `make(source, out_path)` under the overwrite mode, as for a file;
 // returns 0, or -1 with an exception set
 static int place_link(int (*make)(const char *, const char *),
                       const char *source, const char *out_path,
                       const char *entry_path, int overwrite_existing,
-                      Changes *changes) {
+                      int64_t mtime, Changes *changes) {
   if (make(source, out_path) == 0)
-    return record_change(changes, out_path, NULL, 0);
+    return link_made(changes, out_path, mtime);
   if (errno != EEXIST) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
     return -1;
@@ -747,7 +754,7 @@ static int place_link(int (*make)(const char *, const char *),
       PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
       return -1;
     }
-    return record_change(changes, out_path, NULL, 0);
+    return link_made(changes, out_path, mtime);
   case 3: { // RENAME: each attempt is its own atomic link, as for a file
     char candidate[FS_PATH_MAX];
     for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
@@ -757,7 +764,7 @@ static int place_link(int (*make)(const char *, const char *),
         return -1;
       }
       if (make(source, candidate) == 0)
-        return record_change(changes, candidate, NULL, 0);
+        return link_made(changes, candidate, mtime);
       if (errno != EEXIST) {
         PyErr_SetFromErrnoWithFilename(PyExc_OSError, candidate);
         return -1;
@@ -773,12 +780,28 @@ static int place_link(int (*make)(const char *, const char *),
   }
 }
 
+// Checks a symlink's target from `parent`, the directory it lands in, once
+// resolved, as a symlinked ancestor can make it shallower
+static int check_target_from(const CompErrors *errors,
+                             const char *resolved_root, const char *parent,
+                             const ArchiveEntry *entry) {
+  char resolved_parent[FS_PATH_MAX];
+  if (fs_realpath(parent, resolved_parent) != 0) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, parent);
+    return -1;
+  }
+  uint32_t parent_depth = path_depth(resolved_parent);
+  uint32_t root_depth = path_depth(resolved_root);
+  return check_symlink_target(
+      errors, entry, parent_depth > root_depth ? parent_depth - root_depth : 0);
+}
+
 // Links `out_path` to the already-extracted `target`; returns 0, or -1 with an
 // exception set
 static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
                             const char *output_dir, const char *out_path,
                             const char *target, const char *entry_path,
-                            int overwrite_existing, Changes *changes) {
+                            const ExtractionPolicy *policy, Changes *changes) {
   char target_path[FS_PATH_MAX];
   if (fs_join(target_path, sizeof(target_path), output_dir, target) != 0) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, target);
@@ -791,7 +814,9 @@ static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, target_path);
     return -1;
   }
-  if (st.type != FS_TYPE_FILE) {
+  // A symlink is linked itself
+  int is_symlink = st.type == FS_TYPE_SYMLINK && policy->allow_symlinks == 1;
+  if (st.type != FS_TYPE_FILE && !is_symlink) {
     PyErr_Format(errors->extraction_policy,
                  "Hardlink %s names %s, which is not a regular file",
                  entry_path, target);
@@ -822,16 +847,29 @@ static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
       return -1;
   }
 
+  // Its relative target now resolves from the new link's directory, and it
+  // may have been planted rather than extracted
+  if (is_symlink) {
+    char link_target[FS_PATH_MAX];
+    if (fs_readlink(target_path, link_target, sizeof(link_target)) != 0) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, target_path);
+      return -1;
+    }
+    ArchiveEntry as_symlink = {.path = (char *)entry_path,
+                               .link_target = link_target};
+    if (check_target_from(errors, resolved_root, link_parent, &as_symlink) != 0)
+      return -1;
+  }
+
+  // Shares the target's inode, and so its metadata too
   return place_link(fs_link, target_path, out_path, entry_path,
-                    overwrite_existing, changes);
+                    policy->overwrite_existing, 0, changes);
 }
 
-// Checks the target from the link's resolved directory, which a symlinked
-// ancestor can make shallower than its path suggests
 static int extract_symlink(const CompErrors *errors, const char *resolved_root,
                            const char *out_path, const ArchiveEntry *entry,
-                           int overwrite_existing, Changes *changes) {
-  char parent[FS_PATH_MAX], resolved_parent[FS_PATH_MAX];
+                           const ExtractionPolicy *policy, Changes *changes) {
+  char parent[FS_PATH_MAX];
   memcpy(parent, out_path, strlen(out_path) + 1);
   char *sep = fs_last_sep(parent);
   if (sep) {
@@ -841,19 +879,13 @@ static int extract_symlink(const CompErrors *errors, const char *resolved_root,
       return -1;
   }
 
-  if (fs_realpath(parent, resolved_parent) != 0) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, parent);
-    return -1;
-  }
-  uint32_t parent_depth = path_depth(resolved_parent);
-  uint32_t root_depth = path_depth(resolved_root);
-  if (check_symlink_target(errors, entry,
-                           parent_depth > root_depth ? parent_depth - root_depth
-                                                     : 0) != 0)
+  if (check_target_from(errors, resolved_root, parent, entry) != 0)
     return -1;
 
   return place_link(fs_symlink, entry->link_target, out_path, entry->path,
-                    overwrite_existing, changes);
+                    policy->overwrite_existing,
+                    policy->preserve_timestamps ? (int64_t)entry->mtime : 0,
+                    changes);
 }
 
 // Returns 0, 1 if the entry's data should be skipped, or -1 with an exception
@@ -1110,9 +1142,8 @@ static int extract_entries(const CArchive *archive, void *reader,
       rc = extract_dir(ctx->errors, output_dir, resolved_root, out_path, &entry,
                        policy, mode_mask, &renames, changes, deferred);
     else if (entry.type == ENTRY_SYMLINK && policy->allow_symlinks == 1)
-      // Link mtimes aren't restored, as lutimes isn't portable
-      rc = extract_symlink(ctx->errors, resolved_root, out_path, &entry,
-                           policy->overwrite_existing, changes) != 0
+      rc = extract_symlink(ctx->errors, resolved_root, out_path, &entry, policy,
+                           changes) != 0
                ? -1
                : 1;
     else if (entry.type == ENTRY_FILE || entry.type == ENTRY_SYMLINK)
@@ -1120,10 +1151,8 @@ static int extract_entries(const CArchive *archive, void *reader,
                         &entry, policy, mode_mask, data_ctx, &written_total,
                         changes);
     else if (entry.type == ENTRY_HARDLINK)
-      // Shares the target's inode, and so its metadata too
       rc = extract_hardlink(ctx->errors, resolved_root, output_dir, out_path,
-                            effective_target, entry.path,
-                            policy->overwrite_existing, changes) != 0
+                            effective_target, entry.path, policy, changes) != 0
                ? -1
                : 1;
     if (rc < 0) {

@@ -99,12 +99,8 @@ FILE *fs_fopen_exclusive(const char *path) {
 }
 
 int fs_set_mtime(const char *path, int64_t mtime) {
-  struct timeval times[2];
-  times[0].tv_sec = (time_t)mtime; // Access time
-  times[0].tv_usec = 0;
-  times[1].tv_sec = (time_t)mtime; // Modification time
-  times[1].tv_usec = 0;
-  return utimes(path, times);
+  struct timespec times[2] = {{(time_t)mtime, 0}, {(time_t)mtime, 0}};
+  return utimensat(AT_FDCWD, path, times, AT_SYMLINK_NOFOLLOW);
 }
 
 int fs_futimens(FILE *f, int64_t mtime) {

@@ -1405,7 +1405,12 @@ class TestTarUtf8Names:
 
 
 def _tar_with_hardlink(
-    path: Path, target: str, *, link: str = "d/b", kind: bytes = tarfile.LNKTYPE
+    path: Path,
+    target: str,
+    *,
+    link: str = "d/b",
+    kind: bytes = tarfile.LNKTYPE,
+    mtime: int = 0,
 ) -> None:
     """Write a tar of file d/a then a link entry `link` naming `target`.
 
@@ -1414,6 +1419,7 @@ def _tar_with_hardlink(
         target: The archive path the link names.
         link: The link entry's own name.
         kind: The link's tar type, a hardlink unless given.
+        mtime: The link entry's mtime.
     """
     with tarfile.open(path, "w", format=tarfile.GNU_FORMAT) as tf:
         info = tarfile.TarInfo("d/a")
@@ -1423,6 +1429,7 @@ def _tar_with_hardlink(
         hardlink.type = kind
         hardlink.linkname = target
         hardlink.mode = 0o777
+        hardlink.mtime = mtime
         tf.addfile(hardlink)
 
 
@@ -1593,6 +1600,68 @@ class TestSymlinkExtraction:
                 info.type = tarfile.SYMTYPE
                 info.linkname = target
                 tf.addfile(info)
+        out = temp_dir / "out"
+
+        with pytest.raises(ExtractionPolicyError, match="symlink target"):
+            _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
+
+        assert list(out.iterdir()) == []
+
+    def test_link_gets_its_own_mtime(self, temp_dir: Path) -> None:
+        """Test that the stored mtime lands on the link, not on its target."""
+        if not _symlinks_work(temp_dir):
+            pytest.skip("symlinks need privilege")
+        archive = temp_dir / "links.tar"
+        _tar_with_hardlink(archive, "a", kind=tarfile.SYMTYPE, mtime=1_000_000_000)
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
+
+        assert (out / "d" / "b").lstat().st_mtime == 1_000_000_000
+        assert (out / "d" / "a").stat().st_mtime != 1_000_000_000
+
+
+def _tar_symlink_then_hardlink(path: Path, link: str) -> None:
+    """Write a tar of symlink d/s -> ../x, then hardlink `link` naming d/s.
+
+    Args:
+        path: Where to write the tar.
+        link: The hardlink's own name.
+    """
+    with tarfile.open(path, "w", format=tarfile.GNU_FORMAT) as tf:
+        for name, kind, target in (
+            ("d/s", tarfile.SYMTYPE, "../x"),
+            (link, tarfile.LNKTYPE, "d/s"),
+        ):
+            info = tarfile.TarInfo(name)
+            info.type = kind
+            info.linkname = target
+            tf.addfile(info)
+
+
+class TestHardlinkToSymlink:
+    """Test a hardlink naming an extracted symlink, which links the symlink."""
+
+    def test_symlink_itself_is_linked(self, temp_dir: Path) -> None:
+        """Test that the link is the symlink's inode, not its target's."""
+        if not _symlinks_work(temp_dir):
+            pytest.skip("symlinks need privilege")
+        archive = temp_dir / "links.tar"
+        _tar_symlink_then_hardlink(archive, "d/b")
+        out = temp_dir / "out"
+
+        _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
+
+        link = out / "d" / "b"
+        assert Path(os.readlink(link)) == Path("../x")
+        assert link.lstat().st_ino == (out / "d" / "s").lstat().st_ino
+
+    def test_target_is_checked_from_where_the_link_lands(self, temp_dir: Path) -> None:
+        """Test that `../x`, inside from d/, is refused for a link at the root."""
+        if not _symlinks_work(temp_dir):
+            pytest.skip("symlinks need privilege")
+        archive = temp_dir / "links.tar"
+        _tar_symlink_then_hardlink(archive, "b")
         out = temp_dir / "out"
 
         with pytest.raises(ExtractionPolicyError, match="symlink target"):

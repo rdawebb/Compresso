@@ -325,9 +325,11 @@ int fs_set_mtime(const char *path, int64_t mtime) {
     return -1;
 
   // _wutime64 opens the path as a file, which fails for a directory
-  HANDLE h = CreateFileW(wpath, FILE_WRITE_ATTRIBUTES,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  HANDLE h = CreateFileW(
+      wpath, FILE_WRITE_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+      NULL);
   if (h == INVALID_HANDLE_VALUE) {
     errno = EACCES;
     return -1;
