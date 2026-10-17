@@ -1483,6 +1483,33 @@ class TestTarHeaderWarnings:
         assert written == [b"\xff" + b"n" * 119 + b".txt"]
         assert len(caplog.records) == 1
 
+    def test_creation_keeps_a_name_the_locale_cant_convert(
+        self, temp_dir: Path
+    ) -> None:
+        """Test that a non-ASCII name under the C locale is archived, as bsdtar does."""
+        tree = temp_dir / "tree"
+        tree.mkdir()
+        (tree / "café").write_text("x")
+        output = temp_dir / "out.tar"
+        # UTF-8 mode without coercion keeps libarchive's locale at plain C
+        env = {
+            **os.environ,
+            "LC_ALL": "C",
+            "PYTHONUTF8": "1",
+            "PYTHONCOERCECLOCALE": "0",
+        }
+
+        result = subprocess.run(
+            [sys.executable, "-c", _ARCHIVE_AND_LIST, str(output), "tar", str(tree)],
+            capture_output=True,
+            env=env,
+            timeout=60,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert orjson.loads(result.stdout) == ["tree/", "tree/café"]
+
 
 class TestTarUtf8Names:
     """Test that tar names reach the archive as UTF-8, as pax requires."""

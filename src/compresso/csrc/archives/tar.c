@@ -183,7 +183,12 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   Py_BEGIN_ALLOW_THREADS
   r = archive_write_header(writer->archive, ae);
   Py_END_ALLOW_THREADS
-  if (r != ARCHIVE_OK) {
+  // WARN still writes the header, e.g. a name that can't be converted, stored
+  // as is under hdrcharset=BINARY
+  if (r == ARCHIVE_WARN) {
+    ctx_log(ctx, CTX_LOG_WARNING, "Archive entry %s: %s", entry->path,
+            archive_error_string(writer->archive));
+  } else if (r != ARCHIVE_OK) {
     set_tar_error(writer->errors, writer->archive, "Failed to write header",
                   writer->output_path, 0);
     archive_entry_free(ae);
