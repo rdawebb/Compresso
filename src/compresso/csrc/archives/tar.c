@@ -39,6 +39,22 @@ static void set_tar_error(const CompErrors *errors, struct archive *a,
   }
 }
 
+// Entry names are filesystem bytes: the locale charset on POSIX, UTF-8 on
+// Windows; libarchive's plain forms match on POSIX, but the ANSI code page on
+// Windows, hence the _utf8 forms; not used on POSIX, as they convert through
+// the locale anyway, and pax writers hang on a name the locale can't convert
+#if defined(_WIN32)
+#define TAR_SET_NAME(ae, field, name)                                          \
+  archive_entry_update_##field##_utf8(ae, name)
+// A name that isn't valid UTF-8 has no UTF-8 form, so falls back to its bytes
+#define TAR_NAME(ae, field)                                                    \
+  (archive_entry_##field##_utf8(ae) ? archive_entry_##field##_utf8(ae)         \
+                                    : archive_entry_##field(ae))
+#else
+#define TAR_SET_NAME(ae, field, name) archive_entry_set_##field(ae, name)
+#define TAR_NAME(ae, field) archive_entry_##field(ae)
+#endif
+
 // ---- TAR Writer ----
 
 #define TAR_BLOCK (1024 * 1024)
@@ -128,7 +144,7 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   }
 
   // Set entry metadata
-  archive_entry_set_pathname(ae, entry->path);
+  TAR_SET_NAME(ae, pathname, entry->path);
   archive_entry_set_size(ae, entry->size);
   archive_entry_set_mtime(ae, entry->mtime, 0);
   archive_entry_set_perm(ae, entry->mode);
@@ -144,18 +160,20 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   case ENTRY_SYMLINK:
     archive_entry_set_filetype(ae, AE_IFLNK);
     if (entry->link_target) {
-      archive_entry_set_symlink(ae, entry->link_target);
+      TAR_SET_NAME(ae, symlink, entry->link_target);
     }
     break;
   case ENTRY_SPECIAL:
-    archive_entry_set_filetype(ae, AE_IFCHR);
+    archive_entry_set_filetype(ae, entry->special);
+    archive_entry_set_rdev(ae, (dev_t)entry->rdev);
+    archive_entry_set_size(ae, 0);
     break;
   case ENTRY_HARDLINK:
     // A link entry carries no data of its own
     archive_entry_set_filetype(ae, AE_IFREG);
     archive_entry_set_size(ae, 0);
     if (entry->link_target) {
-      archive_entry_set_hardlink(ae, entry->link_target);
+      TAR_SET_NAME(ae, hardlink, entry->link_target);
     }
     break;
   }
@@ -165,7 +183,12 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   Py_BEGIN_ALLOW_THREADS
   r = archive_write_header(writer->archive, ae);
   Py_END_ALLOW_THREADS
-  if (r != ARCHIVE_OK) {
+  // WARN still writes the header, e.g. a name that can't be converted, stored
+  // as is under hdrcharset=BINARY
+  if (r == ARCHIVE_WARN) {
+    ctx_log(ctx, CTX_LOG_WARNING, "Archive entry %s: %s", entry->path,
+            archive_error_string(writer->archive));
+  } else if (r != ARCHIVE_OK) {
     set_tar_error(writer->errors, writer->archive, "Failed to write header",
                   writer->output_path, 0);
     archive_entry_free(ae);
@@ -175,6 +198,8 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
   // Write data for files
   if (entry->type == ENTRY_FILE && data) {
     size_t bytes_read;
+    uint64_t total = 0;
+    int grew = 0;
 
     int advance = 0;
 
@@ -190,9 +215,12 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
         archive_entry_free(ae);
         return -1;
       }
+      total += (uint64_t)bytes_written;
 
       advance = ctx_advance(ctx, bytes_read);
-      if (advance != 0) {
+      // libarchive drops whatever runs past the header's size
+      grew = (size_t)bytes_written < bytes_read;
+      if (advance != 0 || grew) {
         break;
       }
     }
@@ -209,6 +237,18 @@ static int tar_add_entry(void *writer_ptr, const ArchiveEntry *entry,
       PyErr_SetFromErrnoWithFilename(PyExc_OSError, source_path);
       archive_entry_free(ae);
       return -1;
+    }
+
+    // Archive is still valid, so warn and continue; libarchive pads a short
+    // entry with NULs
+    if (grew) {
+      ctx_log(ctx, CTX_LOG_WARNING,
+              "%s: file grew while being archived; truncated to %llu bytes",
+              source_path, (unsigned long long)entry->size);
+    } else if (total < entry->size) {
+      ctx_log(ctx, CTX_LOG_WARNING,
+              "%s: file shrank by %llu bytes; padded with zeros", source_path,
+              (unsigned long long)(entry->size - total));
     }
   }
 
@@ -376,7 +416,7 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
   // WARN still delivers a valid header, e.g. a name libarchive couldn't
   // convert to the locale's charset
   if (r == ARCHIVE_WARN) {
-    const char *name = archive_entry_pathname(reader->current_entry);
+    const char *name = TAR_NAME(reader->current_entry, pathname);
     ctx_log(ctx, CTX_LOG_WARNING, "Archive entry %s: %s", name ? name : "?",
             archive_error_string(reader->archive));
   } else if (r != ARCHIVE_OK) {
@@ -384,7 +424,7 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
   }
 
   // Populate ArchiveEntry
-  const char *pathname = archive_entry_pathname(reader->current_entry);
+  const char *pathname = TAR_NAME(reader->current_entry, pathname);
   if (pathname) {
     entry->path = strdup(pathname);
     if (!entry->path) {
@@ -399,7 +439,7 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
 
   // Determine entry type; a hardlink's own filetype varies by tar format, so
   // identified by its target
-  const char *hardlink = archive_entry_hardlink(reader->current_entry);
+  const char *hardlink = TAR_NAME(reader->current_entry, hardlink);
   unsigned int filetype =
       (unsigned int)archive_entry_filetype(reader->current_entry);
   if (hardlink) {
@@ -417,7 +457,7 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
     entry->type = ENTRY_DIR;
   } else if (filetype == AE_IFLNK) {
     entry->type = ENTRY_SYMLINK;
-    const char *link = archive_entry_symlink(reader->current_entry);
+    const char *link = TAR_NAME(reader->current_entry, symlink);
     if (link) {
       entry->link_target = strdup(link);
       if (!entry->link_target) {
@@ -428,8 +468,12 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
       }
     }
   } else {
-    // FIFOs, device nodes and sockets
     entry->type = ENTRY_SPECIAL;
+    // Sockets keep 0, as nothing can recreate them
+    if (filetype == AE_IFIFO || filetype == AE_IFCHR || filetype == AE_IFBLK) {
+      entry->special = filetype;
+      entry->rdev = (uint64_t)archive_entry_rdev(reader->current_entry);
+    }
   }
 
   return 1; // Entry retrieved successfully
@@ -529,6 +573,8 @@ static int tar_supports_streaming(void) {
 const CArchive TAR_ARCHIVE = {
     .name = "tar",
     .levels = LEVELS_NONE,
+    .stores_specials = 1,
+    .stores_hardlinks = 1,
     .supports_compression = tar_supports_compression,
     .supports_streaming = tar_supports_streaming,
     .create_writer = tar_create_writer,

@@ -1,5 +1,7 @@
 """Tests for the frontend API module."""
 
+import bz2
+import gzip
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ from compresso.frontend.api import (
     CompressionOptions,
     DecompressionJob,
     plan_compression,
+    plan_decompression,
 )
 from compresso.frontend.archive_api import OverwriteMode
 
@@ -71,6 +74,89 @@ class TestDecompressionJob:
         assert job.plan.dest == out_dir / sample_text_file.name
         assert job.run().ok
         assert job.plan.dest.read_bytes() == sample_text_file.read_bytes()
+
+
+def _gzip_with_name(name: bytes, extra: bytes | None = None) -> bytes:
+    """Return gzip bytes whose header stores `name`, and `extra` if given."""
+    body = gzip.compress(b"payload", mtime=0)
+    flags = 0x08 | (0x04 if extra is not None else 0)
+    fextra = b"" if extra is None else len(extra).to_bytes(2, "little") + extra
+    return body[:3] + bytes([flags]) + body[4:10] + fextra + name + b"\0" + body[10:]
+
+
+class TestRestoreName:
+    """Test that `restore_name` names a gzip output as its header does."""
+
+    @pytest.mark.parametrize(
+        ("data", "expected"),
+        [
+            pytest.param(_gzip_with_name(b"orig.txt"), "orig.txt", id="name"),
+            pytest.param(_gzip_with_name(b"orig.txt", b"xy"), "orig.txt", id="extra"),
+            pytest.param(_gzip_with_name(b"n" * 300), "n" * 300, id="long"),
+            pytest.param(_gzip_with_name(b"../d/evil.txt"), "evil.txt", id="path"),
+            pytest.param(_gzip_with_name(b".."), "renamed", id="dotdot"),
+            pytest.param(gzip.compress(b"payload"), "renamed", id="no-name"),
+            # The file ends before the name's NUL
+            pytest.param(_gzip_with_name(b"orig.txt")[:18], "renamed", id="eof"),
+            pytest.param(_gzip_with_name(b"o" * 1100), "renamed", id="too-long"),
+        ],
+    )
+    def test_names_the_output(self, temp_dir: Path, data: bytes, expected: str) -> None:
+        """Test the stored name, its last component only, or the default."""
+        src = temp_dir / "renamed.gz"
+        src.write_bytes(data)
+
+        plan = plan_decompression(src, restore_name=True)
+
+        assert plan.dest == temp_dir / expected
+
+    def test_restores_only_on_request(self, temp_dir: Path) -> None:
+        """Test that by default the suffix is dropped, as plain `gzip -d` does."""
+        src = temp_dir / "renamed.gz"
+        src.write_bytes(_gzip_with_name(b"orig.txt"))
+
+        assert plan_decompression(src).dest == temp_dir / "renamed"
+        job = DecompressionJob.from_file(src, restore_name=True)
+        assert job.run().ok
+        assert (temp_dir / "orig.txt").read_bytes() == b"payload"
+
+    @pytest.mark.parametrize(
+        ("mtime", "restore", "restored"),
+        [(1_000_000_000, True, True), (1_000_000_000, False, False), (0, True, False)],
+    )
+    def test_dates_the_output(
+        self, temp_dir: Path, mtime: int, restore: bool, restored: bool
+    ) -> None:
+        """Test the header's MTIME, only on request and only when non-zero."""
+        src = temp_dir / "a.gz"
+        src.write_bytes(gzip.compress(b"payload", mtime=mtime))
+
+        job = DecompressionJob.from_file(src, temp_dir / "a", restore_name=restore)
+        assert job.run().ok
+
+        assert (job.plan.dest.stat().st_mtime == mtime) is restored
+
+    def test_skip_leaves_an_existing_file_undated(self, temp_dir: Path) -> None:
+        """Test that SKIP, which writes nothing, doesn't change the file's time."""
+        src = temp_dir / "a.gz"
+        src.write_bytes(gzip.compress(b"payload", mtime=1_000_000_000))
+        existing = temp_dir / "a"
+        existing.write_bytes(b"old")
+        before = existing.stat().st_mtime
+
+        job = DecompressionJob.from_file(
+            src, overwrite=OverwriteMode.SKIP, restore_name=True
+        )
+        assert job.run().ok
+
+        assert existing.stat().st_mtime == before
+
+    def test_ignores_other_formats(self, temp_dir: Path) -> None:
+        """Test bzip2, whose fourth header byte happens to set gzip's FNAME bit."""
+        src = temp_dir / "renamed.bz2"
+        src.write_bytes(bz2.compress(b"payload", 9))
+
+        assert plan_decompression(src, restore_name=True).dest == temp_dir / "renamed"
 
 
 class TestPlanCompressionLevels:

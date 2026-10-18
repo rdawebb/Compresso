@@ -21,6 +21,12 @@ class ExtractionPolicyError(Error):
     denies, or the size cap.
     """
 
+class IncompleteExtractionError(Error):
+    """An extraction finished, but some of what was asked for wasn't extracted.
+
+    Raises on completion, anything extracted is kept.
+    """
+
 class CorruptDataError(Error):
     """The input is corrupt, truncated, or not the format it claims to be."""
 
@@ -180,7 +186,8 @@ def extract_archive(
     value in `extraction_policy_default()` in the C extension.
 
     `overwrite` is 0 = error, 1 = skip, 2 = overwrite, 3 = rename;
-    `allow_symlinks` is 0 = deny, 1 = allow, 2 = rewrite to regular files;
+    `allow_symlinks` is 0 = deny, 1 = allow if the target stays inside
+    output_dir, 2 = rewrite to regular files, -1 = the format's default (2 for zip, 0 otherwise);
     `max_total_size` and `max_depth` treat 0 as unlimited;
     `overwrite_dir_metadata` also restores the mode and mtime of a directory
     that already exists, as GNU tar does, except when `overwrite` is 1 (skip);
@@ -190,6 +197,12 @@ def extract_archive(
 
 def detect_format(file_path: StrOrBytesPath) -> str:
     """Name a file's format, from its magic bytes and then its extension."""
+
+def gzip_stored_name(file_path: StrOrBytesPath) -> bytes | None:
+    """Return the name a gzip header stores (FNAME) as written, or None.
+
+    Always None for a non-gzip file.
+    """
 
 def format_is_archive(format: str) -> bool:
     """Return whether a format's container can hold more than one entry."""
@@ -205,7 +218,9 @@ class _StandaloneFormatDict(TypedDict):
 def standalone_formats() -> list[_StandaloneFormatDict]:
     """Describe each single-file container format, e.g. gzip."""
 
-EntryTypeName: TypeAlias = Literal["file", "dir", "symlink", "hardlink", "special"]
+EntryTypeName: TypeAlias = Literal[
+    "file", "dir", "symlink", "hardlink", "fifo", "char", "block", "special"
+]
 
 class ArchiveEntryDict(TypedDict):
     """One archive entry, as `list_archive_contents` reports it.

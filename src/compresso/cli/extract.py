@@ -13,6 +13,7 @@ from ..frontend.archive_api import (
     ExtractJob,
     ExtractOptions,
     OverwriteMode,
+    SymlinkMode,
 )
 from ._app import app
 from ._dispatch import looks_like_archive, resolve_single_output
@@ -113,6 +114,7 @@ def _extract_archive(
     exit_for_result(result, "Extraction")
 
     if not quiet:
+        print()
         succeed("Extraction successful!")
         print(
             f"  Entries: {len(plan.entries)}\n"
@@ -126,6 +128,7 @@ def _decompress_one_file(
     list_only: bool,
     overwrite: OverwriteMode,
     threads: int,
+    restore_name: bool,
     quiet: bool,
 ) -> None:
     """Unpack one single-file container: a `.comp` or a standalone codec.
@@ -136,6 +139,8 @@ def _decompress_one_file(
         list_only: Whether to list entries only.
         overwrite: What to do when the destination file already exists.
         threads: Worker threads for xz, or 0 for one per core.
+        restore_name: Whether to name and date a gzip file's output as its
+            header does.
         quiet: Whether to suppress output.
     """
     if list_only:
@@ -145,12 +150,20 @@ def _decompress_one_file(
         )
 
     job = DecompressionJob.from_file(
-        src=source, dest=None, overwrite=overwrite, threads=threads
+        src=source,
+        dest=None,
+        overwrite=overwrite,
+        threads=threads,
+        restore_name=restore_name,
     )
     dest: Path = resolve_single_output(output, job.plan.dest)
     if dest != job.plan.dest:
         job = DecompressionJob.from_file(
-            src=source, dest=dest, overwrite=overwrite, threads=threads
+            src=source,
+            dest=dest,
+            overwrite=overwrite,
+            threads=threads,
+            restore_name=restore_name,
         )
 
     plan = job.plan
@@ -248,6 +261,16 @@ def extract(
             help="Restore modes exactly, keeping setuid/setgid/sticky and ignoring the umask",
         ),
     ] = False,
+    symlinks: Annotated[
+        SymlinkMode | None,
+        app.Option(
+            "--symlinks",
+            case_sensitive=False,
+            help="Refuse symlinks, create those staying inside the output, "
+            "or write each as a file holding its target "
+            "(default: file for zip, deny otherwise)",
+        ),
+    ] = None,
     threads: Annotated[
         int,
         app.Option(
@@ -257,6 +280,14 @@ def extract(
             help="Worker threads for xz, or 0 for one per core",
         ),
     ] = 0,
+    name: Annotated[
+        bool,
+        app.Option(
+            "--name",
+            "-N",
+            help="Name and date a .gz file's output as its header does",
+        ),
+    ] = False,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
@@ -287,7 +318,11 @@ def extract(
         max_total_size: Cap on total extracted bytes (default: no cap).
         same_permissions: If True, restore archive entries' modes exactly;
             single-file outputs are unaffected.
+        symlinks: What to do with a symlink entry (default: write a zip's as
+            files, refuse any other archive's).
         threads: Worker threads for xz (default: one per core).
+        name: If True, name a gzip file's output after the name its header
+            stores, and give it the stored modification time, if any.
         quiet: If True, suppress all output.
     """
     if sum([overwrite, skip_existing, error_on_conflict]) > 1:
@@ -313,6 +348,7 @@ def extract(
         overwrite=mode,
         max_total_size=max_total_size or 0,
         exact_permissions=same_permissions,
+        symlinks=symlinks,
         threads=threads,
     )
 
@@ -322,7 +358,9 @@ def extract(
                 _extract_archive(source, output, list_only, options, quiet)
 
             else:
-                _decompress_one_file(source, output, list_only, mode, threads, quiet)
+                _decompress_one_file(
+                    source, output, list_only, mode, threads, name, quiet
+                )
 
     except KeyboardInterrupt:
         cancelled("Extraction")

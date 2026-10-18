@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Self
@@ -16,6 +17,7 @@ from .._core import (
     decompress_standalone,
     detect_format,
     format_is_archive,
+    gzip_stored_name,
     standalone_formats,
 )
 from .._core import get_default_backend_for_strategy as default_backend
@@ -126,6 +128,8 @@ class DecompressionPlan:
         reason_if_unavailable: Reason it cannot, if applicable.
         overwrite: What to do when the destination file already exists.
         threads: Worker threads for xz/lzma, or 0 for one per core.
+        mtime: The modification time to give the output, from a gzip header
+            with `restore_name`, or None to leave it as written.
     """
 
     src: Path
@@ -138,6 +142,7 @@ class DecompressionPlan:
     reason_if_unavailable: str | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
     threads: int = 0
+    mtime: int | None = None
 
 
 def plan_compression(
@@ -293,6 +298,7 @@ def plan_decompression(
     dest: str | Path | None = None,
     overwrite: OverwriteMode = OverwriteMode.RENAME,
     threads: int = 0,
+    restore_name: bool = False,
 ) -> DecompressionPlan:
     """Plan a decompression operation based on file inspection.
 
@@ -303,6 +309,9 @@ def plan_decompression(
             `.out` appended when it has no suffix.
         overwrite: What to do when the destination file already exists.
         threads: Worker threads for xz/lzma, or 0 for one per core.
+        restore_name: With no `dest`, name a gzip file's output after the
+            name its header stores, if any, beside `src`; always gives the
+            output the header's modification time, if set.
 
     Returns:
         DecompressionPlan: The resulting decompression plan.
@@ -363,7 +372,24 @@ def plan_decompression(
         return plan(None, False, f"Cannot read file: {e}")
 
     if detected in STANDALONE_SUFFIXES:
-        return plan(detected, True)
+        restore: bool = restore_name and dest is None
+        stored: bytes | None = gzip_stored_name(src_path) if restore else None
+        if stored:
+            try:
+                # Only the last component, as gzip keeps it, so it stays beside src
+                name: str = Path(os.fsdecode(stored)).name
+            except UnicodeDecodeError:  # Not UTF-8, on Windows
+                name = ""
+            if name not in ("", ".."):
+                dest_path = src_path.parent / name
+
+        mtime: int | None = None
+        if restore_name and detected == "gzip":
+            with src_path.open("rb") as f:
+                # MTIME, bytes 4-7; zero means none was stored
+                mtime = int.from_bytes(f.read(8)[4:], "little") or None
+
+        return replace(plan(detected, True), mtime=mtime)
 
     if format_is_archive(detected):
         return plan(
@@ -533,6 +559,7 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
         dest: str | Path | None = None,
         overwrite: OverwriteMode = OverwriteMode.RENAME,
         threads: int = 0,
+        restore_name: bool = False,
     ) -> Self:
         """Create a DecompressionJob from file paths.
 
@@ -542,11 +569,13 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
                 `plan_decompression` does.
             overwrite: What to do when the destination file already exists.
             threads: Worker threads for xz/lzma, or 0 for one per core.
+            restore_name: Name and date a gzip file's output as its header
+                does, as `plan_decompression` does.
 
         Returns:
             DecompressionJob: The created decompression job.
         """
-        return cls(plan=plan_decompression(src, dest, overwrite, threads))
+        return cls(plan=plan_decompression(src, dest, overwrite, threads, restore_name))
 
     def run(
         self,
@@ -582,6 +611,10 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
         insp: InspectResult = self.plan.inspection
 
         total = insp.orig_size or 0
+        # SKIP writes nothing over an existing file, so its time stays too
+        skips: bool = (
+            self.plan.overwrite is OverwriteMode.SKIP and self.plan.dest.exists()
+        )
         try:
             if self.plan.format:
                 # The format came from the file's magic bytes, so pass it on
@@ -608,6 +641,11 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
                 )
 
             self.plan = replace(self.plan, dest=Path(actual_path))
+            if self.plan.mtime and not skips:
+                # gzip keeps the source's access time
+                atime: float = self.plan.src.stat().st_atime
+                os.utime(self.plan.dest, (atime, self.plan.mtime))
+
             return JobResult(
                 ok=True,
                 error=None,

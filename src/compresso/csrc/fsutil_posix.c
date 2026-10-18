@@ -21,6 +21,7 @@ static void fs_fill_stat(const struct stat *st, fs_stat *out) {
   out->mode = (uint32_t)(st->st_mode & 0777);
   out->dev = (uint64_t)st->st_dev;
   out->ino = (uint64_t)st->st_ino;
+  out->nlink = (uint32_t)st->st_nlink;
 
   if (S_ISDIR(st->st_mode))
     out->type = FS_TYPE_DIR;
@@ -30,6 +31,11 @@ static void fs_fill_stat(const struct stat *st, fs_stat *out) {
     out->type = FS_TYPE_FILE;
   else
     out->type = FS_TYPE_OTHER;
+
+  int storable =
+      S_ISFIFO(st->st_mode) || S_ISCHR(st->st_mode) || S_ISBLK(st->st_mode);
+  out->special = storable ? (uint32_t)(st->st_mode & S_IFMT) : 0;
+  out->rdev = storable ? (uint64_t)st->st_rdev : 0;
 }
 
 int fs_stat_path(const char *path, fs_stat *out) {
@@ -94,12 +100,8 @@ FILE *fs_fopen_exclusive(const char *path) {
 }
 
 int fs_set_mtime(const char *path, int64_t mtime) {
-  struct timeval times[2];
-  times[0].tv_sec = (time_t)mtime; // Access time
-  times[0].tv_usec = 0;
-  times[1].tv_sec = (time_t)mtime; // Modification time
-  times[1].tv_usec = 0;
-  return utimes(path, times);
+  struct timespec times[2] = {{(time_t)mtime, 0}, {(time_t)mtime, 0}};
+  return utimensat(AT_FDCWD, path, times, AT_SYMLINK_NOFOLLOW);
 }
 
 int fs_futimens(FILE *f, int64_t mtime) {
@@ -258,4 +260,24 @@ int fs_rmdir(const char *path) { return rmdir(path); }
 // linkat without AT_SYMLINK_FOLLOW, since link(2) follows a symlink on macOS
 int fs_link(const char *existing, const char *new_path) {
   return linkat(AT_FDCWD, existing, AT_FDCWD, new_path, 0);
+}
+
+int fs_symlink(const char *target, const char *link_path) {
+  return symlink(target, link_path);
+}
+
+int fs_can_mknod(uint32_t type) {
+  return type == S_IFIFO ||
+         ((type == S_IFCHR || type == S_IFBLK) && geteuid() == 0);
+}
+
+// mkfifo, as macOS's mknod needs root otherwise
+int fs_mknod(const char *path, uint32_t type, uint32_t mode, uint64_t rdev) {
+  if (type == S_IFIFO)
+    return mkfifo(path, (mode_t)mode);
+  if (type != S_IFCHR && type != S_IFBLK) {
+    errno = EINVAL;
+    return -1;
+  }
+  return mknod(path, (mode_t)(type | mode), (dev_t)rdev);
 }

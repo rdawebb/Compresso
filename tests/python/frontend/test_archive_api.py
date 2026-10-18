@@ -543,28 +543,61 @@ def _tar_with_entry(archive_path: Path, entry_name: str) -> None:
 
 
 class TestExtractionRefusesDeniedEntryTypes:
-    """Test that the default policy refuses symlink and special-file entries."""
+    """Test that the default policy refuses symlink entries."""
 
-    @pytest.mark.parametrize(
-        ("entry_type", "kind"),
-        [(tarfile.SYMTYPE, "symlink"), (tarfile.FIFOTYPE, "special file")],
-    )
-    def test_refuses_entry_type(
-        self, temp_dir: Path, entry_type: bytes, kind: str
-    ) -> None:
+    def test_refuses_a_symlink(self, temp_dir: Path) -> None:
         """Test that the entry is refused by policy, naming what it is."""
         archive_path = temp_dir / "typed.tar"
         with tarfile.open(archive_path, "w", format=tarfile.GNU_FORMAT) as tf:
             info = tarfile.TarInfo("entry")
-            info.type = entry_type
-            info.linkname = "target" if entry_type == tarfile.SYMTYPE else ""
+            info.type = tarfile.SYMTYPE
+            info.linkname = "target"
             tf.addfile(info)
 
         result = ExtractJob.from_archive(archive_path, temp_dir / "out").run()
 
         assert result.ok is False
         assert isinstance(result.error, ExtractionPolicyError)
-        assert f"contains {kind}, but policy denies it" in str(result.error)
+        assert "contains symlink, but policy denies it" in str(result.error)
+
+    def test_symlink_mode_reaches_the_policy(self, temp_dir: Path) -> None:
+        """Test that `symlinks`, given as a plain string, is passed through."""
+        archive_path = temp_dir / "link.tar"
+        with tarfile.open(archive_path, "w", format=tarfile.GNU_FORMAT) as tf:
+            info = tarfile.TarInfo("entry")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "target"
+            tf.addfile(info)
+        out = temp_dir / "out"
+
+        options = ExtractOptions(symlinks="file")  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+        result = ExtractJob.from_archive(archive_path, out, options=options).run()
+
+        assert result.ok is True
+        assert (out / "entry").read_bytes() == b"target"
+
+    def test_zip_symlink_becomes_a_file_by_default(self, temp_dir: Path) -> None:
+        """Test that leaving `symlinks` unset takes zip's own default."""
+        archive_path = temp_dir / "link.zip"
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            info = zipfile.ZipInfo("entry")
+            info.create_system = 3
+            info.external_attr = 0o120777 << 16
+            zf.writestr(info, b"target")
+        out = temp_dir / "out"
+
+        result = ExtractJob.from_archive(archive_path, out).run()
+
+        assert result.ok is True
+        assert (out / "entry").read_bytes() == b"target"
+
+    def test_unknown_symlink_mode_is_unavailable(self, temp_dir: Path) -> None:
+        """Test that a misspelt mode is refused when planning, naming the field."""
+        options = ExtractOptions(symlinks="follow")  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+        plan = plan_extraction(temp_dir / "a.tar", temp_dir, options=options)
+
+        assert plan.can_run is False
+        assert "Unknown symlinks mode: 'follow'" in (plan.reason_if_unavailable or "")
 
 
 class TestExtractionRefusesUnsafePaths:
@@ -1422,24 +1455,6 @@ def _umask() -> int:
     current = os.umask(0)
     os.umask(current)
     return current
-
-
-class TestExtractionRefusesSpecialFiles:
-    """Test that device nodes, FIFOs and sockets are refused."""
-
-    def test_refuses_fifo_entry(self, temp_dir: Path) -> None:
-        """Test that a FIFO entry is classified and refused, not written."""
-        archive_path = temp_dir / "fifo.tar"
-        info = tarfile.TarInfo("pipe")
-        info.type = tarfile.FIFOTYPE
-        _tar_with_entries(archive_path, [info])
-        out_dir = temp_dir / "out"
-
-        result = ExtractJob.from_archive(archive_path, out_dir).run()
-
-        assert result.ok is False
-        assert "special file" in str(result.error)
-        assert not (out_dir / "pipe").exists()
 
 
 class TestExtractionIsAllOrNothing:

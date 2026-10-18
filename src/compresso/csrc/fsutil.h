@@ -31,9 +31,15 @@ typedef struct {
   uint32_t mode; // POSIX permission bits (0777), best-effort on Windows
   fs_file_type type;
 
+  // A FIFO or device's S_IFMT bits, which are libarchive's AE_IF* values, and
+  // its device number; 0 for anything else, sockets and all of Windows included
+  uint32_t special;
+  uint64_t rdev;
+
   // Identity, for fs_same_file; on Windows only filled for regular files (the
   // volume serial and file index), and 0 wherever it is unknown
   uint64_t dev, ino;
+  uint32_t nlink; // Its names' count; filled wherever the identity is
 } fs_stat;
 
 // True if both name the same file, e.g. through a hardlink; false whenever
@@ -66,8 +72,7 @@ int fs_stat_path(const char *path, fs_stat *out);
 int fs_fstat(FILE *f, fs_stat *out);
 
 // Read a symlink's target into `buf` (NUL-terminated); -1/ENAMETOOLONG if it
-// doesn't fit, rather than truncating it
-// On Windows this is the resolved absolute target, not the literal link text
+// doesn't fit, rather than truncating; on Windows this is the literal link text
 int fs_readlink(const char *path, char *buf, size_t buf_size);
 
 // Directory iteration; fs_readdir skips "." and ".."
@@ -89,7 +94,8 @@ FILE *fs_fopen(const char *path, const char *mode);
 FILE *fs_fopen_exclusive(const char *path);
 
 // Set `path`'s modification time to `mtime` seconds since the Unix epoch
-// The access time is set to the same value, since archives do not carry one
+// The access time is set to the same value, since archives do not carry one;
+// a symlink is never followed, so it gets the time itself
 int fs_set_mtime(const char *path, int64_t mtime);
 
 // fs_set_mtime and fs_chmod on an open file, so they reach the file written
@@ -169,6 +175,20 @@ int fs_rename(const char *from, const char *to, int replace);
 // symlink; -1 with errno set (EEXIST if `new_path` exists, EXDEV across
 // filesystems)
 int fs_link(const char *existing, const char *new_path);
+
+// Symlink `link_path` to `target`, stored unresolved; -1 with errno set
+// (EEXIST if `link_path` exists, EPERM on Windows without Developer Mode or
+// admin rights); on Windows, a target that is already a directory gets a
+// directory link
+int fs_symlink(const char *target, const char *link_path);
+
+// Whether this process can create a node of `type` (fs_stat.special's values):
+// a FIFO, or a device as root; Windows has neither so N/A
+int fs_can_mknod(uint32_t type);
+
+// Create a FIFO or device at `path`; the umask still applies to `mode`; -1 with
+// errno set (EEXIST if `path` exists, EINVAL for any other type)
+int fs_mknod(const char *path, uint32_t type, uint32_t mode, uint64_t rdev);
 
 // Current read/write offset in an open stream, as a 64-bit value on every
 // platform (plain ftell() is 32-bit on Windows); returns -1 on failure

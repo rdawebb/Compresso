@@ -53,34 +53,31 @@ char *gzip_original_name(const char *compressed_path) {
 
   uint8_t flags = header[GZIP_OFF_FLAGS];
 
-  if (!(flags & FNAME)) {
+  if (header[0] != 0x1f || header[1] != 0x8b || !(flags & FNAME)) {
     fclose(f);
     return NULL;
   }
 
-  // Skip extra field if present
   if (flags & FEXTRA) {
     uint8_t xlen_buf[2];
-    if (fread(xlen_buf, sizeof(xlen_buf), 1, f) != 1) {
+    if (fread(xlen_buf, sizeof(xlen_buf), 1, f) != 1 ||
+        fseek(f, read_le16(xlen_buf), SEEK_CUR) != 0) {
       fclose(f);
       return NULL;
     }
-    fseek(f, read_le16(xlen_buf), SEEK_CUR);
   }
 
-  // Read filename
-  char name_buf[256];
+  // gzip's own limit (MAX_PATH_LEN); a name cut short by EOF (which also
+  // catches an xlen running past the end) or by the limit is ignored
+  char name_buf[1024];
   size_t i = 0;
   int c;
-  while ((c = fgetc(f)) != 0 && c != EOF && i < sizeof(name_buf) - 1) {
-    name_buf[i++] = c;
+  while ((c = fgetc(f)) > 0 && i < sizeof(name_buf) - 1) {
+    name_buf[i++] = (char)c;
   }
   name_buf[i] = '\0';
 
   fclose(f);
 
-  if (i > 0) {
-    return strdup(name_buf);
-  }
-  return NULL;
+  return c == 0 && i > 0 ? strdup(name_buf) : NULL;
 }

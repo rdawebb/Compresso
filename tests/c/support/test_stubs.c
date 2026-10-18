@@ -22,6 +22,8 @@ const CompErrors *test_errors(void) {
       PyErr_NewException("compresso.Cancelled", errors.error, NULL);
   errors.extraction_policy =
       PyErr_NewException("compresso.ExtractionPolicyError", errors.error, NULL);
+  errors.incomplete_extraction = PyErr_NewException(
+      "compresso.IncompleteExtractionError", errors.error, NULL);
   errors.trailing_data_warning = PyErr_NewException(
       "compresso.TrailingDataWarning", PyExc_UserWarning, NULL);
   return &errors;

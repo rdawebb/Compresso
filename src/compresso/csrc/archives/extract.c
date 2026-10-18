@@ -4,6 +4,7 @@
 #include "../fsutil.h"
 #include "../standalone.h"
 #include "archive_ops.h"
+#include <archive_entry.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -14,7 +15,7 @@
 // ---- Default Extraction Policies ----
 
 static const ExtractionPolicy EXTRACTION_POLICY_DEFAULT = {
-    .allow_symlinks = 0,
+    .allow_symlinks = -1,
     .overwrite_existing = 0,
     .preserve_permissions = 1,
     .exact_permissions = 0,
@@ -253,13 +254,60 @@ static int validate_entry_path(const CompErrors *errors, const char *output_dir,
   return 0;
 }
 
-// A hardlink's target names another entry, so it gets the same checks as an
-// entry's own path; anything else has no target to check
+// `base_depth` is the link's directory depth below the root; a ".." after a
+// name is refused, as that name may be a symlink the textual check can't follow
+static int check_symlink_target(const CompErrors *errors,
+                                const ArchiveEntry *entry,
+                                uint32_t base_depth) {
+  const char *target = entry->link_target;
+  if (!target || !*target) {
+    PyErr_Format(errors->extraction_policy, "Symlink has no target: %s",
+                 entry->path);
+    return -1;
+  }
+
+  int contained = !fs_is_absolute(target) && !fs_is_stream_path(target);
+  uint32_t depth = base_depth;
+  int seen_name = 0;
+  for (const char *p = target; contained && *p;) {
+    while (*p && FS_IS_SEP(*p))
+      p++;
+
+    const char *start = p;
+    while (*p && !FS_IS_SEP(*p))
+      p++;
+
+    size_t len = (size_t)(p - start);
+    if (len == 2 && start[0] == '.' && start[1] == '.') {
+      contained = !seen_name && depth > 0;
+      if (contained)
+        depth--;
+    } else if (len > 0 && !(len == 1 && start[0] == '.')) {
+      seen_name = 1;
+    }
+  }
+
+  if (!contained) {
+    PyErr_Format(errors->extraction_policy,
+                 "Path traversal detected in symlink target: %s -> %s",
+                 entry->path, target);
+    return -1;
+  }
+  return 0;
+}
+
+// A hardlink's target names another entry, so gets an entry path's checks; a
+// symlink's is checked from its written path; nothing else has a target
 static int validate_link_target(const CompErrors *errors,
                                 const char *output_dir,
                                 const char *resolved_root,
                                 const ArchiveEntry *entry, const char *target,
                                 const ExtractionPolicy *policy) {
+  if (entry->type == ENTRY_SYMLINK && policy->allow_symlinks == 1) {
+    uint32_t depth = path_depth(entry->path);
+    return check_symlink_target(errors, entry, depth > 0 ? depth - 1 : 0);
+  }
+
   if (entry->type != ENTRY_HARDLINK)
     return 0;
 
@@ -276,24 +324,9 @@ static int validate_link_target(const CompErrors *errors,
 static int check_entry_policy(const CompErrors *errors,
                               const ArchiveEntry *entry,
                               const ExtractionPolicy *policy) {
-  if (entry->type == ENTRY_SYMLINK) {
-    if (!policy->allow_symlinks) {
-      PyErr_Format(errors->extraction_policy,
-                   "Archive contains symlink, but policy denies it: %s",
-                   entry->path);
-      return -1;
-    }
-
-    // Refuse rather than drop the entry silently: neither allowed mode is
-    // implemented yet (1 = create the link, 2 = rewrite to a regular file)
-    PyErr_Format(PyExc_NotImplementedError,
-                 "Symlink extraction is not implemented: %s", entry->path);
-    return -1;
-  }
-
-  if (entry->type == ENTRY_SPECIAL) {
+  if (entry->type == ENTRY_SYMLINK && !policy->allow_symlinks) {
     PyErr_Format(errors->extraction_policy,
-                 "Archive contains special file, but policy denies it: %s",
+                 "Archive contains symlink, but policy denies it: %s",
                  entry->path);
     return -1;
   }
@@ -301,18 +334,129 @@ static int check_entry_policy(const CompErrors *errors,
   return 0;
 }
 
-// Whether `entry` is one of the requested `files`; an empty request means all
-static int entry_is_selected(const ArchiveEntry *entry, const char **files,
-                             size_t num_files) {
+// The requested names, sorted for bsearch; none means everything
+typedef struct {
+  const char *name;
+  size_t len; // Without trailing slashes
+  int matched;
+} SelectedName;
+
+typedef struct {
+  SelectedName *items;
+  size_t count;
+} Selection;
+
+static int selected_name_cmp(const void *a, const void *b) {
+  const SelectedName *x = a, *y = b;
+  int c = memcmp(x->name, y->name, x->len < y->len ? x->len : y->len);
+  return c ? c : (x->len > y->len) - (x->len < y->len);
+}
+
+static int selection_init(Selection *sel, const char **files,
+                          size_t num_files) {
+  *sel = (Selection){0};
   if (num_files == 0)
-    return 1;
+    return 0;
+
+  sel->items = safe_malloc(num_files * sizeof(*sel->items));
+  if (!sel->items)
+    return -1;
 
   for (size_t i = 0; i < num_files; i++) {
-    if (strcmp(entry->path, files[i]) == 0)
-      return 1;
+    size_t len = strlen(files[i]);
+    while (len > 0 && files[i][len - 1] == '/')
+      len--;
+    sel->items[sel->count++] = (SelectedName){files[i], len, 0};
   }
+  qsort(sel->items, sel->count, sizeof(*sel->items), selected_name_cmp);
 
+  // A repeated name would never be marked as matched
+  size_t kept = 0;
+  for (size_t i = 0; i < sel->count; i++)
+    if (kept == 0 ||
+        selected_name_cmp(&sel->items[kept - 1], &sel->items[i]) != 0)
+      sel->items[kept++] = sel->items[i];
+  sel->count = kept;
   return 0;
+}
+
+// Whether `entry` or a directory above it was requested, as tar matches names;
+// marks every name that matches, so "d" and "d/x" both count as found
+static int entry_is_selected(const ArchiveEntry *entry, Selection *sel) {
+  if (sel->count == 0)
+    return 1;
+
+  int selected = 0;
+  for (const char *p = entry->path;; p++) {
+    if ((*p == '/' || *p == '\0') && p > entry->path) {
+      SelectedName key = {entry->path, (size_t)(p - entry->path), 0};
+      SelectedName *hit = bsearch(&key, sel->items, sel->count,
+                                  sizeof(*sel->items), selected_name_cmp);
+      if (hit) {
+        hit->matched = 1;
+        selected = 1;
+      }
+    }
+    if (*p == '\0')
+      return selected;
+  }
+}
+
+static PyObject *join_str(const char *sep, PyObject *items) {
+  PyObject *s = PyUnicode_FromString(sep);
+  PyObject *joined = s ? PyUnicode_Join(s, items) : NULL;
+  Py_XDECREF(s);
+  return joined;
+}
+
+// Appends "label: a, b" to `parts`, or nothing when `items` is empty
+static int append_part(PyObject *parts, const char *label, PyObject *items) {
+  if (PyList_GET_SIZE(items) == 0)
+    return 0;
+  PyObject *joined = join_str(", ", items);
+  PyObject *part =
+      joined ? PyUnicode_FromFormat("%s: %U", label, joined) : NULL;
+  int rc = part ? PyList_Append(parts, part) : -1;
+  Py_XDECREF(part);
+  Py_XDECREF(joined);
+  return rc;
+}
+
+// Raises an error listing unmatched requested names and skipped hardlinks
+static int report_incomplete(const Selection *sel, PyObject *skipped_links,
+                             CoreContext *ctx) {
+  PyObject *names = PyList_New(0);
+  PyObject *parts = PyList_New(0);
+  int ret = -1;
+  if (!names || !parts)
+    goto done;
+  for (size_t i = 0; i < sel->count; i++) {
+    if (sel->items[i].matched)
+      continue;
+    PyObject *name = PyUnicode_FromStringAndSize(sel->items[i].name,
+                                                 (Py_ssize_t)sel->items[i].len);
+    int rc = name ? PyList_Append(names, name) : -1;
+    Py_XDECREF(name);
+    if (rc != 0)
+      goto done;
+  }
+  if (append_part(parts, "Not found in archive", names) != 0 ||
+      append_part(parts, "Hardlink target missing", skipped_links) != 0)
+    goto done;
+
+  if (PyList_GET_SIZE(parts) == 0) {
+    ret = 0;
+    goto done;
+  }
+  PyObject *message = join_str("; ", parts);
+  if (message)
+    PyErr_SetObject(ctx->errors->incomplete_extraction, message);
+  Py_XDECREF(message);
+
+done:
+  Py_XDECREF(parts);
+  Py_XDECREF(names);
+  return ret;
 }
 
 // Create a temp file in final_path's directory, which is known writable
@@ -338,9 +482,9 @@ static char *make_temp_path(const char *final_path) {
 // extract_entries counts the bytes it actually writes as well
 static int prevalidate_entries(const CArchive *archive, void *reader,
                                const char *output_dir,
-                               const char *resolved_root, const char **files,
-                               size_t num_files, const ExtractionPolicy *policy,
-                               CoreContext *ctx, uint64_t *out_declared_total) {
+                               const char *resolved_root, Selection *sel,
+                               const ExtractionPolicy *policy, CoreContext *ctx,
+                               uint64_t *out_declared_total) {
   ArchiveEntry entry = {0};
   uint64_t declared_total = 0;
   int ret;
@@ -370,9 +514,8 @@ static int prevalidate_entries(const CArchive *archive, void *reader,
       return -1;
     }
 
-    // A hardlink adds no data, but claims its path like a file
-    if (entry_is_selected(&entry, files, num_files) &&
-        (entry.type == ENTRY_FILE || entry.type == ENTRY_HARDLINK)) {
+    // A link or node declares no data, but claims its path like a file
+    if (entry_is_selected(&entry, sel) && entry.type != ENTRY_DIR) {
       declared_total += entry.type == ENTRY_FILE ? entry.size : 0;
       if (policy->max_total_size > 0 &&
           declared_total > policy->max_total_size) {
@@ -644,12 +787,98 @@ static int rename_conflicting_dir(const char *output_dir, const char *out_path,
   return -1;
 }
 
-// Links `out_path` to the already-extracted `target`, applying the overwrite
-// mode as for a file; returns 0, or -1 with an exception set
+// Sets a positive `mtime` on the link made; best-effort
+static int link_made(Changes *changes, const char *path, int64_t mtime) {
+  if (mtime > 0)
+    fs_set_mtime(path, mtime);
+  return record_change(changes, path, NULL, 0);
+}
+
+static int make_hardlink(const void *source, const char *out_path) {
+  return fs_link(source, out_path);
+}
+
+static int make_symlink(const void *target, const char *out_path) {
+  return fs_symlink(target, out_path);
+}
+
+// Creates `entry` with its `mode` as given
+static int make_node(const void *entry, const char *out_path) {
+  const ArchiveEntry *e = entry;
+  return fs_mknod(out_path, e->special, e->mode, e->rdev);
+}
+
+// Runs `make(source, out_path)` under the overwrite mode, as for a file;
+// returns 0, or -1 with an exception set
+static int place_link(int (*make)(const void *, const char *),
+                      const void *source, const char *out_path,
+                      const char *entry_path, int overwrite_existing,
+                      int64_t mtime, Changes *changes) {
+  if (make(source, out_path) == 0)
+    return link_made(changes, out_path, mtime);
+  if (errno != EEXIST) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+    return -1;
+  }
+
+  switch (overwrite_existing) {
+  case 1: // SKIP
+    return 0;
+  case 2: // OVERWRITE
+    if (move_aside(changes, out_path) != 0)
+      return -1;
+    if (make(source, out_path) != 0) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+      return -1;
+    }
+    return link_made(changes, out_path, mtime);
+  case 3: { // RENAME: each attempt is its own atomic link, as for a file
+    char candidate[FS_PATH_MAX];
+    for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
+      if (fs_conflict_path(out_path, n, candidate, sizeof(candidate)) != 0) {
+        PyErr_Format(PyExc_ValueError,
+                     "Archive entry path too long to rename: %s", entry_path);
+        return -1;
+      }
+      if (make(source, candidate) == 0)
+        return link_made(changes, candidate, mtime);
+      if (errno != EEXIST) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, candidate);
+        return -1;
+      }
+    }
+    PyErr_Format(PyExc_OSError, "Too many conflicting names for entry: %s",
+                 entry_path);
+    return -1;
+  }
+  default: // ERROR
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+    return -1;
+  }
+}
+
+// Checks a symlink's target from `parent`, the directory it lands in, once
+// resolved, as a symlinked ancestor can make it shallower
+static int check_target_from(const CompErrors *errors,
+                             const char *resolved_root, const char *parent,
+                             const ArchiveEntry *entry) {
+  char resolved_parent[FS_PATH_MAX];
+  if (fs_realpath(parent, resolved_parent) != 0) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, parent);
+    return -1;
+  }
+  uint32_t parent_depth = path_depth(resolved_parent);
+  uint32_t root_depth = path_depth(resolved_root);
+  return check_symlink_target(
+      errors, entry, parent_depth > root_depth ? parent_depth - root_depth : 0);
+}
+
+// Links `out_path` to the already-extracted `target`; returns 0, 1 if `target`
+// is missing, or -1 with an exception set
 static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
                             const char *output_dir, const char *out_path,
                             const char *target, const char *entry_path,
-                            int overwrite_existing, Changes *changes) {
+                            const ExtractionPolicy *policy, Changes *changes) {
   char target_path[FS_PATH_MAX];
   if (fs_join(target_path, sizeof(target_path), output_dir, target) != 0) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, target);
@@ -659,12 +888,16 @@ static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
   // lstat, so something planted in the target's place is refused, not followed
   fs_stat st;
   if (fs_stat_path(target_path, &st) != 0) {
+    if (errno == ENOENT)
+      return 1;
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, target_path);
     return -1;
   }
-  if (st.type != FS_TYPE_FILE) {
+  // A symlink is linked itself
+  int is_symlink = st.type == FS_TYPE_SYMLINK && policy->allow_symlinks == 1;
+  if (st.type != FS_TYPE_FILE && !is_symlink && !st.special) {
     PyErr_Format(errors->extraction_policy,
-                 "Hardlink %s names %s, which is not a regular file",
+                 "Hardlink %s names %s, which is not a file, FIFO or device",
                  entry_path, target);
     return -1;
   }
@@ -693,47 +926,77 @@ static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
       return -1;
   }
 
-  if (fs_link(target_path, out_path) == 0)
-    return record_change(changes, out_path, NULL, 0);
-  if (errno != EEXIST) {
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
-    return -1;
+  // Its relative target now resolves from the new link's directory, and it
+  // may have been planted rather than extracted
+  if (is_symlink) {
+    char link_target[FS_PATH_MAX];
+    if (fs_readlink(target_path, link_target, sizeof(link_target)) != 0) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, target_path);
+      return -1;
+    }
+    ArchiveEntry as_symlink = {.path = (char *)entry_path,
+                               .link_target = link_target};
+    if (check_target_from(errors, resolved_root, link_parent, &as_symlink) != 0)
+      return -1;
   }
 
-  switch (overwrite_existing) {
-  case 1: // SKIP
+  // Shares the target's inode, and so its metadata too
+  return place_link(make_hardlink, target_path, out_path, entry_path,
+                    policy->overwrite_existing, 0, changes);
+}
+
+static int extract_symlink(const CompErrors *errors, const char *resolved_root,
+                           const char *out_path, const ArchiveEntry *entry,
+                           const ExtractionPolicy *policy, Changes *changes) {
+  char parent[FS_PATH_MAX];
+  memcpy(parent, out_path, strlen(out_path) + 1);
+  char *sep = fs_last_sep(parent);
+  if (sep) {
+    *sep = '\0';
+    if (prepare_output_dir(errors, resolved_root, parent, DIR_CREATE_MODE,
+                           entry->path, changes) != 0)
+      return -1;
+  }
+
+  if (check_target_from(errors, resolved_root, parent, entry) != 0)
+    return -1;
+
+  return place_link(make_symlink, entry->link_target, out_path, entry->path,
+                    policy->overwrite_existing,
+                    policy->preserve_timestamps ? (int64_t)entry->mtime : 0,
+                    changes);
+}
+
+// A node this platform or user can't create is skipped with a warning; returns
+// 0, or -1 with an exception set
+static int extract_special(const CompErrors *errors, const char *resolved_root,
+                           const char *out_path, const ArchiveEntry *entry,
+                           const ExtractionPolicy *policy, uint32_t mode_mask,
+                           CoreContext *ctx, Changes *changes) {
+  if (!fs_can_mknod(entry->special)) {
+    ctx_log(ctx, CTX_LOG_WARNING, "Skipped %s: %s", entry->path,
+            !entry->special ? "sockets are not extracted"
+            : entry->special == AE_IFIFO
+                ? "FIFOs can't be created on this platform"
+                : "devices are only created by root, and not on Windows");
     return 0;
-  case 2: // OVERWRITE
-    if (move_aside(changes, out_path) != 0)
-      return -1;
-    if (fs_link(target_path, out_path) != 0) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
-      return -1;
-    }
-    return record_change(changes, out_path, NULL, 0);
-  case 3: { // RENAME: each attempt is its own atomic link, as for a file
-    char candidate[FS_PATH_MAX];
-    for (int n = 2; n <= FS_MAX_CONFLICT_ATTEMPTS; n++) {
-      if (fs_conflict_path(out_path, n, candidate, sizeof(candidate)) != 0) {
-        PyErr_Format(PyExc_ValueError,
-                     "Archive entry path too long to rename: %s", entry_path);
-        return -1;
-      }
-      if (fs_link(target_path, candidate) == 0)
-        return record_change(changes, candidate, NULL, 0);
-      if (errno != EEXIST) {
-        PyErr_SetFromErrnoWithFilename(PyExc_OSError, candidate);
-        return -1;
-      }
-    }
-    PyErr_Format(PyExc_OSError, "Too many conflicting names for entry: %s",
-                 entry_path);
-    return -1;
   }
-  default: // ERROR
-    PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
-    return -1;
+
+  char parent[FS_PATH_MAX];
+  memcpy(parent, out_path, strlen(out_path) + 1);
+  char *sep = fs_last_sep(parent);
+  if (sep) {
+    *sep = '\0';
+    if (prepare_output_dir(errors, resolved_root, parent, DIR_CREATE_MODE,
+                           entry->path, changes) != 0)
+      return -1;
   }
+
+  ArchiveEntry node = *entry;
+  node.mode = policy->preserve_permissions ? entry->mode & mode_mask : 0666;
+  return place_link(
+      make_node, &node, out_path, entry->path, policy->overwrite_existing,
+      policy->preserve_timestamps ? (int64_t)entry->mtime : 0, changes);
 }
 
 // Returns 0, 1 if the entry's data should be skipped, or -1 with an exception
@@ -869,8 +1132,24 @@ static int extract_file(const CArchive *archive, void *reader,
                            : UINT64_MAX;
   uint64_t written = 0;
 
-  int data_ret =
-      archive->extract_entry_data(reader, f, remaining, &written, data_ctx);
+  int data_ret = 0;
+  if (entry->type == ENTRY_SYMLINK) {
+    // Mode 2: the link's target text becomes the file's content
+    size_t len = entry->link_target ? strlen(entry->link_target) : 0;
+    if (len > remaining) {
+      PyErr_SetString(errors->extraction_policy,
+                      "Archive exceeds the maximum extracted size");
+      data_ret = -1;
+    } else if (len > 0 && fwrite(entry->link_target, 1, len, f) != len) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
+      data_ret = -1;
+    } else {
+      written = len;
+    }
+  } else {
+    data_ret =
+        archive->extract_entry_data(reader, f, remaining, &written, data_ctx);
+  }
   *written_total += written;
 
   if (data_ret != 0) {
@@ -887,7 +1166,9 @@ static int extract_file(const CArchive *archive, void *reader,
   if (!close_errno) {
     if (policy->preserve_timestamps && entry->mtime > 0)
       fs_futimens(f, (int64_t)entry->mtime);
-    if (policy->preserve_permissions)
+    // A link's own mode (usually 0777) would make its text executable, so it
+    // keeps the default file mode
+    if (policy->preserve_permissions && entry->type == ENTRY_FILE)
       fs_fchmod(f, entry->mode & mode_mask);
   }
   if (fclose(f) != 0 && !close_errno)
@@ -902,13 +1183,15 @@ static int extract_file(const CArchive *archive, void *reader,
 }
 
 // Read and write each entry from an already-open reader into `changes` and
-// `deferred`; `data_ctx` counts bytes written, NULL if the caller counts input
+// `deferred`, appending "link -> target" to `skipped_links` for each hardlink
+// whose target is missing; `data_ctx` counts bytes written, NULL if the caller
+// counts input
 static int extract_entries(const CArchive *archive, void *reader,
                            const char *output_dir, const char *resolved_root,
-                           const char **files, size_t num_files,
-                           const ExtractionPolicy *policy, CoreContext *ctx,
-                           CoreContext *data_ctx, Changes *changes,
-                           DeferredDirs *deferred) {
+                           Selection *sel, const ExtractionPolicy *policy,
+                           CoreContext *ctx, CoreContext *data_ctx,
+                           Changes *changes, DeferredDirs *deferred,
+                           PyObject *skipped_links) {
   ArchiveEntry entry = {0};
   uint64_t written_total = 0;
   Renames renames = {0};
@@ -956,7 +1239,7 @@ static int extract_entries(const CArchive *archive, void *reader,
         check_entry_policy(ctx->errors, &entry, policy) != 0)
       goto cleanup;
 
-    if (!entry_is_selected(&entry, files, num_files)) {
+    if (!entry_is_selected(&entry, sel)) {
       entry_reset(&entry);
       archive->skip_entry_data(reader);
       continue;
@@ -972,15 +1255,30 @@ static int extract_entries(const CArchive *archive, void *reader,
     if (entry.type == ENTRY_DIR)
       rc = extract_dir(ctx->errors, output_dir, resolved_root, out_path, &entry,
                        policy, mode_mask, &renames, changes, deferred);
-    else if (entry.type == ENTRY_FILE)
+    else if (entry.type == ENTRY_SYMLINK && policy->allow_symlinks == 1)
+      rc = extract_symlink(ctx->errors, resolved_root, out_path, &entry, policy,
+                           changes) != 0
+               ? -1
+               : 1;
+    else if (entry.type == ENTRY_FILE || entry.type == ENTRY_SYMLINK)
       rc = extract_file(archive, reader, ctx->errors, resolved_root, out_path,
                         &entry, policy, mode_mask, data_ctx, &written_total,
                         changes);
-    else if (entry.type == ENTRY_HARDLINK)
-      // Shares the target's inode, and so its metadata too
+    else if (entry.type == ENTRY_HARDLINK) {
+      // A missing target is skipped, and reported once the rest is extracted
       rc = extract_hardlink(ctx->errors, resolved_root, output_dir, out_path,
-                            effective_target, entry.path,
-                            policy->overwrite_existing, changes) != 0
+                            effective_target, entry.path, policy, changes);
+      if (rc == 1) {
+        PyObject *link =
+            PyUnicode_FromFormat("%s -> %s", entry.path, entry.link_target);
+        if (!link || PyList_Append(skipped_links, link) != 0)
+          rc = -1;
+        Py_XDECREF(link);
+      }
+      rc = rc < 0 ? -1 : 1;
+    } else if (entry.type == ENTRY_SPECIAL)
+      rc = extract_special(ctx->errors, resolved_root, out_path, &entry, policy,
+                           mode_mask, ctx, changes) != 0
                ? -1
                : 1;
     if (rc < 0) {
@@ -1017,6 +1315,11 @@ int extract_archive(const char *archive_path, const char *output_dir,
     src = NULL;
   }
 
+  ExtractionPolicy resolved_policy = *policy;
+  if (resolved_policy.allow_symlinks < 0)
+    resolved_policy.allow_symlinks = archive->default_symlinks;
+  policy = &resolved_policy;
+
   // Canonicalised once rather than per entry, and after the directory exists;
   // fs_mkdir_p accepts an existing file, so the resolved root is checked too
   char resolved_root[FS_PATH_MAX];
@@ -1030,6 +1333,15 @@ int extract_archive(const char *archive_path, const char *output_dir,
   }
   if (!root_ok) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, output_dir);
+    if (src)
+      fclose(src);
+    return -1;
+  }
+
+  Selection sel;
+  PyObject *skipped_links = PyList_New(0);
+  if (!skipped_links || selection_init(&sel, files, num_files) != 0) {
+    Py_XDECREF(skipped_links);
     if (src)
       fclose(src);
     return -1;
@@ -1062,11 +1374,10 @@ int extract_archive(const char *archive_path, const char *output_dir,
 
     ret = pass == 0
               ? prevalidate_entries(archive, reader, output_dir, resolved_root,
-                                    files, num_files, policy, ctx,
-                                    &declared_total)
+                                    &sel, policy, ctx, &declared_total)
               : extract_entries(archive, reader, output_dir, resolved_root,
-                                files, num_files, policy, ctx, src ? NULL : ctx,
-                                &changes, &deferred);
+                                &sel, policy, ctx, src ? NULL : ctx, &changes,
+                                &deferred, skipped_links);
 
     // A failed pass keeps its own error
     if (archive->close_reader(reader, ret != 0) != 0 && ret == 0)
@@ -1088,5 +1399,11 @@ int extract_archive(const char *archive_path, const char *output_dir,
     undo_changes(&changes, 0);
   keep_changes(&changes);
   apply_deferred_dirs(&deferred, undo ? NULL : policy);
+
+  // After everything else has been extracted
+  if (ret == 0)
+    ret = report_incomplete(&sel, skipped_links, ctx);
+  Py_DECREF(skipped_links);
+  free(sel.items);
   return ret;
 }

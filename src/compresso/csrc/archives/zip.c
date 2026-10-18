@@ -10,9 +10,12 @@
 #include <time.h>
 #include <zip.h>
 
-#ifndef ZIP_LENGTH_TO_END
-#define ZIP_LENGTH_TO_END 0
-#endif
+// Unix st_mode type bits, as Info-ZIP stores them in the high half of the
+// external attributes; written out since Windows' sys/stat.h lacks S_IFLNK
+#define ZIP_UNIX_IFMT 0170000u
+#define ZIP_UNIX_IFDIR 0040000u
+#define ZIP_UNIX_IFREG 0100000u
+#define ZIP_UNIX_IFLNK 0120000u
 
 // A damaged archive, as opposed to one using a feature libzip lacks
 static int zip_error_is_corrupt(int code) {
@@ -129,9 +132,149 @@ static void *zip_create_writer(const char *output_path, int compression_level,
   return writer;
 }
 
+static int zip_set_metadata(ZipWriter *writer, zip_int64_t idx,
+                            const ArchiveEntry *entry, zip_uint32_t unix_type) {
+  zip_uint32_t attributes = (unix_type | (entry->mode & 07777)) << 16;
+  if (zip_file_set_external_attributes(writer->archive, (zip_uint64_t)idx, 0,
+                                       ZIP_OPSYS_UNIX, attributes) < 0) {
+    set_zip_error(writer->errors, zip_get_error(writer->archive),
+                  "Failed to set file mode", writer->output_path, 0, 0);
+    return -1;
+  }
+
+  if (entry->mtime > 0)
+    zip_file_set_mtime(writer->archive, (zip_uint64_t)idx, entry->mtime, 0);
+  return 0;
+}
+
+// A walked file, which libzip reads inside zip_close; opened only then, so no
+// fd is held per entry; stores the walked size
+typedef struct {
+  ZipWriter *writer;
+  char *path;
+  uint64_t size;
+  time_t mtime;
+  FILE *f;
+  uint64_t served; // Bytes handed to libzip, padding included
+  uint64_t read;   // Bytes that came from the file
+  zip_error_t error;
+} ZipFileSource;
+
+// Raised from inside zip_close; abort_code keeps the close from replacing it
+static zip_int64_t zip_file_source_fail(ZipFileSource *src, int code) {
+  int err = errno ? errno : EIO;
+  zip_error_set(&src->error, code, err);
+  PyGILState_STATE gstate = PyGILState_Ensure();
+  errno = err;
+  PyErr_SetFromErrnoWithFilename(PyExc_OSError, src->path);
+  PyGILState_Release(gstate);
+  src->writer->abort_code = -1;
+  return -1;
+}
+
+static zip_int64_t zip_file_source_cb(void *userdata, void *data,
+                                      zip_uint64_t len, zip_source_cmd_t cmd) {
+  ZipFileSource *src = (ZipFileSource *)userdata;
+  switch (cmd) {
+  case ZIP_SOURCE_OPEN:
+    errno = 0;
+    if (!(src->f = fs_fopen(src->path, "rb")))
+      return zip_file_source_fail(src, ZIP_ER_OPEN);
+    src->served = src->read = 0;
+    return 0;
+
+  case ZIP_SOURCE_READ: {
+    if (len > src->size - src->served)
+      len = src->size - src->served;
+    errno = 0;
+    size_t n = fread(data, 1, (size_t)len, src->f);
+    if (n < len && ferror(src->f))
+      return zip_file_source_fail(src, ZIP_ER_READ);
+    memset((char *)data + n, 0, (size_t)len - n);
+    src->served += len;
+    src->read += n;
+    return (zip_int64_t)len;
+  }
+
+  case ZIP_SOURCE_CLOSE: {
+    // Only once the entry is complete; a cancelled close stops partway; archive
+    // is still valid, so warn and continue
+    CoreContext *ctx = src->writer->ctx;
+    if (src->served == src->size && src->read < src->size)
+      ctx_log(ctx, CTX_LOG_WARNING,
+              "%s: file shrank by %llu bytes; padded with zeros", src->path,
+              (unsigned long long)(src->size - src->read));
+    else if (src->served == src->size && fgetc(src->f) != EOF)
+      ctx_log(ctx, CTX_LOG_WARNING,
+              "%s: file grew while being archived; truncated to %llu bytes",
+              src->path, (unsigned long long)src->size);
+    fclose(src->f);
+    src->f = NULL;
+    return 0;
+  }
+
+  case ZIP_SOURCE_STAT: {
+    zip_stat_t *st = (zip_stat_t *)data;
+    zip_stat_init(st);
+    st->size = src->size;
+    st->mtime = src->mtime;
+    st->valid |= ZIP_STAT_SIZE | ZIP_STAT_MTIME;
+    return sizeof(*st);
+  }
+
+  case ZIP_SOURCE_ERROR:
+    return zip_error_to_data(&src->error, data, len);
+
+  case ZIP_SOURCE_FREE:
+    if (src->f)
+      fclose(src->f);
+    zip_error_fini(&src->error);
+    free(src->path);
+    free(src);
+    return 0;
+
+  case ZIP_SOURCE_SUPPORTS:
+    return zip_source_make_command_bitmap(
+        ZIP_SOURCE_OPEN, ZIP_SOURCE_READ, ZIP_SOURCE_CLOSE, ZIP_SOURCE_STAT,
+        ZIP_SOURCE_ERROR, ZIP_SOURCE_FREE, -1);
+
+  default:
+    zip_error_set(&src->error, ZIP_ER_OPNOTSUPP, 0);
+    return -1;
+  }
+}
+
+static zip_source_t *zip_file_source(ZipWriter *writer,
+                                     const ArchiveEntry *entry,
+                                     const char *source_path) {
+  ZipFileSource *src = safe_malloc(sizeof(ZipFileSource));
+  if (!src)
+    return NULL;
+  *src = (ZipFileSource){.writer = writer,
+                         .path = strdup(source_path),
+                         .size = entry->size,
+                         .mtime = entry->mtime};
+  zip_error_init(&src->error);
+
+  zip_source_t *source =
+      src->path ? zip_source_function(writer->archive, zip_file_source_cb, src)
+                : NULL;
+  if (!source) {
+    if (!src->path)
+      PyErr_NoMemory();
+    else
+      set_zip_error(writer->errors, zip_get_error(writer->archive),
+                    "Failed to read source", source_path, 0, 0);
+    free(src->path);
+    free(src);
+  }
+  return source;
+}
+
 static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
                          FILE *data, const char *source_path,
                          CoreContext *ctx) {
+  (void)data;
   ZipWriter *writer = (ZipWriter *)writer_ptr;
 
   int cancelled = ctx_advance(ctx, 0);
@@ -157,25 +300,13 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
       return -1;
     }
 
-    return 0;
+    return zip_set_metadata(writer, idx, entry, ZIP_UNIX_IFDIR);
   }
 
   if (entry->type == ENTRY_FILE) {
-    // Create source from FILE*
-    if (!data) {
-      PyErr_SetString(PyExc_ValueError, "FILE data required for file entry");
+    zip_source_t *source = zip_file_source(writer, entry, source_path);
+    if (!source)
       return -1;
-    }
-
-    // libzip opens, reads and closes the file itself, lazily, usually from
-    // zip_close - so neither the whole file nor an open fd is held here
-    zip_source_t *source =
-        zip_source_file(writer->archive, source_path, 0, ZIP_LENGTH_TO_END);
-    if (!source) {
-      set_zip_error(writer->errors, zip_get_error(writer->archive),
-                    "Failed to read source", source_path, 0, 0);
-      return -1;
-    }
 
     // Add file to archive
     zip_int64_t idx = zip_file_add(writer->archive, entry->path, source,
@@ -195,18 +326,13 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
       return -1;
     }
 
-    // Set modification time
-    if (entry->mtime > 0) {
-      zip_file_set_mtime(writer->archive, (zip_uint64_t)idx, entry->mtime, 0);
-    }
-
     // No progress is reported here; libzip buffers each source and compresses
     // everything inside zip_close
-    return 0;
+    return zip_set_metadata(writer, idx, entry, ZIP_UNIX_IFREG);
   }
 
   if (entry->type == ENTRY_SYMLINK) {
-    // Store as a regular file containing the symlink target
+    // The target text as the data, marked as a link by its mode
     if (!entry->link_target) {
       PyErr_SetString(PyExc_ValueError, "Symlink requires a target");
       return -1;
@@ -231,7 +357,13 @@ static int zip_add_entry(void *writer_ptr, const ArchiveEntry *entry,
       return -1;
     }
 
-    return 0;
+    return zip_set_metadata(writer, idx, entry, ZIP_UNIX_IFLNK);
+  }
+
+  if (entry->type == ENTRY_SPECIAL) {
+    PyErr_Format(PyExc_ValueError,
+                 "zip archives cannot store FIFOs or devices: %s", entry->path);
+    return -1;
   }
 
   PyErr_SetString(PyExc_ValueError, "Unknown entry type");
@@ -374,6 +506,44 @@ static void *zip_create_reader(const char *input_path, CoreContext *ctx) {
   return reader;
 }
 
+// A link's target is its data, read here since a symlink entry is never
+// extracted through extract_entry_data
+static int zip_read_link_target(ZipReader *reader, zip_int64_t idx,
+                                ArchiveEntry *entry) {
+  if (entry->size >= FS_PATH_MAX) {
+    PyErr_Format(reader->errors->corrupt_data, "Symlink target too long: %s",
+                 entry->path);
+    return -1;
+  }
+
+  zip_file_t *zf = zip_fopen_index(reader->archive, (zip_uint64_t)idx, 0);
+  if (!zf) {
+    set_zip_error(reader->errors, zip_get_error(reader->archive),
+                  "Failed to open file in archive", reader->input_path, 1, 0);
+    return -1;
+  }
+
+  char target[FS_PATH_MAX];
+  zip_int64_t n = zip_fread(zf, target, entry->size);
+  if (n < 0) {
+    set_zip_error(reader->errors, zip_file_get_error(zf),
+                  "Error reading from archive", reader->input_path, 1, 0);
+    zip_fclose(zf);
+    return -1;
+  }
+  zip_fclose(zf);
+  target[n] = '\0';
+
+  entry->link_target = strdup(target);
+  if (!entry->link_target) {
+    PyErr_NoMemory();
+    return -1;
+  }
+  entry->type = ENTRY_SYMLINK;
+  entry->size = 0;
+  return 0;
+}
+
 static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
                               CoreContext *ctx) {
   (void)ctx; // libzip has no warnings to pass on
@@ -419,8 +589,28 @@ static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
     entry->mtime = st.mtime;
   }
 
-  // ZIP doesn't store Unix permissions by default
-  entry->mode = (entry->type == ENTRY_DIR) ? 0755 : 0644;
+  zip_int64_t idx = reader->current_index;
+  zip_uint8_t opsys;
+  zip_uint32_t attributes;
+  zip_uint32_t unix_mode = 0;
+  if (zip_file_get_external_attributes(reader->archive, (zip_uint64_t)idx, 0,
+                                       &opsys, &attributes) == 0 &&
+      opsys == ZIP_OPSYS_UNIX)
+    unix_mode = attributes >> 16;
+
+  // DOS and Windows archivers leave the mode out
+  if (unix_mode != 0)
+    entry->mode = unix_mode & 07777;
+  else
+    entry->mode = (entry->type == ENTRY_DIR) ? 0755 : 0644;
+
+  if (entry->type == ENTRY_FILE &&
+      (unix_mode & ZIP_UNIX_IFMT) == ZIP_UNIX_IFLNK &&
+      zip_read_link_target(reader, idx, entry) != 0) {
+    free(entry->path);
+    entry->path = NULL;
+    return -1;
+  }
 
   // A directory has no data and so nothing worth reporting
   if (entry->type != ENTRY_DIR) {
@@ -556,6 +746,9 @@ static int zip_supports_streaming(void) {
 const CArchive ZIP_ARCHIVE = {
     .name = "zip",
     .levels = LEVELS_ZLIB,
+    // Links have always extracted as files of their target text
+    .default_symlinks = 2,
+    .reads_sources = 1,
     .supports_compression = zip_supports_compression,
     .supports_streaming = zip_supports_streaming,
     .create_writer = zip_create_writer,

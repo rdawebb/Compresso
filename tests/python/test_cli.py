@@ -566,6 +566,21 @@ class TestArchiveRoundTrip:
         expected = 0o777 if exact else 0o777 & ~umask
         assert (dest / "a.txt").stat().st_mode & 0o7777 == expected
 
+    def test_symlinks_flag_reaches_the_policy(self, temp_dir: Path) -> None:
+        """Test that a symlink refused by default extracts with `--symlinks file`."""
+        archive = temp_dir / "link.tar"
+        info = tarfile.TarInfo("link")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "target"
+        with tarfile.open(archive, "w") as tar:
+            tar.addfile(info)
+        dest = temp_dir / "dest"
+
+        invoke("extract", archive, "-o", dest, "-q", expect=EXIT_FAILED)
+        invoke("extract", archive, "-o", dest, "--symlinks", "file", "-q")
+
+        assert (dest / "link").read_bytes() == b"target"
+
 
 class TestCompressConflicts:
     """Test what `compress` does when its output already exists."""
@@ -649,6 +664,25 @@ class TestDecompressConflicts:
         invoke("decompress", archive, "-o", restored, "--overwrite", "-q")
 
         assert restored.read_bytes() == payload.read_bytes()
+
+
+class TestDecompressName:
+    """Test that -N names a .gz file's output as its header does, as gzip -N does."""
+
+    @pytest.mark.parametrize(
+        ("flags", "expected"), [((), "renamed"), (("-N",), "orig.txt")]
+    )
+    def test_name_flag(
+        self, temp_dir: Path, flags: tuple[str, ...], expected: str
+    ) -> None:
+        """Test that the stored name is used only with -N."""
+        src = temp_dir / "renamed.gz"
+        with src.open("wb") as f, gzip.GzipFile("orig.txt", "wb", fileobj=f) as gz:
+            gz.write(b"payload")
+
+        invoke("extract", src, *flags, "-q")
+
+        assert (temp_dir / expected).read_bytes() == b"payload"
 
 
 class TestInspectAndList:

@@ -489,10 +489,10 @@ static PyObject *py_extract_archive(PyObject *self, PyObject *args,
     goto done;
   }
 
-  if (policy.allow_symlinks < 0 || policy.allow_symlinks > 2) {
+  if (policy.allow_symlinks < -1 || policy.allow_symlinks > 2) {
     PyErr_Format(PyExc_ValueError,
-                 "allow_symlinks must be 0 (deny), 1 (allow) or 2 (rewrite), "
-                 "not %d",
+                 "allow_symlinks must be 0 (deny), 1 (allow), 2 (rewrite) or "
+                 "-1 (the format's default), not %d",
                  policy.allow_symlinks);
     goto done;
   }
@@ -770,6 +770,24 @@ static PyObject *py_detect_format(PyObject *self UNUSED, PyObject *args) {
   return PyUnicode_FromString(name);
 }
 
+static PyObject *py_gzip_stored_name(PyObject *self UNUSED, PyObject *args) {
+  PyObject *file_path_bytes = NULL;
+
+  if (!PyArg_ParseTuple(args, "O&", PyUnicode_FSConverter, &file_path_bytes)) {
+    return NULL; // Error already set
+  }
+
+  char *name = gzip_original_name(PyBytes_AS_STRING(file_path_bytes));
+  Py_DECREF(file_path_bytes);
+  if (!name) {
+    Py_RETURN_NONE;
+  }
+
+  PyObject *result = PyBytes_FromString(name);
+  free(name);
+  return result;
+}
+
 static PyObject *py_format_is_archive(PyObject *self UNUSED, PyObject *args) {
   const char *format_name = NULL;
 
@@ -922,6 +940,8 @@ static PyMethodDef CoreMethods[] = {
 
     {"detect_format", (PyCFunction)py_detect_format, METH_VARARGS,
      "Detect the format of a file."},
+    {"gzip_stored_name", (PyCFunction)py_gzip_stored_name, METH_VARARGS,
+     "Return the name a gzip header stores (FNAME), or None."},
     {"format_is_archive", (PyCFunction)py_format_is_archive, METH_VARARGS,
      "Check if a format is an archive format."},
     {"standalone_formats", (PyCFunction)py_standalone_formats, METH_NOARGS,
@@ -965,6 +985,8 @@ static int core_exec(PyObject *module) {
       {&errors->corrupt_data, "compresso.CorruptDataError", &errors->error},
       {&errors->extraction_policy, "compresso.ExtractionPolicyError",
        &errors->error},
+      {&errors->incomplete_extraction, "compresso.IncompleteExtractionError",
+       &errors->error},
       {&errors->trailing_data_warning, "compresso.TrailingDataWarning",
        &PyExc_UserWarning},
   };
@@ -989,6 +1011,7 @@ static int core_traverse(PyObject *module, visitproc visit, void *arg) {
   Py_VISIT(errors->backend);
   Py_VISIT(errors->corrupt_data);
   Py_VISIT(errors->extraction_policy);
+  Py_VISIT(errors->incomplete_extraction);
   Py_VISIT(errors->cancelled);
   Py_VISIT(errors->trailing_data_warning);
   return 0;
@@ -1001,6 +1024,7 @@ static int core_clear(PyObject *module) {
   Py_CLEAR(errors->backend);
   Py_CLEAR(errors->corrupt_data);
   Py_CLEAR(errors->extraction_policy);
+  Py_CLEAR(errors->incomplete_extraction);
   Py_CLEAR(errors->cancelled);
   Py_CLEAR(errors->trailing_data_warning);
   return 0;

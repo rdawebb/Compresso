@@ -31,6 +31,8 @@ typedef struct {
   uint32_t mode;       // Unix permissions
   char *link_target;   // A symlink's target, or for a hardlink the archive
                        // path of the entry it shares data with
+  uint32_t special;    // ENTRY_SPECIAL's AE_IF* type, when it is known
+  uint64_t rdev;       // A device's number
   void *internal_data; // Backend-specific data
 
   // Per-entry compression detail, which only a container that compresses each
@@ -46,6 +48,10 @@ typedef struct {
 typedef struct CArchive {
   const char *name;
   LevelRange levels; // Applies when no external codec stage is present
+  int default_symlinks; // allow_symlinks when the policy leaves it at -1
+  int stores_specials;  // FIFOs and devices; otherwise the walk skips them
+  int stores_hardlinks; // A file's later names as links; otherwise as copies
+  int reads_sources;    // Opens files itself from `source_path`; `data` is NULL
 
   // Capability checks
   int (*supports_compression)(void);
@@ -98,8 +104,9 @@ typedef struct CArchive {
 // ---- Extraction Policy ----
 
 typedef struct {
-  int allow_symlinks; // 0 = deny (default), 1 = allow, 2 = rewrite to regular
-                      // files
+  // 0 = deny, 1 = allow, 2 = rewrite to regular files, -1 = the backend's
+  // default (the default)
+  int allow_symlinks;
   int overwrite_existing;   // 0 = error, 1 = skip, 2 = overwrite, 3 = rename
   int preserve_permissions; // 1 = restore mode bits, 0 = apply umask
 
