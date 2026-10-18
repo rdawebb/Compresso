@@ -338,6 +338,7 @@ static int check_entry_policy(const CompErrors *errors,
 typedef struct {
   const char *name;
   size_t len; // Without trailing slashes
+  int matched;
 } SelectedName;
 
 typedef struct {
@@ -365,27 +366,73 @@ static int selection_init(Selection *sel, const char **files,
     size_t len = strlen(files[i]);
     while (len > 0 && files[i][len - 1] == '/')
       len--;
-    sel->items[sel->count++] = (SelectedName){files[i], len};
+    sel->items[sel->count++] = (SelectedName){files[i], len, 0};
   }
   qsort(sel->items, sel->count, sizeof(*sel->items), selected_name_cmp);
+
+  // A repeated name would never be marked as matched
+  size_t kept = 0;
+  for (size_t i = 0; i < sel->count; i++)
+    if (kept == 0 ||
+        selected_name_cmp(&sel->items[kept - 1], &sel->items[i]) != 0)
+      sel->items[kept++] = sel->items[i];
+  sel->count = kept;
   return 0;
 }
 
-// Whether `entry` or a directory above it was requested, as tar matches names
-static int entry_is_selected(const ArchiveEntry *entry, const Selection *sel) {
+// Whether `entry` or a directory above it was requested, as tar matches names;
+// marks every name that matches, so "d" and "d/x" both count as found
+static int entry_is_selected(const ArchiveEntry *entry, Selection *sel) {
   if (sel->count == 0)
     return 1;
 
+  int selected = 0;
   for (const char *p = entry->path;; p++) {
     if ((*p == '/' || *p == '\0') && p > entry->path) {
-      SelectedName key = {entry->path, (size_t)(p - entry->path)};
-      if (bsearch(&key, sel->items, sel->count, sizeof(*sel->items),
-                  selected_name_cmp))
-        return 1;
+      SelectedName key = {entry->path, (size_t)(p - entry->path), 0};
+      SelectedName *hit = bsearch(&key, sel->items, sel->count,
+                                  sizeof(*sel->items), selected_name_cmp);
+      if (hit) {
+        hit->matched = 1;
+        selected = 1;
+      }
     }
     if (*p == '\0')
-      return 0;
+      return selected;
   }
+}
+
+// Raises, listing each requested name no entry matched
+static int report_unmatched(const Selection *sel, CoreContext *ctx) {
+  PyObject *names = PyList_New(0);
+  if (!names)
+    return -1;
+  for (size_t i = 0; i < sel->count; i++) {
+    if (sel->items[i].matched)
+      continue;
+    PyObject *name = PyUnicode_FromStringAndSize(sel->items[i].name,
+                                                 (Py_ssize_t)sel->items[i].len);
+    if (!name || PyList_Append(names, name) != 0) {
+      Py_XDECREF(name);
+      Py_DECREF(names);
+      return -1;
+    }
+    Py_DECREF(name);
+  }
+  if (PyList_GET_SIZE(names) == 0) {
+    Py_DECREF(names);
+    return 0;
+  }
+
+  PyObject *sep = PyUnicode_FromString(", ");
+  PyObject *joined = sep ? PyUnicode_Join(sep, names) : NULL;
+  if (joined)
+    PyErr_Format(ctx->errors->incomplete_extraction, "Not found in archive: %U",
+                 joined);
+  Py_XDECREF(joined);
+  Py_XDECREF(sep);
+  Py_DECREF(names);
+  return -1;
 }
 
 // Create a temp file in final_path's directory, which is known writable
@@ -411,7 +458,7 @@ static char *make_temp_path(const char *final_path) {
 // extract_entries counts the bytes it actually writes as well
 static int prevalidate_entries(const CArchive *archive, void *reader,
                                const char *output_dir,
-                               const char *resolved_root, const Selection *sel,
+                               const char *resolved_root, Selection *sel,
                                const ExtractionPolicy *policy, CoreContext *ctx,
                                uint64_t *out_declared_total) {
   ArchiveEntry entry = {0};
@@ -1113,7 +1160,7 @@ static int extract_file(const CArchive *archive, void *reader,
 // `deferred`; `data_ctx` counts bytes written, NULL if the caller counts input
 static int extract_entries(const CArchive *archive, void *reader,
                            const char *output_dir, const char *resolved_root,
-                           const Selection *sel, const ExtractionPolicy *policy,
+                           Selection *sel, const ExtractionPolicy *policy,
                            CoreContext *ctx, CoreContext *data_ctx,
                            Changes *changes, DeferredDirs *deferred) {
   ArchiveEntry entry = {0};
@@ -1306,7 +1353,6 @@ int extract_archive(const char *archive_path, const char *output_dir,
   } else if (src) {
     fclose(src);
   }
-  free(sel.items);
 
   // Before directories get archived modes, which may not be writable; after an
   // undo, existing directories keep their own
@@ -1315,5 +1361,10 @@ int extract_archive(const char *archive_path, const char *output_dir,
     undo_changes(&changes, 0);
   keep_changes(&changes);
   apply_deferred_dirs(&deferred, undo ? NULL : policy);
+
+  // After everything else has been extracted
+  if (ret == 0)
+    ret = report_unmatched(&sel, ctx);
+  free(sel.items);
   return ret;
 }

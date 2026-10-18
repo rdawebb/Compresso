@@ -985,6 +985,8 @@ static int core_exec(PyObject *module) {
       {&errors->corrupt_data, "compresso.CorruptDataError", &errors->error},
       {&errors->extraction_policy, "compresso.ExtractionPolicyError",
        &errors->error},
+      {&errors->incomplete_extraction, "compresso.IncompleteExtractionError",
+       &errors->error},
       {&errors->trailing_data_warning, "compresso.TrailingDataWarning",
        &PyExc_UserWarning},
   };
@@ -1009,6 +1011,7 @@ static int core_traverse(PyObject *module, visitproc visit, void *arg) {
   Py_VISIT(errors->backend);
   Py_VISIT(errors->corrupt_data);
   Py_VISIT(errors->extraction_policy);
+  Py_VISIT(errors->incomplete_extraction);
   Py_VISIT(errors->cancelled);
   Py_VISIT(errors->trailing_data_warning);
   return 0;
@@ -1021,6 +1024,7 @@ static int core_clear(PyObject *module) {
   Py_CLEAR(errors->backend);
   Py_CLEAR(errors->corrupt_data);
   Py_CLEAR(errors->extraction_policy);
+  Py_CLEAR(errors->incomplete_extraction);
   Py_CLEAR(errors->cancelled);
   Py_CLEAR(errors->trailing_data_warning);
   return 0;

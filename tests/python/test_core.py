@@ -26,6 +26,7 @@ from compresso import (
     Error,
     ExtractionPolicyError,
     HeaderError,
+    IncompleteExtractionError,
     _core,
     compress_file,
     decompress_file,
@@ -56,7 +57,14 @@ class TestCoreExceptions:
 
     @pytest.mark.parametrize(
         "exc",
-        [HeaderError, BackendError, CorruptDataError, ExtractionPolicyError, Cancelled],
+        [
+            HeaderError,
+            BackendError,
+            CorruptDataError,
+            ExtractionPolicyError,
+            IncompleteExtractionError,
+            Cancelled,
+        ],
     )
     def test_every_error_derives_from_error(self, exc: type[Exception]) -> None:
         """Test that catching Error catches every exception the core raises."""
@@ -530,9 +538,9 @@ class TestSelectByPrefix:
             (["d/"], ["d/sub/y.txt", "d/x.txt"]),
             (["d/sub"], ["d/sub/y.txt"]),
             (["e.txt", "d/sub/y.txt"], ["d/sub/y.txt", "e.txt"]),
-            (["d/x"], []),
+            (["d", "d/x.txt", "d"], ["d/sub/y.txt", "d/x.txt"]),
         ],
-        ids=["dir", "trailing-slash", "nested", "files", "partial-name"],
+        ids=["dir", "trailing-slash", "nested", "files", "overlapping"],
     )
     def test_selects_at_component_boundaries(
         self, archive: Path, temp_dir: Path, files: list[str], expected: list[str]
@@ -544,6 +552,19 @@ class TestSelectByPrefix:
 
         extracted = [p.relative_to(out).as_posix() for p in out.rglob("*")]
         assert sorted(p for p in extracted if (out / p).is_file()) == expected
+
+    def test_unmatched_names_are_reported_after_the_rest(
+        self, archive: Path, temp_dir: Path
+    ) -> None:
+        """Test that names matching nothing raise, keeping what was found, as bsdtar does."""
+        out = temp_dir / "out"
+
+        with pytest.raises(
+            IncompleteExtractionError, match=r"Not found in archive: d/x, nope$"
+        ):
+            _core.extract_archive(str(archive), str(out), ["nope", "e.txt", "d/x"])
+
+        assert [p.name for p in out.iterdir()] == ["e.txt"]
 
 
 class TestRecognisedButUnsupportedArchive:

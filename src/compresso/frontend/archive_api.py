@@ -337,6 +337,8 @@ def plan_extraction(
         output_dir: Directory to extract into. If None, the directory holding
             the archive.
         files: Optional subset of entry paths to extract. If None, extracts all.
+            A name matching no entry fails the run with
+            `IncompleteExtractionError`, after the rest is extracted.
         options: Extraction policy. If None, defaults are used.
 
     Returns:

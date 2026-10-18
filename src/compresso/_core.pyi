@@ -21,6 +21,12 @@ class ExtractionPolicyError(Error):
     denies, or the size cap.
     """
 
+class IncompleteExtractionError(Error):
+    """An extraction finished, but some of what was asked for wasn't extracted.
+
+    Raises on completion, anything extracted is kept.
+    """
+
 class CorruptDataError(Error):
     """The input is corrupt, truncated, or not the format it claims to be."""
 
