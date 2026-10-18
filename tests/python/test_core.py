@@ -752,10 +752,10 @@ class TestExtractionUndo:
     def test_failure_after_validation_undoes_a_plain_tar(self, temp_dir: Path) -> None:
         """Test that what only fails while writing is undone, directories too."""
         archive = temp_dir / "links.tar"
-        _tar_with_hardlink(archive, "d/missing")
+        _tar_with_hardlink(archive, "d")
         out = temp_dir / "out"
 
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(ExtractionPolicyError, match="not a file"):
             _core.extract_archive(str(archive), str(out), [])
 
         assert list(out.iterdir()) == []
@@ -1608,9 +1608,29 @@ class TestHardlinkExtraction:
         """Test that a link whose target wasn't extracted names the missing file."""
         archive = temp_dir / "links.tar"
         _tar_with_hardlink(archive, "d/a")
+        out = temp_dir / "out"
 
-        with pytest.raises(FileNotFoundError):
-            _core.extract_archive(str(archive), str(temp_dir / "out"), ["d/b"])
+        with pytest.raises(
+            IncompleteExtractionError, match=r"^Hardlink target missing: d/b -> d/a$"
+        ):
+            _core.extract_archive(str(archive), str(out), ["d/b"])
+
+        assert list(out.iterdir()) == []
+
+    def test_missing_target_is_skipped_keeping_the_rest(self, temp_dir: Path) -> None:
+        """Test that the link is reported with any unmatched name, as tar does."""
+        archive = temp_dir / "links.tar"
+        _tar_with_hardlink(archive, "d/missing")
+        out = temp_dir / "out"
+
+        with pytest.raises(
+            IncompleteExtractionError,
+            match=r"^Not found in archive: nope; "
+            r"Hardlink target missing: d/b -> d/missing$",
+        ):
+            _core.extract_archive(str(archive), str(out), ["d", "nope"])
+
+        assert os.listdir(out / "d") == ["a"]
 
     @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privilege")
     def test_target_replaced_by_a_symlink_is_refused(self, temp_dir: Path) -> None:

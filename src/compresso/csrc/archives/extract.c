@@ -402,37 +402,61 @@ static int entry_is_selected(const ArchiveEntry *entry, Selection *sel) {
   }
 }
 
-// Raises, listing each requested name no entry matched
-static int report_unmatched(const Selection *sel, CoreContext *ctx) {
+static PyObject *join_str(const char *sep, PyObject *items) {
+  PyObject *s = PyUnicode_FromString(sep);
+  PyObject *joined = s ? PyUnicode_Join(s, items) : NULL;
+  Py_XDECREF(s);
+  return joined;
+}
+
+// Appends "label: a, b" to `parts`, or nothing when `items` is empty
+static int append_part(PyObject *parts, const char *label, PyObject *items) {
+  if (PyList_GET_SIZE(items) == 0)
+    return 0;
+  PyObject *joined = join_str(", ", items);
+  PyObject *part =
+      joined ? PyUnicode_FromFormat("%s: %U", label, joined) : NULL;
+  int rc = part ? PyList_Append(parts, part) : -1;
+  Py_XDECREF(part);
+  Py_XDECREF(joined);
+  return rc;
+}
+
+// Raises an error listing unmatched requested names and skipped hardlinks
+static int report_incomplete(const Selection *sel, PyObject *skipped_links,
+                             CoreContext *ctx) {
   PyObject *names = PyList_New(0);
-  if (!names)
-    return -1;
+  PyObject *parts = PyList_New(0);
+  int ret = -1;
+  if (!names || !parts)
+    goto done;
   for (size_t i = 0; i < sel->count; i++) {
     if (sel->items[i].matched)
       continue;
     PyObject *name = PyUnicode_FromStringAndSize(sel->items[i].name,
                                                  (Py_ssize_t)sel->items[i].len);
-    if (!name || PyList_Append(names, name) != 0) {
-      Py_XDECREF(name);
-      Py_DECREF(names);
-      return -1;
-    }
-    Py_DECREF(name);
+    int rc = name ? PyList_Append(names, name) : -1;
+    Py_XDECREF(name);
+    if (rc != 0)
+      goto done;
   }
-  if (PyList_GET_SIZE(names) == 0) {
-    Py_DECREF(names);
-    return 0;
-  }
+  if (append_part(parts, "Not found in archive", names) != 0 ||
+      append_part(parts, "Hardlink target missing", skipped_links) != 0)
+    goto done;
 
-  PyObject *sep = PyUnicode_FromString(", ");
-  PyObject *joined = sep ? PyUnicode_Join(sep, names) : NULL;
-  if (joined)
-    PyErr_Format(ctx->errors->incomplete_extraction, "Not found in archive: %U",
-                 joined);
-  Py_XDECREF(joined);
-  Py_XDECREF(sep);
-  Py_DECREF(names);
-  return -1;
+  if (PyList_GET_SIZE(parts) == 0) {
+    ret = 0;
+    goto done;
+  }
+  PyObject *message = join_str("; ", parts);
+  if (message)
+    PyErr_SetObject(ctx->errors->incomplete_extraction, message);
+  Py_XDECREF(message);
+
+done:
+  Py_XDECREF(parts);
+  Py_XDECREF(names);
+  return ret;
 }
 
 // Create a temp file in final_path's directory, which is known writable
@@ -849,8 +873,8 @@ static int check_target_from(const CompErrors *errors,
       errors, entry, parent_depth > root_depth ? parent_depth - root_depth : 0);
 }
 
-// Links `out_path` to the already-extracted `target`; returns 0, or -1 with an
-// exception set
+// Links `out_path` to the already-extracted `target`; returns 0, 1 if `target`
+// is missing, or -1 with an exception set
 static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
                             const char *output_dir, const char *out_path,
                             const char *target, const char *entry_path,
@@ -864,6 +888,8 @@ static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
   // lstat, so something planted in the target's place is refused, not followed
   fs_stat st;
   if (fs_stat_path(target_path, &st) != 0) {
+    if (errno == ENOENT)
+      return 1;
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, target_path);
     return -1;
   }
@@ -1157,12 +1183,15 @@ static int extract_file(const CArchive *archive, void *reader,
 }
 
 // Read and write each entry from an already-open reader into `changes` and
-// `deferred`; `data_ctx` counts bytes written, NULL if the caller counts input
+// `deferred`, appending "link -> target" to `skipped_links` for each hardlink
+// whose target is missing; `data_ctx` counts bytes written, NULL if the caller
+// counts input
 static int extract_entries(const CArchive *archive, void *reader,
                            const char *output_dir, const char *resolved_root,
                            Selection *sel, const ExtractionPolicy *policy,
                            CoreContext *ctx, CoreContext *data_ctx,
-                           Changes *changes, DeferredDirs *deferred) {
+                           Changes *changes, DeferredDirs *deferred,
+                           PyObject *skipped_links) {
   ArchiveEntry entry = {0};
   uint64_t written_total = 0;
   Renames renames = {0};
@@ -1235,12 +1264,19 @@ static int extract_entries(const CArchive *archive, void *reader,
       rc = extract_file(archive, reader, ctx->errors, resolved_root, out_path,
                         &entry, policy, mode_mask, data_ctx, &written_total,
                         changes);
-    else if (entry.type == ENTRY_HARDLINK)
+    else if (entry.type == ENTRY_HARDLINK) {
+      // A missing target is skipped, and reported once the rest is extracted
       rc = extract_hardlink(ctx->errors, resolved_root, output_dir, out_path,
-                            effective_target, entry.path, policy, changes) != 0
-               ? -1
-               : 1;
-    else if (entry.type == ENTRY_SPECIAL)
+                            effective_target, entry.path, policy, changes);
+      if (rc == 1) {
+        PyObject *link =
+            PyUnicode_FromFormat("%s -> %s", entry.path, entry.link_target);
+        if (!link || PyList_Append(skipped_links, link) != 0)
+          rc = -1;
+        Py_XDECREF(link);
+      }
+      rc = rc < 0 ? -1 : 1;
+    } else if (entry.type == ENTRY_SPECIAL)
       rc = extract_special(ctx->errors, resolved_root, out_path, &entry, policy,
                            mode_mask, ctx, changes) != 0
                ? -1
@@ -1303,7 +1339,9 @@ int extract_archive(const char *archive_path, const char *output_dir,
   }
 
   Selection sel;
-  if (selection_init(&sel, files, num_files) != 0) {
+  PyObject *skipped_links = PyList_New(0);
+  if (!skipped_links || selection_init(&sel, files, num_files) != 0) {
+    Py_XDECREF(skipped_links);
     if (src)
       fclose(src);
     return -1;
@@ -1339,7 +1377,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
                                     &sel, policy, ctx, &declared_total)
               : extract_entries(archive, reader, output_dir, resolved_root,
                                 &sel, policy, ctx, src ? NULL : ctx, &changes,
-                                &deferred);
+                                &deferred, skipped_links);
 
     // A failed pass keeps its own error
     if (archive->close_reader(reader, ret != 0) != 0 && ret == 0)
@@ -1364,7 +1402,8 @@ int extract_archive(const char *archive_path, const char *output_dir,
 
   // After everything else has been extracted
   if (ret == 0)
-    ret = report_unmatched(&sel, ctx);
+    ret = report_incomplete(&sel, skipped_links, ctx);
+  Py_DECREF(skipped_links);
   free(sel.items);
   return ret;
 }
