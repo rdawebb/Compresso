@@ -120,6 +120,37 @@ class TestRestoreName:
         assert job.run().ok
         assert (temp_dir / "orig.txt").read_bytes() == b"payload"
 
+    @pytest.mark.parametrize(
+        ("mtime", "restore", "restored"),
+        [(1_000_000_000, True, True), (1_000_000_000, False, False), (0, True, False)],
+    )
+    def test_dates_the_output(
+        self, temp_dir: Path, mtime: int, restore: bool, restored: bool
+    ) -> None:
+        """Test the header's MTIME, only on request and only when non-zero."""
+        src = temp_dir / "a.gz"
+        src.write_bytes(gzip.compress(b"payload", mtime=mtime))
+
+        job = DecompressionJob.from_file(src, temp_dir / "a", restore_name=restore)
+        assert job.run().ok
+
+        assert (job.plan.dest.stat().st_mtime == mtime) is restored
+
+    def test_skip_leaves_an_existing_file_undated(self, temp_dir: Path) -> None:
+        """Test that SKIP, which writes nothing, doesn't change the file's time."""
+        src = temp_dir / "a.gz"
+        src.write_bytes(gzip.compress(b"payload", mtime=1_000_000_000))
+        existing = temp_dir / "a"
+        existing.write_bytes(b"old")
+        before = existing.stat().st_mtime
+
+        job = DecompressionJob.from_file(
+            src, overwrite=OverwriteMode.SKIP, restore_name=True
+        )
+        assert job.run().ok
+
+        assert existing.stat().st_mtime == before
+
     def test_ignores_other_formats(self, temp_dir: Path) -> None:
         """Test bzip2, whose fourth header byte happens to set gzip's FNAME bit."""
         src = temp_dir / "renamed.bz2"

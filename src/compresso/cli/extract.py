@@ -139,7 +139,8 @@ def _decompress_one_file(
         list_only: Whether to list entries only.
         overwrite: What to do when the destination file already exists.
         threads: Worker threads for xz, or 0 for one per core.
-        restore_name: Whether to name a gzip file's output as its header does.
+        restore_name: Whether to name and date a gzip file's output as its
+            header does.
         quiet: Whether to suppress output.
     """
     if list_only:
@@ -158,7 +159,11 @@ def _decompress_one_file(
     dest: Path = resolve_single_output(output, job.plan.dest)
     if dest != job.plan.dest:
         job = DecompressionJob.from_file(
-            src=source, dest=dest, overwrite=overwrite, threads=threads
+            src=source,
+            dest=dest,
+            overwrite=overwrite,
+            threads=threads,
+            restore_name=restore_name,
         )
 
     plan = job.plan
@@ -280,7 +285,7 @@ def extract(
         app.Option(
             "--name",
             "-N",
-            help="Name a .gz file's output after the stored name",
+            help="Name and date a .gz file's output as its header does",
         ),
     ] = False,
     quiet: Annotated[
@@ -317,7 +322,7 @@ def extract(
             files, refuse any other archive's).
         threads: Worker threads for xz (default: one per core).
         name: If True, name a gzip file's output after the name its header
-            stores, if any.
+            stores, and give it the stored modification time, if any.
         quiet: If True, suppress all output.
     """
     if sum([overwrite, skip_existing, error_on_conflict]) > 1:
