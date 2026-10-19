@@ -1,7 +1,5 @@
 """Tests for the frontend archive API module."""
 
-import io
-import os
 import struct
 import subprocess
 import sys
@@ -30,7 +28,7 @@ from compresso.frontend.archive_api import (
     plan_extraction,
 )
 
-from ..helpers import renamed
+from ..helpers import dir_entry, file_entry, link_entry, make_tar, renamed, umask
 
 
 class TestArchiveOptions:
@@ -471,9 +469,7 @@ class TestArchiveRoundTrip:
         assert (out_dir / "tree" / "deep" / "leaf.txt").read_bytes() == b"leaf content"
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32", reason="symlink creation needs privilege on Windows"
-)
+@pytest.mark.usefixtures("needs_symlinks")
 class TestArchivingSymlinks:
     """Test that a symlink is archived as a symlink, not as what it points at.
 
@@ -525,34 +521,13 @@ class TestArchivingSymlinks:
         assert names == ["tree", "tree/a.txt", "tree/loop"]
 
 
-def _tar_with_entry(archive_path: Path, entry_name: str) -> None:
-    """Write a tar holding one regular file stored verbatim under `entry_name`.
-
-    Goes through `tarfile` rather than `ArchiveJob` because the point is to
-    store names the archiver itself would never produce.
-
-    Args:
-        archive_path: Where to write the tar.
-        entry_name: The entry name to store, used exactly as given.
-    """
-    payload = b"pwned"
-    with tarfile.open(archive_path, "w", format=tarfile.GNU_FORMAT) as tf:
-        info = tarfile.TarInfo(entry_name)
-        info.size = len(payload)
-        tf.addfile(info, io.BytesIO(payload))
-
-
 class TestExtractionRefusesDeniedEntryTypes:
     """Test that the default policy refuses symlink entries."""
 
     def test_refuses_a_symlink(self, tmp_path: Path) -> None:
         """Test that the entry is refused by policy, naming what it is."""
         archive_path = tmp_path / "typed.tar"
-        with tarfile.open(archive_path, "w", format=tarfile.GNU_FORMAT) as tf:
-            info = tarfile.TarInfo("entry")
-            info.type = tarfile.SYMTYPE
-            info.linkname = "target"
-            tf.addfile(info)
+        make_tar(archive_path, link_entry("entry", "target", kind=tarfile.SYMTYPE))
 
         result = ExtractJob.from_archive(archive_path, tmp_path / "out").run()
 
@@ -563,11 +538,7 @@ class TestExtractionRefusesDeniedEntryTypes:
     def test_symlink_mode_reaches_the_policy(self, tmp_path: Path) -> None:
         """Test that `symlinks`, given as a plain string, is passed through."""
         archive_path = tmp_path / "link.tar"
-        with tarfile.open(archive_path, "w", format=tarfile.GNU_FORMAT) as tf:
-            info = tarfile.TarInfo("entry")
-            info.type = tarfile.SYMTYPE
-            info.linkname = "target"
-            tf.addfile(info)
+        make_tar(archive_path, link_entry("entry", "target", kind=tarfile.SYMTYPE))
         out = tmp_path / "out"
 
         options = ExtractOptions(symlinks="file")  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
@@ -622,7 +593,7 @@ class TestExtractionRefusesUnsafePaths:
     def test_rejects_absolute_entry(self, tmp_path: Path, entry_name: str) -> None:
         """Test that an absolute or drive-qualified entry name fails extraction."""
         archive_path = tmp_path / "evil.tar"
-        _tar_with_entry(archive_path, entry_name)
+        make_tar(archive_path, file_entry(entry_name))
 
         result = ExtractJob.from_archive(archive_path, tmp_path / "out").run()
 
@@ -634,7 +605,7 @@ class TestExtractionRefusesUnsafePaths:
     def test_rejects_parent_traversal(self, tmp_path: Path, entry_name: str) -> None:
         """Test that an entry climbing out of the output directory is refused."""
         archive_path = tmp_path / "evil.tar"
-        _tar_with_entry(archive_path, entry_name)
+        make_tar(archive_path, file_entry(entry_name))
 
         result = ExtractJob.from_archive(archive_path, tmp_path / "out").run()
 
@@ -651,7 +622,7 @@ class TestExtractionRefusesUnsafePaths:
         platform's verdict.
         """
         archive_path = tmp_path / "evil.tar"
-        _tar_with_entry(archive_path, "..\\..\\escape.txt")
+        make_tar(archive_path, file_entry("..\\..\\escape.txt"))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
@@ -666,7 +637,7 @@ class TestExtractionRefusesUnsafePaths:
 
         else:
             assert result.ok, result.error
-            assert (out_dir / "..\\..\\escape.txt").read_bytes() == b"pwned"
+            assert (out_dir / "..\\..\\escape.txt").read_bytes() == b"x"
 
     @pytest.mark.parametrize(
         "entry_name", ["notes.txt:evil.exe", "notes.txt:evil.exe:$DATA"]
@@ -682,7 +653,7 @@ class TestExtractionRefusesUnsafePaths:
         rejection only where it applies.
         """
         archive_path = tmp_path / "evil.tar"
-        _tar_with_entry(archive_path, entry_name)
+        make_tar(archive_path, file_entry(entry_name))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
@@ -696,11 +667,9 @@ class TestExtractionRefusesUnsafePaths:
 
         else:
             assert result.ok, result.error
-            assert (out_dir / entry_name).read_bytes() == b"pwned"
+            assert (out_dir / entry_name).read_bytes() == b"x"
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="symlink creation needs privilege on Windows"
-    )
+    @pytest.mark.usefixtures("needs_symlinks")
     def test_rejects_entry_writing_through_a_symlinked_component(
         self, tmp_path: Path
     ) -> None:
@@ -712,7 +681,7 @@ class TestExtractionRefusesUnsafePaths:
         (out_dir / "link").symlink_to(outside, target_is_directory=True)
 
         archive_path = tmp_path / "evil.tar"
-        _tar_with_entry(archive_path, "link/sub/escape.txt")
+        make_tar(archive_path, file_entry("link/sub/escape.txt"))
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
 
@@ -742,7 +711,7 @@ class TestExtractionRefusesUnsafePaths:
         )
 
         archive_path = tmp_path / "evil.tar"
-        _tar_with_entry(archive_path, "link/sub/escape.txt")
+        make_tar(archive_path, file_entry("link/sub/escape.txt"))
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
 
@@ -759,56 +728,13 @@ class TestExtractionRefusesUnsafePaths:
         byte after the resolved root prefix, which is a backslash on Windows.
         """
         archive_path = tmp_path / "nested.tar"
-        _tar_with_entry(archive_path, "sub/deep/leaf.txt")
+        make_tar(archive_path, file_entry("sub/deep/leaf.txt"))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
 
         assert result.ok, result.error
-        assert (out_dir / "sub" / "deep" / "leaf.txt").read_bytes() == b"pwned"
-
-
-def _tar_with_entries(archive_path: Path, entries: list[tarfile.TarInfo]) -> None:
-    """Write a tar holding `entries`, each with `size` bytes of filler.
-
-    Args:
-        archive_path: Where to write the tar.
-        entries: Entry headers to store, used exactly as given.
-    """
-    with tarfile.open(archive_path, "w", format=tarfile.GNU_FORMAT) as tf:
-        for info in entries:
-            data = io.BytesIO(b"x" * info.size) if info.size else None
-            tf.addfile(info, data)
-
-
-def _file_entry(name: str, size: int = 5) -> tarfile.TarInfo:
-    """Build a regular-file tar header of `size` bytes.
-
-    Args:
-        name: Entry name to store.
-        size: Size of the entry's filler payload.
-
-    Returns:
-        The tar header.
-    """
-    info = tarfile.TarInfo(name)
-    info.size = size
-    return info
-
-
-def _dir_entry(name: str) -> tarfile.TarInfo:
-    """Build a directory tar header.
-
-    Args:
-        name: Entry name to store.
-
-    Returns:
-        The tar header.
-    """
-    info = tarfile.TarInfo(name)
-    info.type = tarfile.DIRTYPE
-    info.mode = 0o755
-    return info
+        assert (out_dir / "sub" / "deep" / "leaf.txt").read_bytes() == b"x"
 
 
 class TestExtractionSizeCap:
@@ -817,7 +743,7 @@ class TestExtractionSizeCap:
     def test_no_cap_by_default(self, tmp_path: Path) -> None:
         """Test that the shipped default places no limit on extracted bytes."""
         archive_path = tmp_path / "big.tar"
-        _tar_with_entries(archive_path, [_file_entry("big.bin", 200_000)])
+        make_tar(archive_path, file_entry("big.bin", 200_000))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
@@ -828,7 +754,7 @@ class TestExtractionSizeCap:
     def test_refuses_archive_over_the_cap(self, tmp_path: Path) -> None:
         """Test that a total past the cap is refused with nothing written."""
         archive_path = tmp_path / "bomb.tar"
-        _tar_with_entries(archive_path, [_file_entry("big.bin", 200_000)])
+        make_tar(archive_path, file_entry("big.bin", 200_000))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(
@@ -843,9 +769,7 @@ class TestExtractionSizeCap:
     def test_cap_applies_to_the_total_not_each_entry(self, tmp_path: Path) -> None:
         """Test that entries individually under the cap still fail in total."""
         archive_path = tmp_path / "many.tar"
-        _tar_with_entries(
-            archive_path, [_file_entry(f"f{i}.bin", 400) for i in range(10)]
-        )
+        make_tar(archive_path, *(file_entry(f"f{i}.bin", 400) for i in range(10)))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(
@@ -859,7 +783,7 @@ class TestExtractionSizeCap:
     def test_entry_under_the_cap_extracts(self, tmp_path: Path) -> None:
         """Test that the cap does not over-reject an archive that fits."""
         archive_path = tmp_path / "small.tar"
-        _tar_with_entries(archive_path, [_file_entry("small.bin", 500)])
+        make_tar(archive_path, file_entry("small.bin", 500))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(
@@ -903,7 +827,7 @@ class TestExtractionDepthLimit:
         """Test that an entry nested past the default limit is refused."""
         archive_path = tmp_path / "deep.tar"
         name = "/".join(f"d{i}" for i in range(40)) + "/leaf.txt"
-        _tar_with_entries(archive_path, [_file_entry(name)])
+        make_tar(archive_path, file_entry(name))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
@@ -917,7 +841,7 @@ class TestExtractionDepthLimit:
         """Test that an entry just inside the limit still extracts."""
         archive_path = tmp_path / "deep.tar"
         parts = [f"d{i}" for i in range(31)]
-        _tar_with_entries(archive_path, [_file_entry("/".join([*parts, "leaf.txt"]))])
+        make_tar(archive_path, file_entry("/".join([*parts, "leaf.txt"])))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
@@ -928,7 +852,7 @@ class TestExtractionDepthLimit:
     def test_depth_limit_is_configurable(self, tmp_path: Path) -> None:
         """Test that a tighter limit refuses what the default accepts."""
         archive_path = tmp_path / "nested.tar"
-        _tar_with_entries(archive_path, [_file_entry("a/b/c/leaf.txt")])
+        make_tar(archive_path, file_entry("a/b/c/leaf.txt"))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(
@@ -954,7 +878,7 @@ class TestExtractionOverwrite:
             The archive path and the output directory.
         """
         archive_path = tmp_path / "one.tar"
-        _tar_with_entries(archive_path, [_file_entry("a.txt")])
+        make_tar(archive_path, file_entry("a.txt"))
 
         out_dir = tmp_path / "out"
         out_dir.mkdir()
@@ -971,7 +895,7 @@ class TestExtractionOverwrite:
         assert result.ok, result.error
         assert (out_dir / "a.txt").read_bytes() == b"original"
         sibling = out_dir / renamed("a.txt")
-        assert sibling.read_bytes() == b"xxxxx"
+        assert sibling.read_bytes() == b"x"
 
     def test_rename_increments_through_repeated_conflicts(self, tmp_path: Path) -> None:
         """Test that a third clash gets " 3", not another " 2"."""
@@ -1019,7 +943,7 @@ class TestExtractionOverwrite:
         ).run()
 
         assert result.ok, result.error
-        assert (out_dir / "a.txt").read_bytes() == b"xxxxx"
+        assert (out_dir / "a.txt").read_bytes() == b"x"
 
     @staticmethod
     def _archive_with_dir_and_blocking_file(tmp_path: Path) -> tuple[Path, Path]:
@@ -1032,7 +956,7 @@ class TestExtractionOverwrite:
             The archive path and the output directory.
         """
         archive_path = tmp_path / "dir.tar"
-        _tar_with_entries(archive_path, [_dir_entry("d")])
+        make_tar(archive_path, dir_entry("d"))
 
         out_dir = tmp_path / "out"
         out_dir.mkdir()
@@ -1056,7 +980,7 @@ class TestExtractionOverwrite:
     ) -> None:
         """Test that entries nested under the renamed directory follow it."""
         archive_path = tmp_path / "dir.tar"
-        _tar_with_entries(archive_path, [_dir_entry("d"), _file_entry("d/inside.txt")])
+        make_tar(archive_path, dir_entry("d"), file_entry("d/inside.txt"))
 
         out_dir = tmp_path / "out"
         out_dir.mkdir()
@@ -1071,7 +995,7 @@ class TestExtractionOverwrite:
         assert result.ok, result.error
         sibling = out_dir / renamed("d")
         assert sibling.is_dir()
-        assert (sibling / "inside.txt").read_bytes() == b"xxxxx"
+        assert (sibling / "inside.txt").read_bytes() == b"x"
         # The original "d" is untouched, and nothing was created back under it
         assert (out_dir / "d").read_bytes() == b"blocking file"
 
@@ -1080,14 +1004,12 @@ class TestExtractionOverwrite:
     ) -> None:
         """Test that a second clash below an already-renamed ancestor composes."""
         archive_path = tmp_path / "dir.tar"
-        _tar_with_entries(
+        make_tar(
             archive_path,
-            [
-                _dir_entry("a"),
-                _file_entry(f"{renamed('a')}/b"),
-                _dir_entry("a/b"),
-                _file_entry("a/b/inside.txt"),
-            ],
+            dir_entry("a"),
+            file_entry(f"{renamed('a')}/b"),
+            dir_entry("a/b"),
+            file_entry("a/b/inside.txt"),
         )
 
         out_dir = tmp_path / "out"
@@ -1102,10 +1024,10 @@ class TestExtractionOverwrite:
 
         assert result.ok, result.error
         renamed_a = out_dir / renamed("a")
-        assert (renamed_a / "b").read_bytes() == b"xxxxx"  # the unrelated entry
+        assert (renamed_a / "b").read_bytes() == b"x"  # the unrelated entry
         renamed_b = renamed_a / renamed("b")
         assert renamed_b.is_dir()
-        assert (renamed_b / "inside.txt").read_bytes() == b"xxxxx"
+        assert (renamed_b / "inside.txt").read_bytes() == b"x"
         # Nothing was planted back under the archive's own, un-renamed "a/b"
         assert not (out_dir / "a" / "b").exists()
 
@@ -1115,7 +1037,7 @@ class TestExtractionOverwrite:
         """Test that re-extracting over an existing directory renames the
         directory itself rather than merging into it."""
         archive_path = tmp_path / "dir.tar"
-        _tar_with_entries(archive_path, [_dir_entry("d"), _file_entry("d/inside.txt")])
+        make_tar(archive_path, dir_entry("d"), file_entry("d/inside.txt"))
 
         out_dir = tmp_path / "out"
         out_dir.mkdir()
@@ -1132,7 +1054,7 @@ class TestExtractionOverwrite:
         assert sibling.is_dir()
         # The nested file lands under the renamed directory with its own
         # name unchanged - not doubled up or given its own " 2" suffix
-        assert (sibling / "inside.txt").read_bytes() == b"xxxxx"
+        assert (sibling / "inside.txt").read_bytes() == b"x"
 
     def test_dir_clash_with_an_existing_dir_renames_subdirs_too(
         self, tmp_path: Path
@@ -1141,13 +1063,11 @@ class TestExtractionOverwrite:
         the rename instead of being merged into the pre-existing tree, which
         would otherwise leave the files beneath them doubled up."""
         archive_path = tmp_path / "dir.tar"
-        _tar_with_entries(
+        make_tar(
             archive_path,
-            [
-                _dir_entry("d"),
-                _dir_entry("d/sub"),
-                _file_entry("d/sub/inside.txt"),
-            ],
+            dir_entry("d"),
+            dir_entry("d/sub"),
+            file_entry("d/sub/inside.txt"),
         )
 
         out_dir = tmp_path / "out"
@@ -1168,7 +1088,7 @@ class TestExtractionOverwrite:
         sibling = out_dir / renamed("d")
         assert sibling.is_dir()
         assert sorted(p.name for p in sibling.iterdir()) == ["sub"]
-        assert (sibling / "sub" / "inside.txt").read_bytes() == b"xxxxx"
+        assert (sibling / "sub" / "inside.txt").read_bytes() == b"x"
 
     def test_dir_clash_with_a_file_errors_in_error_mode(self, tmp_path: Path) -> None:
         """Test that explicit `error` also refuses, not the old silent no-op."""
@@ -1241,7 +1161,7 @@ def _extract_plan(tmp_path: Path, overwrite: str) -> ExtractPlan:
         The extraction plan.
     """
     archive_path = tmp_path / "one.tar"
-    _tar_with_entries(archive_path, [_file_entry("a.txt")])
+    make_tar(archive_path, file_entry("a.txt"))
     options = ExtractOptions(overwrite=overwrite)  # ty: ignore
 
     return ExtractJob.from_archive(archive_path, tmp_path / "out", options=options).plan
@@ -1292,10 +1212,7 @@ class TestExtractionMetadata:
             mtime: Modification time to store, in seconds since the epoch.
             mode: Permission bits to store.
         """
-        info = _file_entry("a.txt")
-        info.mtime = mtime
-        info.mode = mode
-        _tar_with_entries(archive_path, [info])
+        make_tar(archive_path, file_entry("a.txt", mode=mode, mtime=mtime))
 
     def test_restores_mtime_by_default(self, tmp_path: Path) -> None:
         """Test that the entry's modification time survives extraction."""
@@ -1332,9 +1249,9 @@ class TestExtractionMetadata:
     ) -> None:
         """Test that only the opt-in re-dates a directory that already exists."""
         archive_path = tmp_path / "meta.tar"
-        directory = _dir_entry("d")
-        directory.mtime = 1_000_000_000
-        _tar_with_entries(archive_path, [directory, _file_entry("d/a.txt")])
+        make_tar(
+            archive_path, dir_entry("d", mtime=1_000_000_000), file_entry("d/a.txt")
+        )
         out_dir = tmp_path / "out"
         (out_dir / "d").mkdir(parents=True)
 
@@ -1398,7 +1315,7 @@ class TestExtractionMetadata:
 
         assert result.ok, result.error
         created = (out_dir / "a.txt").stat().st_mode & 0o777
-        assert created == 0o666 & ~_umask()
+        assert created == 0o666 & ~umask()
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="Windows has no POSIX permission bits"
@@ -1426,7 +1343,7 @@ class TestExtractionMetadata:
 
         assert result.ok, result.error
         if not exact:
-            expected &= ~_umask()
+            expected &= ~umask()
         assert (out_dir / "a.txt").stat().st_mode & 0o7777 == expected
 
     @pytest.mark.skipif(
@@ -1435,26 +1352,13 @@ class TestExtractionMetadata:
     def test_directory_mode_is_masked_too(self, tmp_path: Path) -> None:
         """Test that a directory loses setgid and the umask's bits by default."""
         archive_path = tmp_path / "meta.tar"
-        directory = _dir_entry("d")
-        directory.mode = 0o2777
-        _tar_with_entries(archive_path, [directory])
+        make_tar(archive_path, dir_entry("d", 0o2777))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
 
         assert result.ok, result.error
-        assert (out_dir / "d").stat().st_mode & 0o7777 == 0o777 & ~_umask()
-
-
-def _umask() -> int:
-    """Read the process umask without leaving it changed.
-
-    Returns:
-        The current umask.
-    """
-    current = os.umask(0)
-    os.umask(current)
-    return current
+        assert (out_dir / "d").stat().st_mode & 0o7777 == 0o777 & ~umask()
 
 
 class TestExtractionIsAllOrNothing:
@@ -1463,9 +1367,7 @@ class TestExtractionIsAllOrNothing:
     def test_later_bad_entry_blocks_the_earlier_good_one(self, tmp_path: Path) -> None:
         """Test that an escape in the second entry keeps the first off disk."""
         archive_path = tmp_path / "mixed.tar"
-        _tar_with_entries(
-            archive_path, [_file_entry("good.txt"), _file_entry("../escape.txt")]
-        )
+        make_tar(archive_path, file_entry("good.txt"), file_entry("../escape.txt"))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
@@ -1481,13 +1383,13 @@ class TestExtractionIsAllOrNothing:
     ) -> None:
         """Test that `..data` is a filename, not a traversal."""
         archive_path = tmp_path / "dots.tar"
-        _tar_with_entries(archive_path, [_file_entry("..data")])
+        make_tar(archive_path, file_entry("..data"))
         out_dir = tmp_path / "out"
 
         result = ExtractJob.from_archive(archive_path, out_dir).run()
 
         assert result.ok, result.error
-        assert (out_dir / "..data").read_bytes() == b"xxxxx"
+        assert (out_dir / "..data").read_bytes() == b"x"
 
 
 BIG_PAYLOAD = b"compressible " * 4000

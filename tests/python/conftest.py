@@ -44,6 +44,23 @@ def speeds_file(
 
 
 @pytest.fixture
+def needs_symlinks(tmp_path: Path) -> None:
+    """Skip unless this process may create symlinks, which Windows restricts.
+
+    Args:
+        tmp_path: Pytest temporary path fixture.
+    """
+    probe = tmp_path / "symlink-probe"
+    try:
+        probe.symlink_to("x")
+
+    except OSError:
+        pytest.skip("symlinks need privilege")
+
+    probe.unlink()
+
+
+@pytest.fixture
 def sample_text_file(tmp_path: Path) -> Path:
     """Create a sample text file for testing.
 

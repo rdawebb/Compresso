@@ -42,7 +42,7 @@ from compresso.frontend.archive_api import (
     ExtractJob,
 )
 
-from .helpers import renamed
+from .helpers import file_entry, link_entry, make_tar, renamed, umask
 
 runner = CliRunner()
 
@@ -553,27 +553,18 @@ class TestArchiveRoundTrip:
     ) -> None:
         """Test that -p restores an entry's mode without the umask applied."""
         archive = tmp_path / "modes.tar"
-        info = tarfile.TarInfo("a.txt")
-        info.mode = 0o777
-        with tarfile.open(archive, "w") as tar:
-            tar.addfile(info)
+        make_tar(archive, file_entry("a.txt", mode=0o777))
         dest = tmp_path / "dest"
 
         invoke("extract", archive, "-o", dest, *(["-p"] if exact else []), "-q")
 
-        umask = os.umask(0)
-        os.umask(umask)
-        expected = 0o777 if exact else 0o777 & ~umask
+        expected = 0o777 if exact else 0o777 & ~umask()
         assert (dest / "a.txt").stat().st_mode & 0o7777 == expected
 
     def test_symlinks_flag_reaches_the_policy(self, tmp_path: Path) -> None:
         """Test that a symlink refused by default extracts with `--symlinks file`."""
         archive = tmp_path / "link.tar"
-        info = tarfile.TarInfo("link")
-        info.type = tarfile.SYMTYPE
-        info.linkname = "target"
-        with tarfile.open(archive, "w") as tar:
-            tar.addfile(info)
+        make_tar(archive, link_entry("link", "target", kind=tarfile.SYMTYPE))
         dest = tmp_path / "dest"
 
         invoke("extract", archive, "-o", dest, "-q", expect=EXIT_FAILED)
