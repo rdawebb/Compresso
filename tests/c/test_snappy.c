@@ -37,7 +37,7 @@ void tearDown(void) {
 
 static int run(int decompress, const char *in, const char *out) {
   CodecParams params = {0};
-  return codec_run_file(codec_snappy_ops(), &params, decompress, in,
+  return codec_run_source(codec_snappy_ops(), &params, decompress, in, NULL,
                         OVERWRITE_TO(out), test_ctx(), "snappy run failed");
 }
 

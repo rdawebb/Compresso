@@ -171,15 +171,13 @@ int fs_rmdir(const char *path);
 // Rename `from` to `to`, failing with EEXIST if `to` exists unless `replace`
 int fs_rename(const char *from, const char *to, int replace);
 
-// Hardlink `new_path` to `existing`, which is never followed if it is a
-// symlink; -1 with errno set (EEXIST if `new_path` exists, EXDEV across
-// filesystems)
+// Hardlink `new_path` to `existing`; symlinks never followed; -1 with errno set
+// (EEXIST if `new_path` exists, EXDEV across filesystems)
 int fs_link(const char *existing, const char *new_path);
 
 // Symlink `link_path` to `target`, stored unresolved; -1 with errno set
-// (EEXIST if `link_path` exists, EPERM on Windows without Developer Mode or
-// admin rights); on Windows, a target that is already a directory gets a
-// directory link
+// (EEXIST if `link_path` exists, EPERM on Windows without Developer Mode/admin
+// rights); on Windows, a target that is a directory gets a directory link
 int fs_symlink(const char *target, const char *link_path);
 
 // Whether this process can create a node of `type` (fs_stat.special's values):

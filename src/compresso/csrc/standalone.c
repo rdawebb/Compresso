@@ -17,8 +17,8 @@ int standalone_compress(const FormatDesc *fmt, const char *input_path,
   params.threads = ctx ? ctx->threads : 0;
   char failure[64];
   snprintf(failure, sizeof(failure), "%s compression failed", fmt->name);
-  return codec_run_file(fmt->engine(), &params, 0, input_path, out, ctx,
-                        failure);
+  return codec_run_source(fmt->engine(), &params, 0, input_path, NULL, out, ctx,
+                          failure);
 }
 
 int standalone_decompress(const FormatDesc *fmt, const char *input_path,
@@ -61,7 +61,7 @@ char *gzip_original_name(const char *compressed_path) {
   if (flags & FEXTRA) {
     uint8_t xlen_buf[2];
     if (fread(xlen_buf, sizeof(xlen_buf), 1, f) != 1 ||
-        fseek(f, read_le16(xlen_buf), SEEK_CUR) != 0) {
+        fseek(f, (long)get_le(xlen_buf, 2), SEEK_CUR) != 0) {
       fclose(f);
       return NULL;
     }

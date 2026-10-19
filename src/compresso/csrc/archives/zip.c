@@ -2,6 +2,7 @@
 #include <Python.h>
 #include "../archives.h"
 #include "../common.h"
+#include "archive_ops.h"
 #include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -627,6 +628,10 @@ static int zip_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
   return 1; // Entry retrieved
 }
 
+static int64_t zip_read(void *zf, void *buf, size_t len) {
+  return zip_fread(zf, buf, len);
+}
+
 static int zip_extract_entry_data(void *reader_ptr, FILE *output,
                                   uint64_t max_bytes, uint64_t *bytes_written,
                                   CoreContext *ctx) {
@@ -643,67 +648,15 @@ static int zip_extract_entry_data(void *reader_ptr, FILE *output,
     return -1;
   }
 
-  zip_int64_t bytes_read;
-  uint64_t total = 0;
-  int over_limit = 0;
-  int advance = 0;
-
-  Py_BEGIN_ALLOW_THREADS
-
-  while ((bytes_read = zip_fread(zf, buffer, CODEC_CHUNK)) > 0) {
-    // Cap is applied to the bytes produced rather than to the declared size
-    if ((uint64_t)bytes_read > max_bytes - total) {
-      over_limit = 1;
-      break;
-    }
-
-    size_t written = fwrite(buffer, 1, bytes_read, output);
-    if (written != (size_t)bytes_read || ferror(output)) {
-      Py_BLOCK_THREADS
-      PyErr_SetFromErrno(PyExc_OSError);
-      zip_fclose(zf);
-      return -1;
-    }
-    total += (uint64_t)bytes_read;
-
-    advance = ctx_advance(ctx, (size_t)bytes_read);
-    if (advance != 0) {
-      break;
-    }
-  }
-
-  Py_END_ALLOW_THREADS
-
-  if (bytes_written)
-    *bytes_written = total;
-
-  if (advance != 0) {
-    zip_fclose(zf);
-    return advance;
-  }
-
-  if (over_limit) {
-    zip_fclose(zf);
-    PyErr_SetString(reader->errors->extraction_policy,
-                    "Archive exceeds the maximum extracted size");
-    return -1;
-  }
-
-  if (bytes_read < 0) {
+  int rc = copy_entry_data(zip_read, zf, buffer, output, max_bytes,
+                           bytes_written, reader->errors, ctx);
+  if (rc == 1) {
     set_zip_error(reader->errors, zip_file_get_error(zf),
                   "Error reading from archive", reader->input_path, 1, 0);
-    zip_fclose(zf);
-    return -1;
+    rc = -1;
   }
-
   zip_fclose(zf);
-  return 0;
-}
-
-static int zip_skip_entry(void *reader_ptr) {
-  (void)reader_ptr;
-  // ZIP reader moves to next entry by default
-  return 0;
+  return rc;
 }
 
 static int zip_close_reader(void *reader_ptr, int discard) {
@@ -731,16 +684,6 @@ static int zip_close_reader(void *reader_ptr, int discard) {
   return 0;
 }
 
-// ---- Capability Functions ----
-
-static int zip_supports_compression(void) {
-  return 1; // ZIP has built-in DEFLATE compression
-}
-
-static int zip_supports_streaming(void) {
-  return 0; // libzip requires seekable files
-}
-
 // ---- Backend Definition ----
 
 const CArchive ZIP_ARCHIVE = {
@@ -749,14 +692,12 @@ const CArchive ZIP_ARCHIVE = {
     // Links have always extracted as files of their target text
     .default_symlinks = 2,
     .reads_sources = 1,
-    .supports_compression = zip_supports_compression,
-    .supports_streaming = zip_supports_streaming,
+    .compression = 1, // DEFLATE; libzip needs a seekable file, so no streaming
     .create_writer = zip_create_writer,
     .add_entry = zip_add_entry,
     .close_writer = zip_close_writer,
     .create_reader = zip_create_reader,
     .get_next_entry = zip_get_next_entry,
     .extract_entry_data = zip_extract_entry_data,
-    .skip_entry_data = zip_skip_entry,
     .close_reader = zip_close_reader,
 };

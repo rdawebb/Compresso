@@ -1,4 +1,5 @@
 #include "crc32c.h"
+#include "../le.h"
 #include <assert.h>
 #include <string.h>
 
@@ -22,15 +23,10 @@ typedef uint32_t (*Update)(uint32_t, const unsigned char *, size_t);
 static uint32_t TABLE[8][256];
 static Update update;
 
-static uint32_t load_le32(const unsigned char *p) {
-  return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
-         (uint32_t)p[3] << 24;
-}
-
 // Slicing-by-8: one lookup per byte, but eight independent ones per step
 static uint32_t update_table(uint32_t crc, const unsigned char *p, size_t n) {
   for (; n >= 8; p += 8, n -= 8) {
-    uint32_t lo = crc ^ load_le32(p), hi = load_le32(p + 4);
+    uint32_t lo = crc ^ (uint32_t)get_le(p, 4), hi = (uint32_t)get_le(p + 4, 4);
     crc = TABLE[7][lo & 0xFF] ^ TABLE[6][(lo >> 8) & 0xFF] ^
           TABLE[5][(lo >> 16) & 0xFF] ^ TABLE[4][lo >> 24] ^
           TABLE[3][hi & 0xFF] ^ TABLE[2][(hi >> 8) & 0xFF] ^
@@ -86,8 +82,7 @@ static uint32_t update_arm(uint32_t crc, const unsigned char *p, size_t n) {
 #endif
 
 void crc32c_init(void) {
-  // Each import of the module runs this again, possibly while another thread
-  // is mid-crc32c
+  // Each module import runs this, possibly while another thread is mid-crc32c
   if (update)
     return;
   for (uint32_t b = 0; b < 256; b++) {

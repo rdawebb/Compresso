@@ -115,14 +115,9 @@ int codec_reader_close(CodecStream *s);
 int codec_run_stream(const CodecOps *ops, const CodecParams *params,
                      int decompress, FILE *src, FILE *dst, CoreContext *ctx);
 
-// codec_run_stream from a path into `out`, through output_check, output_open
-// and output_finish, to which `failure_message` is passed
-int codec_run_file(const CodecOps *ops, const CodecParams *params,
-                   int decompress, const char *input_path,
-                   const OutputTarget *out, CoreContext *ctx,
-                   const char *failure_message);
-
-// codec_run_file over `input`, already open on `input_path` (NULL to open it)
+// codec_run_stream from `input`, already open on `input_path` (NULL to open
+// it), into `out`, through output_check, output_open and output_finish, to
+// which `failure_message` is passed
 int codec_run_source(const CodecOps *ops, const CodecParams *params,
                      int decompress, const char *input_path, FILE *input,
                      const OutputTarget *out, CoreContext *ctx,

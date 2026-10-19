@@ -61,15 +61,13 @@ static void set_failure(const CompErrors *errors, const CodecOps *ops,
     return;
   case FAIL_CODEC: {
     int corrupt = 0;
-    const char *message = ops->describe
-                              ? ops->describe(state, codec_label(ops, params),
-                                              decompress, &corrupt)
-                              : NULL;
+    const char *message =
+        ops->describe(state, codec_label(ops, params), decompress, &corrupt);
     if (message) {
       PyErr_SetString(corrupt ? errors->corrupt_data : errors->backend,
                       message);
     }
-    return; // No describe: the caller applies its own fallback
+    return; // No message: the caller applies its own fallback
   }
   case FAIL_NONE:
     return;
@@ -152,8 +150,7 @@ static CodecStream *stream_open(const CodecOps *ops, const CodecParams *params,
   s->ctx = ctx;
   s->out_size = ops->out_chunk ? ops->out_chunk : CODEC_CHUNK;
 
-  // A stateless engine is allowed, so a NULL state isn't a failure by itself
-  if (ops->state_size && !(s->state = calloc(1, ops->state_size))) {
+  if (!(s->state = calloc(1, ops->state_size))) {
     PyErr_NoMemory();
     free(s);
     return NULL;
@@ -483,14 +480,6 @@ int codec_run_stream(const CodecOps *ops, const CodecParams *params,
 
   free(chunk);
   return err; // 0, -1, or COMP_CANCELLED
-}
-
-int codec_run_file(const CodecOps *ops, const CodecParams *params,
-                   int decompress, const char *input_path,
-                   const OutputTarget *out, CoreContext *ctx,
-                   const char *failure_message) {
-  return codec_run_source(ops, params, decompress, input_path, NULL, out, ctx,
-                          failure_message);
 }
 
 int codec_run_source(const CodecOps *ops, const CodecParams *params,

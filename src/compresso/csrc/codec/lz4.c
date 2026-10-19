@@ -9,9 +9,8 @@
 // LZ4F_compressUpdate calls, so it is fed a fixed amount whatever CODEC_CHUNK is
 #define LZ4_FEED 65536
 
-// LZ4F_compressUpdate needs room for every block a call completes: with the
-// default 64 KB blocks, at most one per 64 KB of input, each with a 4-byte
-// header, which this covers
+// Room for every block one LZ4F_compressUpdate call can complete: with the
+// default 64 KB blocks, at most one per 64 KB fed, plus a 4-byte header each
 #define LZ4_OUT_CHUNK (LZ4_FEED + LZ4_FEED / 255 + 16)
 
 typedef struct {
@@ -38,7 +37,6 @@ static int lz4_begin(void *state, const CodecParams *params, int decompress,
     return -1;
   }
 
-  memset(&s->prefs, 0, sizeof(s->prefs));
   assert(level_in_range((LevelRange)LEVELS_LZ4, params->level));
   s->prefs.compressionLevel = params->level < 0 ? 0 : params->level;
 

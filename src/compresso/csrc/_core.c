@@ -14,13 +14,14 @@ typedef struct {
   COMPRESSO_ATOMIC_INT flag; // One-way
 } CancelTokenObject;
 
-static PyObject *cancel_token_cancel(PyObject *self, PyObject *ignored UNUSED) {
+static PyObject *cancel_token_cancel(PyObject *self,
+                                     PyObject *Py_UNUSED(ignored)) {
   comp_atomic_store(&((CancelTokenObject *)self)->flag, 1);
   Py_RETURN_NONE;
 }
 
 static PyObject *cancel_token_get_cancelled(PyObject *self,
-                                            void *closure UNUSED) {
+                                            void *Py_UNUSED(closure)) {
   return PyBool_FromLong(comp_atomic_load(&((CancelTokenObject *)self)->flag));
 }
 
@@ -159,13 +160,24 @@ static int core_context_init(CoreContext *ctx, PyObject *module,
   return 0;
 }
 
-// Call only on a non-zero return; an exception already raised by the callback
-// or a signal handler is more specific
-static void set_cancelled_error(PyObject *module, int return_code) {
-  if (return_code == COMP_CANCELLED && !PyErr_Occurred()) {
-    const CompErrors *errors = PyModule_GetState(module);
-    PyErr_SetString(errors->cancelled, "Operation cancelled");
+// Each call's tail: raises a failure, or finishes the progress and returns the
+// path actually written (RENAME may change it), or None for a NULL path; `ctx`
+// is only read on success
+static PyObject *finish_call(PyObject *module, int rc, CoreContext *ctx,
+                             const char *actual_path) {
+  if (rc != 0) {
+    // An exception raised by callback or a signal handler is more specific
+    if (rc == COMP_CANCELLED && !PyErr_Occurred()) {
+      const CompErrors *errors = PyModule_GetState(module);
+      PyErr_SetString(errors->cancelled, "Operation cancelled");
+    }
+    return NULL;
   }
+  if (ctx_finish(ctx) != 0)
+    return NULL;
+  if (!actual_path)
+    Py_RETURN_NONE;
+  return PyUnicode_DecodeFSDefault(actual_path);
 }
 
 // ---- Path Conversion ----
@@ -297,17 +309,7 @@ static PyObject *py_compress_file(PyObject *self, PyObject *args,
 done:
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
-  if (result != 0) {
-    set_cancelled_error(self, result);
-    return NULL; // Error already set
-  }
-
-  if (ctx_finish(&ctx) != 0) {
-    return NULL;
-  }
-
-  // The path actually written, which RENAME may have changed vs asked for
-  return PyUnicode_DecodeFSDefault(actual_path);
+  return finish_call(self, result, &ctx, actual_path);
 }
 
 static PyObject *py_decompress_file(PyObject *self, PyObject *args,
@@ -355,17 +357,7 @@ static PyObject *py_decompress_file(PyObject *self, PyObject *args,
 done:
   Py_DECREF(src_path_bytes);
   Py_DECREF(dst_path_bytes);
-  if (result != 0) {
-    set_cancelled_error(self, result);
-    return NULL; // Error already set
-  }
-
-  if (ctx_finish(&ctx) != 0) {
-    return NULL;
-  }
-
-  // The path actually written, which RENAME may have changed vs asked for
-  return PyUnicode_DecodeFSDefault(actual_path);
+  return finish_call(self, result, &ctx, actual_path);
 }
 
 // ---- Archive Operations ----
@@ -419,18 +411,7 @@ static PyObject *py_create_archive(PyObject *self, PyObject *args,
 done:
   Py_DECREF(output_path_bytes);
   path_list_converter(NULL, &inputs);
-  if (result != 0) {
-    set_cancelled_error(self, result);
-    return NULL; // Error already set
-  }
-
-  if (ctx_finish(&ctx) != 0) {
-    return NULL;
-  }
-
-  // The path actually written, which RENAME may have changed from what was
-  // asked for
-  return PyUnicode_DecodeFSDefault(actual_path);
+  return finish_call(self, result, &ctx, actual_path);
 }
 
 static PyObject *py_extract_archive(PyObject *self, PyObject *args,
@@ -547,16 +528,7 @@ done:
   Py_DECREF(output_dir_bytes);
   free(files);
   Py_XDECREF(files_tuple);
-  if (result != 0) {
-    set_cancelled_error(self, result);
-    return NULL; // Error already set
-  }
-
-  if (ctx_finish(&ctx) != 0) {
-    return NULL;
-  }
-
-  Py_RETURN_NONE;
+  return finish_call(self, result, &ctx, NULL);
 }
 
 static PyObject *py_list_archive_contents(PyObject *self, PyObject *args) {
@@ -639,18 +611,7 @@ static PyObject *py_compress_standalone(PyObject *self, PyObject *args,
 done:
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
-  if (rc != 0) {
-    set_cancelled_error(self, rc);
-    return NULL; // Error already set
-  }
-
-  if (ctx_finish(&ctx) != 0) {
-    return NULL;
-  }
-
-  // The path actually written, which RENAME may have changed from what was
-  // asked for
-  return PyUnicode_DecodeFSDefault(actual_path);
+  return finish_call(self, rc, &ctx, actual_path);
 }
 
 static PyObject *py_decompress_standalone(PyObject *self, PyObject *args,
@@ -731,22 +692,12 @@ done:
   }
   Py_DECREF(input_path_bytes);
   Py_DECREF(output_path_bytes);
-  if (rc != 0) {
-    set_cancelled_error(self, rc);
-    return NULL; // Error already set
-  }
-
-  if (ctx_finish(&ctx) != 0) {
-    return NULL;
-  }
-
-  // The path actually written, which RENAME may have changed vs asked for
-  return PyUnicode_DecodeFSDefault(actual_path);
+  return finish_call(self, rc, &ctx, actual_path);
 }
 
 // ---- Format Detection Methods ----
 
-static PyObject *py_detect_format(PyObject *self UNUSED, PyObject *args) {
+static PyObject *py_detect_format(PyObject *Py_UNUSED(self), PyObject *args) {
   PyObject *file_path_bytes = NULL;
 
   if (!PyArg_ParseTuple(args, "O&", PyUnicode_FSConverter, &file_path_bytes)) {
@@ -770,7 +721,8 @@ static PyObject *py_detect_format(PyObject *self UNUSED, PyObject *args) {
   return PyUnicode_FromString(name);
 }
 
-static PyObject *py_gzip_stored_name(PyObject *self UNUSED, PyObject *args) {
+static PyObject *py_gzip_stored_name(PyObject *Py_UNUSED(self),
+                                     PyObject *args) {
   PyObject *file_path_bytes = NULL;
 
   if (!PyArg_ParseTuple(args, "O&", PyUnicode_FSConverter, &file_path_bytes)) {
@@ -788,7 +740,8 @@ static PyObject *py_gzip_stored_name(PyObject *self UNUSED, PyObject *args) {
   return result;
 }
 
-static PyObject *py_format_is_archive(PyObject *self UNUSED, PyObject *args) {
+static PyObject *py_format_is_archive(PyObject *Py_UNUSED(self),
+                                      PyObject *args) {
   const char *format_name = NULL;
 
   if (!PyArg_ParseTuple(args, "s", &format_name)) {
@@ -809,7 +762,7 @@ static PyObject *names_to_py(const char *const names[2]) {
                   : Py_BuildValue("(s)", names[0]);
 }
 
-static PyObject *py_standalone_formats(PyObject *self UNUSED,
+static PyObject *py_standalone_formats(PyObject *Py_UNUSED(self),
                                        PyObject *Py_UNUSED(ignored)) {
   PyObject *list = PyList_New(0);
   if (!list)
@@ -818,9 +771,9 @@ static PyObject *py_standalone_formats(PyObject *self UNUSED,
   for (const FormatDesc *d = FORMATS; d->name; d++) {
     if (d->kind != KIND_CONTAINER)
       continue;
-    PyObject *item = Py_BuildValue("{s:s,s:N,s:N}", "name", d->name,
-                                   "aliases", names_to_py(d->aliases), "exts",
-                                   names_to_py(d->exts));
+    PyObject *item =
+        Py_BuildValue("{s:s,s:N,s:N}", "name", d->name, "aliases",
+                      names_to_py(d->aliases), "exts", names_to_py(d->exts));
     if (!item || PyList_Append(list, item) < 0) {
       Py_XDECREF(item);
       Py_DECREF(list);
@@ -833,17 +786,17 @@ static PyObject *py_standalone_formats(PyObject *self UNUSED,
 
 // ---- Capabilities Methods ----
 
-static PyObject *py_get_capabilities(PyObject *self UNUSED,
+static PyObject *py_get_capabilities(PyObject *Py_UNUSED(self),
                                      PyObject *Py_UNUSED(ignored)) {
   return get_capabilities();
 }
 
-static PyObject *py_get_archive_capabilities(PyObject *self UNUSED,
+static PyObject *py_get_archive_capabilities(PyObject *Py_UNUSED(self),
                                              PyObject *Py_UNUSED(ignored)) {
   return get_archive_capabilities();
 }
 
-static PyObject *py_get_default_backend_for_strategy(PyObject *self UNUSED,
+static PyObject *py_get_default_backend_for_strategy(PyObject *Py_UNUSED(self),
                                                      PyObject *args) {
   const char *strategy_name = NULL;
 
@@ -855,18 +808,16 @@ static PyObject *py_get_default_backend_for_strategy(PyObject *self UNUSED,
   if (parse_strategy(strategy_name, &strat) != 0) {
     return NULL;
   }
-  const char *name = get_default_backend_for_strategy(strat);
-
-  if (!name) {
+  const CBackend *b = choose_backend(strat);
+  if (!b) {
     Py_RETURN_NONE;
   }
-
-  return PyUnicode_FromString(name);
+  return PyUnicode_FromString(b->name);
 }
 
 // The same level check compress_file, compress_standalone and create_archive
 // make, without doing any work, so a plan can refuse a level up front
-static PyObject *py_check_level(PyObject *self UNUSED, PyObject *args,
+static PyObject *py_check_level(PyObject *Py_UNUSED(self), PyObject *args,
                                 PyObject *kwargs) {
   static char *kwlist[] = {"level", "algo", "strategy", "format", NULL};
 

@@ -1,5 +1,6 @@
 #include "codec.h"
 #include "crc32c.h"
+#include "../le.h"
 #include <snappy-c.h>
 #include <stdio.h>
 #include <string.h>
@@ -50,18 +51,6 @@ typedef struct {
 static uint32_t masked_crc(const unsigned char *p, size_t n) {
   uint32_t crc = crc32c(0, p, n);
   return ((crc >> 15) | (crc << 17)) + 0xA282EAD8u;
-}
-
-static void put_le(unsigned char *p, uint32_t v, int bytes) {
-  for (int i = 0; i < bytes; i++)
-    p[i] = (unsigned char)(v >> (8 * i));
-}
-
-static uint32_t get_le(const unsigned char *p, int bytes) {
-  uint32_t v = 0;
-  for (int i = 0; i < bytes; i++)
-    v |= (uint32_t)p[i] << (8 * i);
-  return v;
 }
 
 static void drain(SnappyState *s, CodecBuf *buf) {

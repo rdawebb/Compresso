@@ -24,16 +24,15 @@ typedef enum {
 // ---- Archive Entry Metadata ----
 
 typedef struct {
-  char *path;          // Relative path within the archive
-  EntryType type;      // Type of the entry (file, dir, symlink)
-  uint64_t size;       // Uncompressed size (0 for directories)
-  time_t mtime;        // Modified time
-  uint32_t mode;       // Unix permissions
-  char *link_target;   // A symlink's target, or for a hardlink the archive
-                       // path of the entry it shares data with
-  uint32_t special;    // ENTRY_SPECIAL's AE_IF* type, when it is known
-  uint64_t rdev;       // A device's number
-  void *internal_data; // Backend-specific data
+  char *path;        // Relative path within the archive
+  EntryType type;    // Type of the entry (file, dir, symlink)
+  uint64_t size;     // Uncompressed size (0 for directories)
+  time_t mtime;      // Modified time
+  uint32_t mode;     // Unix permissions
+  char *link_target; // A symlink's target, or for a hardlink the archive
+                     // path of the entry it shares data with
+  uint32_t special;  // ENTRY_SPECIAL's AE_IF* type, when it is known
+  uint64_t rdev;     // A device's number
 
   // Per-entry compression detail, which only a container that compresses each
   // entry separately has; zero means "not recorded"
@@ -47,15 +46,13 @@ typedef struct {
 
 typedef struct CArchive {
   const char *name;
-  LevelRange levels; // Applies when no external codec stage is present
+  LevelRange levels;    // Applies when no external codec stage is present
   int default_symlinks; // allow_symlinks when the policy leaves it at -1
   int stores_specials;  // FIFOs and devices; otherwise the walk skips them
   int stores_hardlinks; // A file's later names as links; otherwise as copies
   int reads_sources;    // Opens files itself from `source_path`; `data` is NULL
-
-  // Capability checks
-  int (*supports_compression)(void);
-  int (*supports_streaming)(void);
+  int compression;      // Compresses entries itself
+  int streaming;        // Reads and writes without seeking
 
   // Each create_* keeps `ctx->errors` for what it creates, so a later call's
   // `ctx` only carries progress and warnings, and may be NULL
@@ -91,12 +88,10 @@ typedef struct CArchive {
   // `ctx` (NULL-tolerant) only receives warnings about a still-usable entry
   int (*get_next_entry)(void *reader, ArchiveEntry *entry, CoreContext *ctx);
 
-  // Writes the current entry's data to `output`, refusing to write more than
-  // `max_bytes` (UINT64_MAX for no limit) and reporting the byte count through
-  // `bytes_written` when it is non-NULL
+  // Writes the current entry's data to `output`, refusing more than `max_bytes`
+  // (UINT64_MAX for no limit) and reporting byte count through `bytes_written`
   int (*extract_entry_data)(void *reader, FILE *output, uint64_t max_bytes,
                             uint64_t *bytes_written, CoreContext *ctx);
-  int (*skip_entry_data)(void *reader);
   // `discard` releases a reader whose pass already failed, raising nothing
   int (*close_reader)(void *reader, int discard);
 } CArchive;
@@ -170,9 +165,8 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    int overwrite_existing, char *out_actual_path,
                    size_t out_actual_path_size, CoreContext *ctx);
 
-// Entries are checked against `policy` (NULL = extraction_policy_default());
-// any failure but a cancel undoes what the extraction wrote, restoring what
-// OVERWRITE replaced
+// Entries are checked against `policy`; any failure but a cancel undoes what
+// the extraction wrote, restoring what OVERWRITE replaced
 int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files,
                     const ExtractionPolicy *policy, CoreContext *ctx);

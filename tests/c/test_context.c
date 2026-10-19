@@ -242,101 +242,6 @@ void test_finish_without_callback_is_a_noop(void) {
   TEST_ASSERT_EQUAL_INT(0, ctx_finish(&ctx));
 }
 
-// ---- Multi-stage jobs ----
-
-// An archive pipeline reads its input more than once (build the tar, then
-// compress it), and each stage only knows its own size. Reports have to stay
-// cumulative across them or the bar would restart halfway through.
-
-void test_job_carries_progress_across_stages(void) {
-  ctx_begin_job(&ctx, 100 * MiB);
-
-  ctx_begin_stage(&ctx, 100 * MiB);
-  ctx_advance(&ctx, 100 * MiB);
-  TEST_ASSERT_EQUAL_UINT64(100 * MiB, log_state.last_done);
-
-  // Second stage starts where the first ended, not at zero
-  ctx_begin_stage(&ctx, 50 * MiB);
-  ctx_advance(&ctx, 10 * MiB);
-
-  TEST_ASSERT_EQUAL_UINT64(110 * MiB, log_state.last_done);
-}
-
-void test_job_total_grows_as_stages_declare_sizes(void) {
-  // The estimate covers only the first stage
-  ctx_begin_job(&ctx, 100 * MiB);
-
-  ctx_begin_stage(&ctx, 100 * MiB);
-  ctx_advance(&ctx, 100 * MiB);
-  TEST_ASSERT_EQUAL_UINT64(100 * MiB, log_state.last_total);
-
-  ctx_begin_stage(&ctx, 50 * MiB);
-  ctx_advance(&ctx, 10 * MiB);
-
-  TEST_ASSERT_EQUAL_UINT64(150 * MiB, log_state.last_total);
-}
-
-void test_job_progress_never_goes_backwards(void) {
-  ctx_begin_job(&ctx, 100 * MiB);
-
-  ctx_begin_stage(&ctx, 100 * MiB);
-  for (int i = 0; i < 100; i++) {
-    ctx_advance(&ctx, MiB);
-  }
-  uint64_t after_first = log_state.last_done;
-
-  ctx_begin_stage(&ctx, 100 * MiB);
-  for (int i = 0; i < 100; i++) {
-    ctx_advance(&ctx, MiB);
-    TEST_ASSERT_TRUE(log_state.last_done >= after_first);
-  }
-}
-
-void test_job_finish_reports_the_whole_job(void) {
-  ctx_begin_job(&ctx, 100 * MiB);
-
-  ctx_begin_stage(&ctx, 100 * MiB);
-  ctx_advance(&ctx, 100 * MiB);
-  ctx_begin_stage(&ctx, 40 * MiB);
-  ctx_advance(&ctx, 1024);
-
-  TEST_ASSERT_EQUAL_INT(0, ctx_finish(&ctx));
-
-  TEST_ASSERT_EQUAL_UINT64(140 * MiB, log_state.last_done);
-  TEST_ASSERT_EQUAL_UINT64(140 * MiB, log_state.last_total);
-}
-
-void test_job_paces_reports_over_the_whole_job(void) {
-  // Throttling follows the job, so a two-stage pipeline does not report twice
-  // as often as a single-stage one
-  ctx_begin_job(&ctx, 400 * MiB);
-  ctx_begin_stage(&ctx, 400 * MiB);
-
-  TEST_ASSERT_EQUAL_UINT64(2 * MiB, ctx.report_interval);
-}
-
-void test_single_stage_job_is_unaffected(void) {
-  // Without ctx_begin_job the reports stay per-stage
-  ctx_begin_stage(&ctx, 400 * MiB);
-  ctx_advance(&ctx, 4 * MiB);
-
-  TEST_ASSERT_EQUAL_UINT64(4 * MiB, log_state.last_done);
-  TEST_ASSERT_EQUAL_UINT64(400 * MiB, log_state.last_total);
-
-  // A second stage restarts, rather than accumulating
-  ctx_begin_stage(&ctx, 400 * MiB);
-  ctx_advance(&ctx, 4 * MiB);
-  TEST_ASSERT_EQUAL_UINT64(4 * MiB, log_state.last_done);
-}
-
-void test_job_cancellation_still_lands_every_chunk(void) {
-  ctx_begin_job(&ctx, 400 * MiB);
-  ctx_begin_stage(&ctx, 400 * MiB);
-  cancel_flag = 1;
-
-  TEST_ASSERT_EQUAL_INT(COMP_CANCELLED, ctx_advance(&ctx, 1));
-}
-
 // ---- ctx_log ----
 
 static struct {
@@ -388,10 +293,5 @@ void test_null_context_finish_is_a_noop(void) {
 
 void test_null_context_begin_stage_does_not_crash(void) {
   ctx_begin_stage(NULL, 1234);
-  TEST_ASSERT_EQUAL_INT(0, log_state.calls);
-}
-
-void test_null_context_begin_job_does_not_crash(void) {
-  ctx_begin_job(NULL, 1234);
   TEST_ASSERT_EQUAL_INT(0, log_state.calls);
 }

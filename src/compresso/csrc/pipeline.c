@@ -2,6 +2,7 @@
 #include <Python.h>
 #include "archives.h"
 #include "fsutil.h"
+#include "standalone.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -40,20 +41,6 @@ FILE *open_source(const char *path, Format *format) {
 }
 
 // ---- Compression Pipeline ----
-
-static int is_container(Format format) {
-  const FormatDesc *desc = format_by_id(format);
-  return desc && desc->kind == KIND_CONTAINER;
-}
-
-static const FormatDesc *archive_desc(ArchiveID archive) {
-  if (archive == ARCHIVE_NONE)
-    return NULL;
-  for (const FormatDesc *d = FORMATS; d->name; d++)
-    if (d->archive == archive)
-      return d;
-  return NULL;
-}
 
 ArchiveID archive_id_from_format(Format format) {
   const FormatDesc *desc = format_by_id(format);
@@ -125,7 +112,7 @@ CompressionPipeline pipeline_from_format(Format f, const char *path) {
   p.codec = f;
   int in_tar;
   format_by_ext(path, &in_tar);
-  if (is_container(f) && in_tar)
+  if (find_standalone_format(f) && in_tar)
     p.archive = ARCHIVE_TAR;
   return p;
 }
@@ -165,7 +152,7 @@ int pipeline_is_valid(const CompressionPipeline *p) {
     return 0;
 
   // A codec, when present, must resolve to a real standalone format
-  if (p->codec != FORMAT_UNKNOWN && !is_container(p->codec))
+  if (p->codec != FORMAT_UNKNOWN && !find_standalone_format(p->codec))
     return 0;
 
   return 1;

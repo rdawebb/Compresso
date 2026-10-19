@@ -25,11 +25,25 @@ void *safe_malloc(size_t size) {
   return ptr;
 }
 
+void *grow(void *items, size_t *cap, size_t count, size_t size) {
+  if (count < *cap)
+    return items;
+
+  size_t new_cap = *cap ? *cap * 2 : 16;
+  void *grown =
+      new_cap <= SIZE_MAX / size ? realloc(items, new_cap * size) : NULL;
+  if (!grown) {
+    PyErr_NoMemory();
+    return NULL;
+  }
+  *cap = new_cap;
+  return grown;
+}
+
 void set_backend_error(const CompErrors *errors, const CBackend *backend,
                        const char *op, const char *context) {
-  PyErr_Format(errors->backend, "Backend '%s' %s failed (%s)",
-               backend && backend->name ? backend->name : "unknown", op,
-               context);
+  PyErr_Format(errors->backend, "Backend '%s' %s failed (%s)", backend->name,
+               op, context);
 }
 
 // ---- Progress and Cancellation ----
@@ -38,29 +52,9 @@ void set_backend_error(const CompErrors *errors, const CBackend *backend,
 #define CTX_TARGET_REPORTS 200
 #define CTX_MIN_INTERVAL (1024ULL * 1024ULL)
 
-void ctx_begin_job(CoreContext *ctx, uint64_t estimated_total) {
-  if (!ctx) {
-    return;
-  }
-
-  ctx->multi_stage = 1;
-  ctx->job_total = estimated_total;
-  ctx->job_done = 0;
-}
-
 void ctx_begin_stage(CoreContext *ctx, uint64_t total) {
   if (!ctx) {
     return;
-  }
-
-  if (ctx->multi_stage) {
-    // Continue the job total across stages
-    ctx->job_done += ctx->done_bytes;
-
-    // The estimate stands until a stage proves it too small
-    if (ctx->job_done + total > ctx->job_total) {
-      ctx->job_total = ctx->job_done + total;
-    }
   }
 
   ctx->total_bytes = total;
@@ -68,10 +62,7 @@ void ctx_begin_stage(CoreContext *ctx, uint64_t total) {
   ctx->last_reported = 0;
   ctx->stage_base = 0;
 
-  // Paced over the whole job, so a two-stage pipeline reports at the same rate
-  // as a single-stage one
-  uint64_t pace = ctx->multi_stage ? ctx->job_total : total;
-  uint64_t interval = pace / CTX_TARGET_REPORTS;
+  uint64_t interval = total / CTX_TARGET_REPORTS;
   ctx->report_interval =
       interval > CTX_MIN_INTERVAL ? interval : CTX_MIN_INTERVAL;
 }
@@ -99,11 +90,6 @@ static int ctx_check(CoreContext *ctx) {
   }
 
   ctx->last_reported = ctx->done_bytes;
-
-  if (ctx->multi_stage) {
-    return ctx->on_progress(ctx, ctx->job_done + ctx->done_bytes,
-                            ctx->job_total);
-  }
   return ctx->on_progress(ctx, ctx->done_bytes, ctx->total_bytes);
 }
 
@@ -311,14 +297,6 @@ int ctx_finish(CoreContext *ctx) {
   // done_bytes, which lags when a decoder stops reading before EOF
   ctx->last_reported = ctx->total_bytes;
   ctx->done_bytes = ctx->total_bytes;
-
-  if (ctx->multi_stage) {
-    uint64_t done = ctx->job_done + ctx->done_bytes;
-    if (done > ctx->job_total) {
-      ctx->job_total = done;
-    }
-    return ctx->on_progress(ctx, ctx->job_total, ctx->job_total);
-  }
   return ctx->on_progress(ctx, ctx->total_bytes, ctx->total_bytes);
 }
 

@@ -88,9 +88,8 @@ static inline int tar_checksum_ok(const unsigned char *m) {
   return stored == unsigned_sum || stored == signed_sum;
 }
 
-// Tar stores its signature at an offset rather than at the start; a pre-POSIX
-// (v7) header has none, so it is recognised by a v7 or ustar entry type and a
-// valid checksum
+// Tar stores signatures at an offset rather than the start; pre-POSIX (v7)
+// header has none, so is recognised by a v7/ustar type and a valid checksum
 static inline int magic_is_tar(const unsigned char *m, size_t n) {
   if (n >= 257 + 5 && memcmp(m + 257, "ustar", 5) == 0)
     return 1;

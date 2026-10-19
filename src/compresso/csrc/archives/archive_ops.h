@@ -4,13 +4,26 @@
 #include "../archives.h"
 #include <stdio.h>
 
-// Shared by archive_ops.c and extract.c
+// Shared by the archive sources
 
 // Release an entry's owned strings and clear it for the next iteration
 void entry_reset(ArchiveEntry *e);
 
+// Skips `*p` past any separators and the component after them, returning that
+// component; `*len` is 0 when only separators were left
+const char *next_segment(const char **p, size_t *len);
+
 // Whether any component of `path` is exactly ".."
 int path_has_parent_segment(const char *path);
+
+// Copies an entry's data from `read(handle, buffer, CODEC_CHUNK)` into
+// `output` with the GIL released, as CArchive.extract_entry_data; returns 0,
+// 1 if `read` failed (for the caller to raise), or a negative code with an
+// exception set
+int copy_entry_data(int64_t (*read)(void *, void *, size_t), void *handle,
+                    void *buffer, FILE *output, uint64_t max_bytes,
+                    uint64_t *bytes_written, const CompErrors *errors,
+                    CoreContext *ctx);
 
 // Opens `archive_path` and detects its pipeline and archive backend
 FILE *open_archive_source(const char *archive_path, const CArchive **archive,

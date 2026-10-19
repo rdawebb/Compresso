@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include "walk.h"
+#include "../common.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,17 +37,12 @@ static int push(WalkList *list, char *path, size_t prefix_len) {
     PyErr_NoMemory();
     return -1;
   }
-  if (list->count == list->cap) {
-    size_t cap = list->cap ? list->cap * 2 : 64;
-    WalkItem *items = realloc(list->items, cap * sizeof(*items));
-    if (!items) {
-      free(path);
-      PyErr_NoMemory();
-      return -1;
-    }
-    list->items = items;
-    list->cap = cap;
+  WalkItem *items = grow(list->items, &list->cap, list->count, sizeof(*items));
+  if (!items) {
+    free(path);
+    return -1;
   }
+  list->items = items;
   list->items[list->count++] =
       (WalkItem){.path = path, .prefix_len = prefix_len};
   return 0;

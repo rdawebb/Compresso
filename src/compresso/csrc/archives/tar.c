@@ -2,6 +2,7 @@
 #include <Python.h>
 #include "../archives.h"
 #include "../common.h"
+#include "archive_ops.h"
 #include <archive.h>
 #include <archive_entry.h>
 #include <errno.h>
@@ -479,6 +480,10 @@ static int tar_get_next_entry(void *reader_ptr, ArchiveEntry *entry,
   return 1; // Entry retrieved successfully
 }
 
+static int64_t tar_read(void *archive, void *buf, size_t len) {
+  return archive_read_data(archive, buf, len);
+}
+
 static int tar_extract_entry_data(void *reader_ptr, FILE *output,
                                   uint64_t max_bytes, uint64_t *bytes_written,
                                   CoreContext *ctx) {
@@ -489,61 +494,9 @@ static int tar_extract_entry_data(void *reader_ptr, FILE *output,
     return -1;
   }
 
-  // la_ssize_t, not ssize_t, which MSVC lacks
-  la_ssize_t bytes_read;
-  uint64_t total = 0;
-  int over_limit = 0;
-  int advance = 0;
-
-  Py_BEGIN_ALLOW_THREADS
-
-  while ((bytes_read = archive_read_data(reader->archive, reader->data,
-                                         CODEC_CHUNK)) > 0) {
-    // Cap is applied to the bytes produced rather than to the declared size
-    if ((uint64_t)bytes_read > max_bytes - total) {
-      over_limit = 1;
-      break;
-    }
-
-    size_t written = fwrite(reader->data, 1, bytes_read, output);
-    if (written != (size_t)bytes_read || ferror(output)) {
-      Py_BLOCK_THREADS
-      PyErr_SetFromErrno(PyExc_OSError);
-      return -1;
-    }
-    total += (uint64_t)bytes_read;
-
-    advance = ctx_advance(ctx, (size_t)bytes_read);
-    if (advance != 0) {
-      break;
-    }
-  }
-
-  Py_END_ALLOW_THREADS
-
-  if (bytes_written)
-    *bytes_written = total;
-
-  if (advance != 0) {
-    return advance;
-  }
-
-  if (over_limit) {
-    PyErr_SetString(reader->errors->extraction_policy,
-                    "Archive exceeds the maximum extracted size");
-    return -1;
-  }
-
-  if (bytes_read < 0) {
-    return tar_read_failed(reader, "Error reading archive data");
-  }
-
-  return 0;
-}
-
-static int tar_skip_entry(void *reader_ptr) {
-  (void)reader_ptr; // Unused - libarchive automatically skips entry data
-  return 0;
+  int rc = copy_entry_data(tar_read, reader->archive, reader->data, output,
+                           max_bytes, bytes_written, reader->errors, ctx);
+  return rc == 1 ? tar_read_failed(reader, "Error reading archive data") : rc;
 }
 
 static int tar_close_reader(void *reader_ptr, int discard) {
@@ -558,16 +511,6 @@ static int tar_close_reader(void *reader_ptr, int discard) {
   return r == ARCHIVE_OK ? 0 : -1;
 }
 
-// ---- Capability Functions ----
-
-static int tar_supports_compression(void) {
-  return 0; // TAR itself doesn't have compression
-}
-
-static int tar_supports_streaming(void) {
-  return 1; // TAR supports streaming
-}
-
 // ---- Backend Definition ----
 
 const CArchive TAR_ARCHIVE = {
@@ -575,8 +518,7 @@ const CArchive TAR_ARCHIVE = {
     .levels = LEVELS_NONE,
     .stores_specials = 1,
     .stores_hardlinks = 1,
-    .supports_compression = tar_supports_compression,
-    .supports_streaming = tar_supports_streaming,
+    .streaming = 1,
     .create_writer = tar_create_writer,
     .create_codec_writer = tar_create_codec_writer,
     .add_entry = tar_add_entry,
@@ -585,6 +527,5 @@ const CArchive TAR_ARCHIVE = {
     .create_codec_reader = tar_create_codec_reader,
     .get_next_entry = tar_get_next_entry,
     .extract_entry_data = tar_extract_entry_data,
-    .skip_entry_data = tar_skip_entry,
     .close_reader = tar_close_reader,
 };

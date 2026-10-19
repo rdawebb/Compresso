@@ -15,22 +15,6 @@
 
 // ---- ArchiveEntry Helpers ----
 
-static ArchiveEntry *entry_alloc(void) {
-  // Zeroed, so unset fields are still defined; ENTRY_FILE is 0
-  ArchiveEntry *e = calloc(1, sizeof(ArchiveEntry));
-  if (!e)
-    PyErr_NoMemory();
-  return e;
-}
-
-static void entry_free(ArchiveEntry *e) {
-  if (!e)
-    return;
-  free(e->path);
-  free(e->link_target);
-  free(e);
-}
-
 void entry_reset(ArchiveEntry *e) {
   free(e->path);
   free(e->link_target);
@@ -39,22 +23,70 @@ void entry_reset(ArchiveEntry *e) {
 
 // ---- Path Helpers ----
 
+const char *next_segment(const char **p, size_t *len) {
+  const char *start = *p;
+  while (*start && FS_IS_SEP(*start))
+    start++;
+
+  const char *end = start;
+  while (*end && !FS_IS_SEP(*end))
+    end++;
+
+  *len = (size_t)(end - start);
+  *p = end;
+  return start;
+}
+
 int path_has_parent_segment(const char *path) {
-  const char *p = path;
-
-  while (*p) {
-    while (*p && FS_IS_SEP(*p))
-      p++;
-
-    const char *start = p;
-    while (*p && !FS_IS_SEP(*p))
-      p++;
-
-    if ((size_t)(p - start) == 2 && start[0] == '.' && start[1] == '.')
+  for (const char *p = path; *p;) {
+    size_t len;
+    const char *start = next_segment(&p, &len);
+    if (len == 2 && start[0] == '.' && start[1] == '.')
       return 1;
   }
-
   return 0;
+}
+
+int copy_entry_data(int64_t (*read)(void *, void *, size_t), void *handle,
+                    void *buffer, FILE *output, uint64_t max_bytes,
+                    uint64_t *bytes_written, const CompErrors *errors,
+                    CoreContext *ctx) {
+  int64_t n;
+  uint64_t total = 0;
+  int over_limit = 0, write_failed = 0, advance = 0;
+
+  Py_BEGIN_ALLOW_THREADS
+
+  while ((n = read(handle, buffer, CODEC_CHUNK)) > 0) {
+    // Cap is applied to the bytes produced rather than to the declared size
+    if ((uint64_t)n > max_bytes - total) {
+      over_limit = 1;
+      break;
+    }
+    if (fwrite(buffer, 1, (size_t)n, output) != (size_t)n || ferror(output)) {
+      write_failed = 1;
+      break;
+    }
+    total += (uint64_t)n;
+    if ((advance = ctx_advance(ctx, (size_t)n)) != 0)
+      break;
+  }
+
+  Py_END_ALLOW_THREADS
+
+  *bytes_written = total;
+  if (write_failed) {
+    PyErr_SetFromErrno(PyExc_OSError);
+    return -1;
+  }
+  if (advance != 0)
+    return advance;
+  if (over_limit) {
+    PyErr_SetString(errors->extraction_policy,
+                    "Archive exceeds the maximum extracted size");
+    return -1;
+  }
+  return n < 0;
 }
 
 // Mirror extraction's checks, so an unsafe source fails at write time rather
@@ -108,19 +140,14 @@ static char *entry_name(const WalkItem *item) {
   return name;
 }
 
-static ArchiveEntry *entry_from_walk(const WalkItem *item) {
+// Fills the zeroed `entry`; on failure, the caller's does entry_reset
+static int entry_from_walk(const WalkItem *item, ArchiveEntry *entry) {
   const char *path = item->path;
   const fs_stat *st = &item->st;
 
-  ArchiveEntry *entry = entry_alloc();
-  if (!entry)
-    return NULL;
-
   entry->path = entry_name(item);
-  if (!entry->path) {
-    entry_free(entry);
-    return NULL;
-  }
+  if (!entry->path)
+    return -1;
 
   entry->size = st->size;
   entry->mtime = st->mtime;
@@ -130,10 +157,8 @@ static ArchiveEntry *entry_from_walk(const WalkItem *item) {
     entry->type = ENTRY_HARDLINK;
     entry->size = 0;
     entry->link_target = entry_name(item->link);
-    if (!entry->link_target) {
-      entry_free(entry);
-      return NULL;
-    }
+    if (!entry->link_target)
+      return -1;
   } else if (st->type == FS_TYPE_DIR) {
     entry->type = ENTRY_DIR;
   } else if (st->type == FS_TYPE_SYMLINK) {
@@ -141,14 +166,12 @@ static ArchiveEntry *entry_from_walk(const WalkItem *item) {
     char target[FS_PATH_MAX];
     if (fs_readlink(path, target, sizeof(target)) != 0) {
       PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-      entry_free(entry);
-      return NULL;
+      return -1;
     }
     entry->link_target = strdup(target);
     if (!entry->link_target) {
       PyErr_NoMemory();
-      entry_free(entry);
-      return NULL;
+      return -1;
     }
   } else if (st->type == FS_TYPE_OTHER) {
     entry->type = ENTRY_SPECIAL; // Only those the walk kept
@@ -159,7 +182,7 @@ static ArchiveEntry *entry_from_walk(const WalkItem *item) {
     entry->type = ENTRY_FILE;
   }
 
-  return entry;
+  return 0;
 }
 
 // The backend for a pipeline's container, so a recognised format without a
@@ -184,22 +207,24 @@ static int add_walked_entries(const CArchive *archive, void *writer,
                               const WalkList *walked, CoreContext *ctx) {
   for (size_t i = 0; i < walked->count; i++) {
     const WalkItem *item = &walked->items[i];
-    ArchiveEntry *entry = entry_from_walk(item);
-    if (!entry)
-      return -1;
-
-    FILE *f = NULL;
-    if (entry->type == ENTRY_FILE && !archive->reads_sources &&
-        !(f = fs_fopen(item->path, "rb"))) {
-      PyErr_SetFromErrnoWithFilename(PyExc_OSError, item->path);
-      entry_free(entry);
+    ArchiveEntry entry = {0};
+    if (entry_from_walk(item, &entry) != 0) {
+      entry_reset(&entry);
       return -1;
     }
 
-    int ret = archive->add_entry(writer, entry, f, item->path, ctx);
+    FILE *f = NULL;
+    if (entry.type == ENTRY_FILE && !archive->reads_sources &&
+        !(f = fs_fopen(item->path, "rb"))) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, item->path);
+      entry_reset(&entry);
+      return -1;
+    }
+
+    int ret = archive->add_entry(writer, &entry, f, item->path, ctx);
     if (f)
       fclose(f);
-    entry_free(entry);
+    entry_reset(&entry);
     if (ret != 0)
       return ret;
   }
@@ -458,7 +483,6 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader,
       return NULL;
     }
     Py_DECREF(item);
-    archive->skip_entry_data(reader);
   }
 
   if (ret < 0) {
@@ -527,9 +551,9 @@ PyObject *get_archive_capabilities(void) {
       return NULL;
     }
 
-    PyObject *name = PyUnicode_FromString(a->name ? a->name : "");
-    PyObject *streaming = a->supports_streaming() ? Py_True : Py_False;
-    PyObject *compression = a->supports_compression() ? Py_True : Py_False;
+    PyObject *name = PyUnicode_FromString(a->name);
+    PyObject *streaming = a->streaming ? Py_True : Py_False;
+    PyObject *compression = a->compression ? Py_True : Py_False;
 
     if (!name || PyDict_SetItemString(dict, "name", name) < 0 ||
         PyDict_SetItemString(dict, "streaming", streaming) < 0 ||

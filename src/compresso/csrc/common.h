@@ -7,59 +7,12 @@
 #include "codec/codec.h"
 #include "context.h"
 #include "fsutil.h"
+#include "le.h"
 #include "levels.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-
-// ---- Compiler Portability ----
-
-// Wrapper macros for compiler-specific attribute names
-#if defined(_MSC_VER)
-#define UNUSED
-#else
-#define UNUSED __attribute__((unused))
-#endif
-
-// ---- Byte Order ----
-
-// Both on-disk formats are little-endian by definition (RFC 1952 for gzip, the
-// Compresso header below), so multi-byte fields go through these rather than
-// being copied from a struct in host order
-
-static inline void write_le16(uint8_t *buf, uint16_t val) {
-  buf[0] = (uint8_t)(val & 0xFF);
-  buf[1] = (uint8_t)((val >> 8) & 0xFF);
-}
-
-static inline uint16_t read_le16(const uint8_t *buf) {
-  return (uint16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
-}
-
-static inline void write_le32(uint8_t *buf, uint32_t val) {
-  buf[0] = (uint8_t)(val & 0xFF);
-  buf[1] = (uint8_t)((val >> 8) & 0xFF);
-  buf[2] = (uint8_t)((val >> 16) & 0xFF);
-  buf[3] = (uint8_t)((val >> 24) & 0xFF);
-}
-
-static inline uint32_t read_le32(const uint8_t *buf) {
-  return (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16) |
-         ((uint32_t)buf[3] << 24);
-}
-
-static inline void write_le64(uint8_t *buf, uint64_t val) {
-  for (int i = 0; i < 8; i++)
-    buf[i] = (uint8_t)((val >> (i * 8)) & 0xFF);
-}
-
-static inline uint64_t read_le64(const uint8_t *buf) {
-  uint64_t val = 0;
-  for (int i = 0; i < 8; i++)
-    val |= (uint64_t)buf[i] << (i * 8);
-  return val;
-}
 
 // Closes both streams, and on failure or cancellation unlinks the half-written
 // output; raises `failure_message` as `errors->backend` unless cancelled or
@@ -121,7 +74,7 @@ static inline void c_header_pack(const CHeader *header,
   buf[5] = header->algo;
   buf[6] = header->level;
   buf[7] = header->flags;
-  write_le64(buf + 8, header->orig_size);
+  put_le(buf + 8, header->orig_size, 8);
 }
 
 static inline void c_header_unpack(const uint8_t buf[C_HEADER_SIZE],
@@ -131,7 +84,7 @@ static inline void c_header_unpack(const uint8_t buf[C_HEADER_SIZE],
   header->algo = buf[5];
   header->level = buf[6];
   header->flags = buf[7];
-  header->orig_size = read_le64(buf + 8);
+  header->orig_size = get_le(buf + 8, 8);
 }
 
 // ---- Algorithms ----
@@ -212,6 +165,11 @@ PyObject *get_capabilities(void);
 
 void *safe_malloc(size_t size);
 
+// `items` (`*cap` elements of `size` bytes) with room for one more after the
+// first `count`, doubling `*cap` when full; NULL with MemoryError set leaves
+// `items` as it was
+void *grow(void *items, size_t *cap, size_t count, size_t size);
+
 // ---- Backend Error Helper ----
 
 void set_backend_error(const CompErrors *errors, const CBackend *backend,
@@ -231,7 +189,5 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
 int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
                     int overwrite_existing, char *out_actual_path,
                     size_t out_actual_path_size, CoreContext *ctx);
-
-const char *get_default_backend_for_strategy(Strategy strat);
 
 #endif // COMMON_H

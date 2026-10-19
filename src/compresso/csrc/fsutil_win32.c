@@ -419,15 +419,8 @@ FILE *fs_mkstemp(char *template_path) {
   return f;
 }
 
-int fs_rename(const char *from, const char *to, int replace) {
-  wchar_t wfrom[FS_PATH_MAX], wto[FS_PATH_MAX];
-  if (fs_widen(from, wfrom, FS_PATH_MAX) != 0 ||
-      fs_widen(to, wto, FS_PATH_MAX) != 0)
-    return -1;
-
-  if (MoveFileExW(wfrom, wto, replace ? MOVEFILE_REPLACE_EXISTING : 0))
-    return 0;
-
+// errno for GetLastError(), or `fallback` for a code with no closer match
+static void set_errno_from_win32(int fallback) {
   switch (GetLastError()) {
   case ERROR_ALREADY_EXISTS:
   case ERROR_FILE_EXISTS:
@@ -440,10 +433,26 @@ int fs_rename(const char *from, const char *to, int replace) {
   case ERROR_NOT_SAME_DEVICE:
     errno = EXDEV;
     break;
-  default: // Includes a destination that is a directory or open elsewhere
+  case ERROR_ACCESS_DENIED:
     errno = EACCES;
     break;
+  default:
+    errno = fallback;
+    break;
   }
+}
+
+int fs_rename(const char *from, const char *to, int replace) {
+  wchar_t wfrom[FS_PATH_MAX], wto[FS_PATH_MAX];
+  if (fs_widen(from, wfrom, FS_PATH_MAX) != 0 ||
+      fs_widen(to, wto, FS_PATH_MAX) != 0)
+    return -1;
+
+  if (MoveFileExW(wfrom, wto, replace ? MOVEFILE_REPLACE_EXISTING : 0))
+    return 0;
+
+  // Includes a destination that is a directory or open elsewhere
+  set_errno_from_win32(EACCES);
   return -1;
 }
 
@@ -503,25 +512,7 @@ int fs_link(const char *existing, const char *new_path) {
   if (CreateHardLinkW(wnew, wexisting, NULL))
     return 0;
 
-  switch (GetLastError()) {
-  case ERROR_ALREADY_EXISTS:
-  case ERROR_FILE_EXISTS:
-    errno = EEXIST;
-    break;
-  case ERROR_FILE_NOT_FOUND:
-  case ERROR_PATH_NOT_FOUND:
-    errno = ENOENT;
-    break;
-  case ERROR_NOT_SAME_DEVICE:
-    errno = EXDEV;
-    break;
-  case ERROR_ACCESS_DENIED:
-    errno = EACCES;
-    break;
-  default: // e.g. a FAT volume, which has no hardlinks
-    errno = EPERM;
-    break;
-  }
+  set_errno_from_win32(EPERM); // e.g. a FAT volume, which has no hardlinks
   return -1;
 }
 
@@ -563,21 +554,7 @@ int fs_symlink(const char *target, const char *link_path) {
   if (ok)
     return 0;
 
-  switch (GetLastError()) {
-  case ERROR_ALREADY_EXISTS:
-  case ERROR_FILE_EXISTS:
-    errno = EEXIST;
-    break;
-  case ERROR_PATH_NOT_FOUND:
-    errno = ENOENT;
-    break;
-  case ERROR_ACCESS_DENIED:
-    errno = EACCES;
-    break;
-  default: // e.g. ERROR_PRIVILEGE_NOT_HELD
-    errno = EPERM;
-    break;
-  }
+  set_errno_from_win32(EPERM); // e.g. ERROR_PRIVILEGE_NOT_HELD
   return -1;
 }
 

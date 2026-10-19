@@ -195,9 +195,14 @@ const FormatDesc *format_by_magic(const unsigned char *m, size_t n) {
   return NULL;
 }
 
-const struct CArchive *find_archive_by_id(ArchiveID id) {
+const FormatDesc *archive_desc(ArchiveID id) {
   for (const FormatDesc *d = FORMATS; d->name; d++)
     if (d->kind == KIND_ARCHIVE && d->archive == id)
-      return d->backend;
+      return d;
   return NULL;
+}
+
+const struct CArchive *find_archive_by_id(ArchiveID id) {
+  const FormatDesc *d = archive_desc(id);
+  return d ? d->backend : NULL;
 }

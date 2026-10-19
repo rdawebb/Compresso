@@ -76,7 +76,8 @@ const FormatDesc *format_by_magic(const unsigned char *m, size_t n);
 // archives/{tar,zip}.c
 extern const struct CArchive TAR_ARCHIVE, ZIP_ARCHIVE;
 
-// The backend of `id`'s KIND_ARCHIVE row, or NULL
+// `id`'s KIND_ARCHIVE row, and its backend; each NULL if there is none
+const FormatDesc *archive_desc(ArchiveID id);
 const struct CArchive *find_archive_by_id(ArchiveID id);
 
 #endif // FORMATS_H

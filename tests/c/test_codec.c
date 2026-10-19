@@ -234,7 +234,7 @@ void tearDown(void) {
 // Runs the driver over `input_path` with `level` selecting the stub's mode
 static int run_stub(int level, const char *input_path) {
   CodecParams params = {.level = level};
-  return codec_run_file(&stub_ops, &params, 0, input_path,
+  return codec_run_source(&stub_ops, &params, 0, input_path, NULL,
                         OVERWRITE_TO(TMP_OUT), &ctx, "stub run failed");
 }
 
@@ -334,7 +334,7 @@ void test_driver_blames_the_engine_for_an_encoding_failure(void) {
 void test_driver_blames_the_input_when_the_engine_does(void) {
   CodecParams params = {.level = STUB_FAIL_PROCESS};
 
-  TEST_ASSERT_EQUAL_INT(-1, codec_run_file(&stub_ops, &params, 1, TEST_INPUT,
+  TEST_ASSERT_EQUAL_INT(-1, codec_run_source(&stub_ops, &params, 1, TEST_INPUT, NULL,
                                            OVERWRITE_TO(TMP_OUT), &ctx,
                                            "stub run failed"));
   TEST_ASSERT_TRUE(PyErr_ExceptionMatches(test_errors()->corrupt_data));
@@ -354,7 +354,7 @@ void test_driver_prefers_the_label_over_the_codec_name(void) {
   // What keeps .xz saying "xz" rather than "lzma", and .gz "gzip"
   CodecParams params = {.level = STUB_FAIL_PROCESS, .label = "container"};
 
-  TEST_ASSERT_EQUAL_INT(-1, codec_run_file(&stub_ops, &params, 0, TEST_INPUT,
+  TEST_ASSERT_EQUAL_INT(-1, codec_run_source(&stub_ops, &params, 0, TEST_INPUT, NULL,
                                            OVERWRITE_TO(TMP_OUT), &ctx,
                                            "stub run failed"));
   TEST_ASSERT_EQUAL_STRING("container", stub_last_label);
@@ -381,7 +381,7 @@ void test_driver_reports_a_missing_input(void) {
 static int run_members(const char *input, int concatenated) {
   write_file(TMP_IN, input);
   CodecParams params = {.level = STUB_MEMBERS, .concatenated = concatenated};
-  return codec_run_file(&stub_ops, &params, 1, TMP_IN, OVERWRITE_TO(TMP_OUT),
+  return codec_run_source(&stub_ops, &params, 1, TMP_IN, NULL, OVERWRITE_TO(TMP_OUT),
                         &ctx, "stub run failed");
 }
 
@@ -452,7 +452,7 @@ static int run_members_ignoring(const char *input, int concatenated) {
   CodecParams params = {.level = STUB_MEMBERS,
                         .concatenated = concatenated,
                         .ignore_trailing = 1};
-  return codec_run_file(&stub_ops, &params, 1, TMP_IN, OVERWRITE_TO(TMP_OUT),
+  return codec_run_source(&stub_ops, &params, 1, TMP_IN, NULL, OVERWRITE_TO(TMP_OUT),
                         &ctx, "stub run failed");
 }
 
@@ -628,7 +628,7 @@ void test_reader_raises_its_failure_at_close(void) {
 void test_driver_tolerates_a_null_context(void) {
   CodecParams params = {.level = STUB_COPY};
 
-  TEST_ASSERT_EQUAL_INT(0, codec_run_file(&stub_ops, &params, 0, TEST_INPUT,
+  TEST_ASSERT_EQUAL_INT(0, codec_run_source(&stub_ops, &params, 0, TEST_INPUT, NULL,
                                           OVERWRITE_TO(TMP_OUT), test_ctx(),
                                           "stub run failed"));
   TEST_ASSERT_TRUE(files_equal(TEST_INPUT, TMP_OUT));

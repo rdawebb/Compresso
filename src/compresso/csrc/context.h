@@ -9,8 +9,8 @@
 // Distinct from -1 so callers can tell cancelled from failed
 #define COMP_CANCELLED (-2)
 
-// Python's logging levels, which the _core.c bridge passes straight through
-enum { CTX_LOG_DEBUG = 10, CTX_LOG_INFO = 20, CTX_LOG_WARNING = 30 };
+// Python's logging.WARNING, which the _core.c bridge passes straight through
+enum { CTX_LOG_WARNING = 30 };
 
 #if defined(__GNUC__) || defined(__clang__)
 #define CTX_PRINTF(fmt, args) __attribute__((format(printf, fmt, args)))
@@ -57,23 +57,11 @@ typedef struct CoreContext {
   uint64_t report_interval, last_reported;
 
   // Input offset this stage began at, subtracted from absolute positions
-  // passed to ctx_set_position; non-zero when the caller has already consumed
-  // a header
+  // passed to ctx_set_position; non-zero when callers have consumed a header
   uint64_t stage_base;
-
-  // Multi-stage accounting; reports are cumulative: job_done + done_bytes, out
-  // of job_total (job_total is an estimate up front and grows as each stage
-  // declares its total, so the reported total may rise during a job)
-  int multi_stage;
-  uint64_t job_total, job_done;
 } CoreContext;
 
-// Begins a job whose input is read in more than one stage, making reports
-// cumulative rather than per-stage
-void ctx_begin_job(CoreContext *ctx, uint64_t estimated_total);
-
-// Starts a new stage; within a multi-stage job this banks the previous stage's
-// bytes, so progress carries forward instead of restarting
+// Starts a new stage, resetting the counters and report pacing to `total`
 void ctx_begin_stage(CoreContext *ctx, uint64_t total);
 
 // ctx_begin_stage with the total taken from an open input stream, measured from

@@ -71,8 +71,7 @@ int fs_join(char *out, size_t out_size, const char *dir, const char *name) {
   size_t name_len = strlen(name);
   size_t sep_len = dir_len > 0 && !FS_IS_SEP(dir[dir_len - 1]) ? 1 : 0;
 
-  // Both strings are already in memory, so their lengths can't sum past
-  // SIZE_MAX
+  // Both strings are in memory, so their lengths can't sum past SIZE_MAX
   if (dir_len + sep_len + name_len >= out_size) {
     errno = ENAMETOOLONG;
     return -1;
