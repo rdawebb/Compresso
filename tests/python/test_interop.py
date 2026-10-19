@@ -66,10 +66,10 @@ class TestStandaloneDecoding:
         ],
     )
     def test_decodes_every_stream(
-        self, temp_dir: Path, fixture: str, expected: bytes
+        self, tmp_path: Path, fixture: str, expected: bytes
     ) -> None:
         """Test that the whole file decodes, not just its first stream."""
-        restored = temp_dir / "restored"
+        restored = tmp_path / "restored"
 
         _core.decompress_standalone(str(INTEROP / fixture), str(restored))
 
@@ -80,7 +80,7 @@ class TestStandaloneDecoding:
         "trailing", [b"junk", bytes(512)], ids=["garbage", "zero-padding"]
     )
     def test_warns_about_trailing_data_and_keeps_the_output(
-        self, temp_dir: Path, fixture: str, trailing: bytes
+        self, tmp_path: Path, fixture: str, trailing: bytes
     ) -> None:
         """Test that data after the last stream is ignored with a warning.
 
@@ -88,9 +88,9 @@ class TestStandaloneDecoding:
         warn; tape-blocked archives end in zero padding.
         """
         single = (INTEROP / fixture).read_bytes()
-        source = temp_dir / f"trailing-{fixture}"
+        source = tmp_path / f"trailing-{fixture}"
         source.write_bytes(single + trailing)
-        restored = temp_dir / "restored"
+        restored = tmp_path / "restored"
 
         with pytest.warns(TrailingDataWarning, match=f"from byte {len(single)},"):
             _core.decompress_standalone(str(source), str(restored))
@@ -103,23 +103,23 @@ class TestStandaloneDecoding:
         ids=["after", "between"],
     )
     def test_xz_skips_stream_padding(
-        self, temp_dir: Path, padding: bytes, between: bool
+        self, tmp_path: Path, padding: bytes, between: bool
     ) -> None:
         """Test that xz's Stream Padding, null bytes in fours, is skipped silently."""
         single = (INTEROP / "xz_single.xz").read_bytes()
-        source = temp_dir / "padded.xz"
+        source = tmp_path / "padded.xz"
         source.write_bytes(single + padding + (single if between else b""))
-        restored = temp_dir / "restored"
+        restored = tmp_path / "restored"
 
         _core.decompress_standalone(str(source), str(restored))
 
         assert restored.read_bytes() == (PART1 + PART1 if between else PART1)
 
     def test_xz_decodes_an_unsupported_check_with_a_warning(
-        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Test that an unknown check type is logged and skipped."""
-        restored = temp_dir / "restored"
+        restored = tmp_path / "restored"
 
         with caplog.at_level(logging.WARNING, logger="compresso"):
             _core.decompress_standalone(
@@ -135,12 +135,12 @@ class TestStandaloneDecoding:
         ]
 
     def test_xz_with_a_known_check_logs_nothing(
-        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Test that the warning is specific to the unsupported check type."""
         with caplog.at_level(logging.DEBUG, logger="compresso"):
             _core.decompress_standalone(
-                str(INTEROP / "xz_single.xz"), str(temp_dir / "restored")
+                str(INTEROP / "xz_single.xz"), str(tmp_path / "restored")
             )
 
         assert not caplog.records
@@ -148,22 +148,22 @@ class TestStandaloneDecoding:
     @pytest.mark.parametrize(
         "trailing", [b"junk", bytes(3)], ids=["garbage", "unaligned-padding"]
     )
-    def test_xz_rejects_trailing_data(self, temp_dir: Path, trailing: bytes) -> None:
+    def test_xz_rejects_trailing_data(self, tmp_path: Path, trailing: bytes) -> None:
         """Test that xz, as the xz tool does, fails on anything but padding."""
-        source = temp_dir / "trailing.xz"
+        source = tmp_path / "trailing.xz"
         source.write_bytes((INTEROP / "xz_single.xz").read_bytes() + trailing)
-        restored = temp_dir / "restored"
+        restored = tmp_path / "restored"
 
         with pytest.raises(CorruptDataError):
             _core.decompress_standalone(str(source), str(restored))
 
         assert not restored.exists()
 
-    def test_lz4_skips_a_trailing_skippable_frame(self, temp_dir: Path) -> None:
+    def test_lz4_skips_a_trailing_skippable_frame(self, tmp_path: Path) -> None:
         """Test that a skippable frame after the last frame decodes to nothing."""
-        source = temp_dir / "skippable.lz4"
+        source = tmp_path / "skippable.lz4"
         source.write_bytes((INTEROP / "lz4_single.lz4").read_bytes() + SKIPPABLE)
-        restored = temp_dir / "restored"
+        restored = tmp_path / "restored"
 
         _core.decompress_standalone(str(source), str(restored))
 
@@ -172,11 +172,11 @@ class TestStandaloneDecoding:
     @pytest.mark.parametrize(
         "trailing", [b"junk", bytes(8)], ids=["garbage", "zero-padding"]
     )
-    def test_lz4_rejects_trailing_data(self, temp_dir: Path, trailing: bytes) -> None:
+    def test_lz4_rejects_trailing_data(self, tmp_path: Path, trailing: bytes) -> None:
         """Test that lz4, as the lz4 tool does, fails on anything but a frame."""
-        source = temp_dir / "trailing.lz4"
+        source = tmp_path / "trailing.lz4"
         source.write_bytes((INTEROP / "lz4_single.lz4").read_bytes() + trailing)
-        restored = temp_dir / "restored"
+        restored = tmp_path / "restored"
 
         with pytest.raises(CorruptDataError):
             _core.decompress_standalone(str(source), str(restored))
@@ -185,15 +185,15 @@ class TestStandaloneDecoding:
 
     @pytest.mark.parametrize("algo", ["zlib", "bzip2", "lzma", "lz4"])
     def test_comp_rejects_data_after_its_payload(
-        self, temp_dir: Path, algo: str
+        self, tmp_path: Path, algo: str
     ) -> None:
         """Test that .comp, which holds exactly one stream, has no such leeway."""
-        compressed = temp_dir / "part1.comp"
+        compressed = tmp_path / "part1.comp"
         _core.compress_file(
             str(INTEROP / "part1.txt"), str(compressed), algo, "balanced", -1
         )
         compressed.write_bytes(compressed.read_bytes() + bytes(4))
-        restored = temp_dir / "restored"
+        restored = tmp_path / "restored"
 
         with pytest.raises(CorruptDataError, match=f"after the end of a {algo} stream"):
             _core.decompress_file(str(compressed), str(restored), "")
@@ -209,33 +209,33 @@ class TestDetection:
         [("zstd_single.zst", "zstd"), ("lz4_single.lz4", "lz4")],
     )
     def test_frame_after_a_leading_skippable_frame_decides(
-        self, temp_dir: Path, fixture: str, expected: str
+        self, tmp_path: Path, fixture: str, expected: str
     ) -> None:
         """Test that zstd and lz4, which share skippable frames, are told apart."""
-        source = temp_dir / "data"  # No extension, so only the bytes can tell
+        source = tmp_path / "data"  # No extension, so only the bytes can tell
         source.write_bytes(SKIPPABLE + (INTEROP / fixture).read_bytes())
-        restored = temp_dir / "restored"
+        restored = tmp_path / "restored"
 
         assert _core.detect_format(str(source)) == expected
         _core.decompress_standalone(str(source), str(restored))
         assert restored.read_bytes() == PART1
 
-    def test_v7_tar_is_detected_and_extracted(self, temp_dir: Path) -> None:
+    def test_v7_tar_is_detected_and_extracted(self, tmp_path: Path) -> None:
         """Test that GNU tar's --format=v7, which has no ustar magic, is a tar."""
-        source = temp_dir / "data"
+        source = tmp_path / "data"
         source.write_bytes((INTEROP / "tar_v7.tar").read_bytes())
 
         assert _core.detect_format(str(source)) == "tar"
-        _core.extract_archive(str(source), str(temp_dir), [])
-        assert (temp_dir / "v7" / "file.txt").read_bytes() == PART1
+        _core.extract_archive(str(source), str(tmp_path), [])
+        assert (tmp_path / "v7" / "file.txt").read_bytes() == PART1
 
-    def test_uppercase_tar_gz_is_a_compressed_tar(self, temp_dir: Path) -> None:
+    def test_uppercase_tar_gz_is_a_compressed_tar(self, tmp_path: Path) -> None:
         """Test that .TAR.GZ is read as tar in gzip, as .tar.gz is."""
-        source = temp_dir / "A.TAR.GZ"
+        source = tmp_path / "A.TAR.GZ"
         source.write_bytes(gzip.compress((INTEROP / "tar_v7.tar").read_bytes()))
 
-        _core.extract_archive(str(source), str(temp_dir), [])
-        assert (temp_dir / "v7" / "file.txt").read_bytes() == PART1
+        _core.extract_archive(str(source), str(tmp_path), [])
+        assert (tmp_path / "v7" / "file.txt").read_bytes() == PART1
 
 
 class TestTarExtraction:
@@ -249,30 +249,30 @@ class TestTarExtraction:
         assert link["type"] == "hardlink"
         assert link["link_target"] == "hardlink/a.txt"
 
-    def test_hardlink_is_planned_as_a_hardlink(self, temp_dir: Path) -> None:
+    def test_hardlink_is_planned_as_a_hardlink(self, tmp_path: Path) -> None:
         """Test that the frontend's entries mark the link and keep its target."""
-        plan = plan_extraction(INTEROP / "tar_hardlink.tar", temp_dir)
+        plan = plan_extraction(INTEROP / "tar_hardlink.tar", tmp_path)
 
         links = [e for e in plan.entries if e.is_hardlink]
         assert [(e.path, e.link_target) for e in links] == [
             ("hardlink/b.txt", "hardlink/a.txt")
         ]
 
-    def test_hardlink_extracts_as_a_link(self, temp_dir: Path) -> None:
+    def test_hardlink_extracts_as_a_link(self, tmp_path: Path) -> None:
         """Test that a hardlink entry becomes a second name for its target."""
-        _core.extract_archive(str(INTEROP / "tar_hardlink.tar"), str(temp_dir), [])
+        _core.extract_archive(str(INTEROP / "tar_hardlink.tar"), str(tmp_path), [])
 
-        a, b = temp_dir / "hardlink" / "a.txt", temp_dir / "hardlink" / "b.txt"
+        a, b = tmp_path / "hardlink" / "a.txt", tmp_path / "hardlink" / "b.txt"
         assert b.read_bytes() == PART1
         assert os.path.samefile(a, b)
 
     def test_read_only_directory_is_filled_before_its_mode_is_set(
-        self, temp_dir: Path
+        self, tmp_path: Path
     ) -> None:
         """Test that a 0555 directory entry doesn't block the files inside it."""
-        _core.extract_archive(str(INTEROP / "tar_readonly_dir.tar"), str(temp_dir), [])
+        _core.extract_archive(str(INTEROP / "tar_readonly_dir.tar"), str(tmp_path), [])
 
-        directory = temp_dir / "readonly"
+        directory = tmp_path / "readonly"
         assert (directory / "file.txt").read_bytes() == PART1
         if sys.platform != "win32":
             assert stat.S_IMODE(directory.stat().st_mode) == 0o555
@@ -282,12 +282,12 @@ class TestZipSymlinks:
     """Test a zip made by Info-ZIP's `zip -y`, which stores a symlink."""
 
     def test_symlink_extracts_as_a_file_holding_its_target(
-        self, temp_dir: Path
+        self, tmp_path: Path
     ) -> None:
         """Test that the stored link becomes a regular file of its target text."""
-        _core.extract_archive(str(INTEROP / "zip_symlink.zip"), str(temp_dir), [])
+        _core.extract_archive(str(INTEROP / "zip_symlink.zip"), str(tmp_path), [])
 
-        link = temp_dir / "symlink" / "link.txt"
+        link = tmp_path / "symlink" / "link.txt"
         assert not link.is_symlink()
         assert link.read_bytes() == b"target.txt"
 

@@ -60,10 +60,10 @@ class TestDecompressionJob:
     """Test the DecompressionJob class."""
 
     def test_from_file_restores_the_original_name(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that with no destination, the .comp suffix is dropped."""
-        out_dir = temp_dir / "out"
+        out_dir = tmp_path / "out"
         out_dir.mkdir()
         compressed = out_dir / f"{sample_text_file.name}.comp"
         assert CompressionJob.from_file(sample_text_file, compressed).run().ok
@@ -101,46 +101,46 @@ class TestRestoreName:
             pytest.param(_gzip_with_name(b"o" * 1100), "renamed", id="too-long"),
         ],
     )
-    def test_names_the_output(self, temp_dir: Path, data: bytes, expected: str) -> None:
+    def test_names_the_output(self, tmp_path: Path, data: bytes, expected: str) -> None:
         """Test the stored name, its last component only, or the default."""
-        src = temp_dir / "renamed.gz"
+        src = tmp_path / "renamed.gz"
         src.write_bytes(data)
 
         plan = plan_decompression(src, restore_name=True)
 
-        assert plan.dest == temp_dir / expected
+        assert plan.dest == tmp_path / expected
 
-    def test_restores_only_on_request(self, temp_dir: Path) -> None:
+    def test_restores_only_on_request(self, tmp_path: Path) -> None:
         """Test that by default the suffix is dropped, as plain `gzip -d` does."""
-        src = temp_dir / "renamed.gz"
+        src = tmp_path / "renamed.gz"
         src.write_bytes(_gzip_with_name(b"orig.txt"))
 
-        assert plan_decompression(src).dest == temp_dir / "renamed"
+        assert plan_decompression(src).dest == tmp_path / "renamed"
         job = DecompressionJob.from_file(src, restore_name=True)
         assert job.run().ok
-        assert (temp_dir / "orig.txt").read_bytes() == b"payload"
+        assert (tmp_path / "orig.txt").read_bytes() == b"payload"
 
     @pytest.mark.parametrize(
         ("mtime", "restore", "restored"),
         [(1_000_000_000, True, True), (1_000_000_000, False, False), (0, True, False)],
     )
     def test_dates_the_output(
-        self, temp_dir: Path, mtime: int, restore: bool, restored: bool
+        self, tmp_path: Path, mtime: int, restore: bool, restored: bool
     ) -> None:
         """Test the header's MTIME, only on request and only when non-zero."""
-        src = temp_dir / "a.gz"
+        src = tmp_path / "a.gz"
         src.write_bytes(gzip.compress(b"payload", mtime=mtime))
 
-        job = DecompressionJob.from_file(src, temp_dir / "a", restore_name=restore)
+        job = DecompressionJob.from_file(src, tmp_path / "a", restore_name=restore)
         assert job.run().ok
 
         assert (job.plan.dest.stat().st_mtime == mtime) is restored
 
-    def test_skip_leaves_an_existing_file_undated(self, temp_dir: Path) -> None:
+    def test_skip_leaves_an_existing_file_undated(self, tmp_path: Path) -> None:
         """Test that SKIP, which writes nothing, doesn't change the file's time."""
-        src = temp_dir / "a.gz"
+        src = tmp_path / "a.gz"
         src.write_bytes(gzip.compress(b"payload", mtime=1_000_000_000))
-        existing = temp_dir / "a"
+        existing = tmp_path / "a"
         existing.write_bytes(b"old")
         before = existing.stat().st_mtime
 
@@ -151,12 +151,12 @@ class TestRestoreName:
 
         assert existing.stat().st_mtime == before
 
-    def test_ignores_other_formats(self, temp_dir: Path) -> None:
+    def test_ignores_other_formats(self, tmp_path: Path) -> None:
         """Test bzip2, whose fourth header byte happens to set gzip's FNAME bit."""
-        src = temp_dir / "renamed.bz2"
+        src = tmp_path / "renamed.bz2"
         src.write_bytes(bz2.compress(b"payload", 9))
 
-        assert plan_decompression(src, restore_name=True).dest == temp_dir / "renamed"
+        assert plan_decompression(src, restore_name=True).dest == tmp_path / "renamed"
 
 
 class TestPlanCompressionLevels:
@@ -207,22 +207,22 @@ class TestCompressionOverwrite:
 
     @staticmethod
     def _source_and_stale_output(
-        temp_dir: Path, suffix: str = ".comp"
+        tmp_path: Path, suffix: str = ".comp"
     ) -> tuple[Path, Path]:
         """Build a source file and a stale file already at the destination.
 
         Args:
-            temp_dir: Directory to build both in.
+            tmp_path: Directory to build both in.
             suffix: Extension for the destination file.
 
         Returns:
             The source path, and the destination path already occupied by an
             unrelated file.
         """
-        source = temp_dir / "a.txt"
+        source = tmp_path / "a.txt"
         source.write_bytes(b"hello compresso")
 
-        dest = temp_dir / f"out{suffix}"
+        dest = tmp_path / f"out{suffix}"
         dest.write_bytes(b"stale")
 
         return source, dest
@@ -235,10 +235,10 @@ class TestCompressionOverwrite:
         ],
     )
     def test_renames_existing_output_by_default(
-        self, temp_dir: Path, options_kwargs: dict, suffix: str
+        self, tmp_path: Path, options_kwargs: dict, suffix: str
     ) -> None:
         """Test that the default policy renames rather than overwriting."""
-        source, dest = self._source_and_stale_output(temp_dir, suffix)
+        source, dest = self._source_and_stale_output(tmp_path, suffix)
         job = CompressionJob.from_file(
             source, dest, options=CompressionOptions(**options_kwargs)
         )
@@ -247,14 +247,14 @@ class TestCompressionOverwrite:
 
         assert result.ok, result.error
         assert dest.read_bytes() == b"stale"
-        sibling = temp_dir / renamed(f"out{suffix}")
+        sibling = tmp_path / renamed(f"out{suffix}")
         assert job.plan.dest == sibling
         assert sibling.is_file()
         assert sibling.read_bytes() != b"stale"
 
-    def test_error_mode_refuses_existing_output(self, temp_dir: Path) -> None:
+    def test_error_mode_refuses_existing_output(self, tmp_path: Path) -> None:
         """Test that explicit `error` refuses to touch an existing output."""
-        source, dest = self._source_and_stale_output(temp_dir)
+        source, dest = self._source_and_stale_output(tmp_path)
 
         result = CompressionJob.from_file(
             source, dest, options=CompressionOptions(overwrite=OverwriteMode.ERROR)
@@ -264,9 +264,9 @@ class TestCompressionOverwrite:
         assert isinstance(result.error, FileExistsError)
         assert dest.read_bytes() == b"stale"
 
-    def test_skip_leaves_the_existing_output(self, temp_dir: Path) -> None:
+    def test_skip_leaves_the_existing_output(self, tmp_path: Path) -> None:
         """Test that `skip` leaves the stale output untouched and still succeeds."""
-        source, dest = self._source_and_stale_output(temp_dir)
+        source, dest = self._source_and_stale_output(tmp_path)
         job = CompressionJob.from_file(
             source, dest, options=CompressionOptions(overwrite=OverwriteMode.SKIP)
         )
@@ -277,9 +277,9 @@ class TestCompressionOverwrite:
         assert dest.read_bytes() == b"stale"
         assert job.plan.dest == dest
 
-    def test_overwrite_replaces_the_existing_output(self, temp_dir: Path) -> None:
+    def test_overwrite_replaces_the_existing_output(self, tmp_path: Path) -> None:
         """Test that `overwrite` replaces the stale output in place."""
-        source, dest = self._source_and_stale_output(temp_dir)
+        source, dest = self._source_and_stale_output(tmp_path)
         job = CompressionJob.from_file(
             source, dest, options=CompressionOptions(overwrite=OverwriteMode.OVERWRITE)
         )
@@ -290,9 +290,9 @@ class TestCompressionOverwrite:
         assert dest.read_bytes() != b"stale"
         assert job.plan.dest == dest
 
-    def test_plain_string_mode_is_normalised(self, temp_dir: Path) -> None:
+    def test_plain_string_mode_is_normalised(self, tmp_path: Path) -> None:
         """Test that a mode given as a plain string still plans as the enum."""
-        source, dest = self._source_and_stale_output(temp_dir)
+        source, dest = self._source_and_stale_output(tmp_path)
 
         plan = CompressionJob.from_file(
             source,
@@ -303,9 +303,9 @@ class TestCompressionOverwrite:
         assert plan.can_compress is True
         assert plan.options.overwrite is OverwriteMode.SKIP
 
-    def test_unknown_mode_is_an_unavailable_plan(self, temp_dir: Path) -> None:
+    def test_unknown_mode_is_an_unavailable_plan(self, tmp_path: Path) -> None:
         """Test that a mode outside the four names never reaches the C layer."""
-        source, dest = self._source_and_stale_output(temp_dir)
+        source, dest = self._source_and_stale_output(tmp_path)
 
         plan = CompressionJob.from_file(
             source,
@@ -332,7 +332,7 @@ class TestDecompressionOverwrite:
     )
     def test_mode_against_an_existing_output(
         self,
-        temp_dir: Path,
+        tmp_path: Path,
         fmt: str,
         mode: OverwriteMode,
         ok: bool,
@@ -340,12 +340,12 @@ class TestDecompressionOverwrite:
         to_sibling: bool,
     ) -> None:
         """Test each mode for the Compresso container and a standalone format."""
-        source = temp_dir / "a.txt"
+        source = tmp_path / "a.txt"
         source.write_bytes(b"hello compresso")
-        compressed = temp_dir / f"a.txt.{fmt}"
+        compressed = tmp_path / f"a.txt.{fmt}"
         options = CompressionOptions(format=None if fmt == "comp" else fmt)
         assert CompressionJob.from_file(source, compressed, options=options).run().ok
-        dest = temp_dir / "out.txt"
+        dest = tmp_path / "out.txt"
         dest.write_bytes(b"stale")
 
         job = DecompressionJob.from_file(compressed, dest, overwrite=mode)
@@ -355,16 +355,16 @@ class TestDecompressionOverwrite:
         if not ok:
             assert isinstance(result.error, FileExistsError)
         assert dest.read_bytes() == (b"hello compresso" if replaced else b"stale")
-        sibling = temp_dir / renamed("out.txt")
+        sibling = tmp_path / renamed("out.txt")
         assert job.plan.dest == (sibling if to_sibling else dest)
         if to_sibling:
             assert sibling.read_bytes() == b"hello compresso"
 
     def test_unknown_mode_is_an_unavailable_plan(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that a mode outside the four names never reaches the C layer."""
-        compressed = temp_dir / "a.comp"
+        compressed = tmp_path / "a.comp"
         assert CompressionJob.from_file(sample_text_file, compressed).run().ok
 
         plan = DecompressionJob.from_file(

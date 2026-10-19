@@ -36,32 +36,32 @@ class TestStoredEntryNames:
     """Tests the names written for each shape of source path."""
 
     def test_absolute_file_round_trips(
-        self, temp_dir: Path, archive_format: tuple[str, str]
+        self, tmp_path: Path, archive_format: tuple[str, str]
     ) -> None:
         """Test that a single file given by absolute path can be extracted."""
         fmt, ext = archive_format
-        source = temp_dir / "payload.txt"
+        source = tmp_path / "payload.txt"
         source.write_bytes(PAYLOAD)
-        archive = temp_dir / f"out{ext}"
+        archive = tmp_path / f"out{ext}"
 
         create_archive(str(archive), fmt, [str(source)])
 
         assert stored_names(archive) == {"payload.txt"}
 
-        dest = temp_dir / "out"
+        dest = tmp_path / "out"
         extract_archive(str(archive), str(dest), [])
 
         assert (dest / "payload.txt").read_bytes() == PAYLOAD
 
     def test_directory_with_trailing_separator_round_trips(
-        self, temp_dir: Path, archive_format: tuple[str, str]
+        self, tmp_path: Path, archive_format: tuple[str, str]
     ) -> None:
         """Test that a trailing separator on a source directory is ignored."""
         fmt, ext = archive_format
-        tree = temp_dir / "tree"
+        tree = tmp_path / "tree"
         (tree / "nested").mkdir(parents=True)
         (tree / "nested" / "payload.txt").write_bytes(PAYLOAD)
-        archive = temp_dir / f"out{ext}"
+        archive = tmp_path / f"out{ext}"
 
         create_archive(str(archive), fmt, [str(tree) + os.sep])
 
@@ -71,22 +71,22 @@ class TestStoredEntryNames:
             "tree/nested/payload.txt",
         }
 
-        dest = temp_dir / "out"
+        dest = tmp_path / "out"
         extract_archive(str(archive), str(dest), [])
 
         assert (dest / "tree" / "nested" / "payload.txt").read_bytes() == PAYLOAD
 
     def test_parent_relative_file_round_trips(
         self,
-        temp_dir: Path,
+        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         archive_format: tuple[str, str],
     ) -> None:
         """Test that a source reached through ".." stores just its name."""
         fmt, ext = archive_format
-        source = temp_dir / "payload.txt"
+        source = tmp_path / "payload.txt"
         source.write_bytes(PAYLOAD)
-        workdir = temp_dir / "work"
+        workdir = tmp_path / "work"
         workdir.mkdir()
         monkeypatch.chdir(workdir)
 
@@ -101,53 +101,53 @@ class TestStoredEntryNames:
 
     def test_nested_relative_file_stores_only_its_name(
         self,
-        temp_dir: Path,
+        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         archive_format: tuple[str, str],
     ) -> None:
         """Test that a file below the working directory drops its parents."""
         fmt, ext = archive_format
-        nested = temp_dir / "sub" / "deeper"
+        nested = tmp_path / "sub" / "deeper"
         nested.mkdir(parents=True)
         (nested / "payload.txt").write_bytes(PAYLOAD)
-        monkeypatch.chdir(temp_dir)
+        monkeypatch.chdir(tmp_path)
 
         create_archive(f"out{ext}", fmt, [os.path.join("sub", "deeper", "payload.txt")])
 
-        assert stored_names(temp_dir / f"out{ext}") == {"payload.txt"}
+        assert stored_names(tmp_path / f"out{ext}") == {"payload.txt"}
 
     def test_source_without_a_usable_name_is_refused(
         self,
-        temp_dir: Path,
+        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         archive_format: tuple[str, str],
     ) -> None:
         """Test that a source named ".." fails when writing, not when extracting."""
         fmt, ext = archive_format
-        workdir = temp_dir / "tree" / "sub"
+        workdir = tmp_path / "tree" / "sub"
         workdir.mkdir(parents=True)
         monkeypatch.chdir(workdir)
 
         with pytest.raises(ValueError, match="unsafe entry name"):
-            create_archive(str(temp_dir / f"out{ext}"), fmt, [".."])
+            create_archive(str(tmp_path / f"out{ext}"), fmt, [".."])
 
     def test_sources_of_both_kinds_agree(
-        self, temp_dir: Path, archive_format: tuple[str, str]
+        self, tmp_path: Path, archive_format: tuple[str, str]
     ) -> None:
         """Test that a file and a directory given the same way are stored alike."""
         fmt, ext = archive_format
-        source = temp_dir / "payload.txt"
+        source = tmp_path / "payload.txt"
         source.write_bytes(PAYLOAD)
-        tree = temp_dir / "tree"
+        tree = tmp_path / "tree"
         tree.mkdir()
         (tree / "inner.txt").write_bytes(PAYLOAD)
-        archive = temp_dir / f"out{ext}"
+        archive = tmp_path / f"out{ext}"
 
         create_archive(str(archive), fmt, [str(source), str(tree)])
 
         assert stored_names(archive) == {"payload.txt", "tree", "tree/inner.txt"}
 
-        dest = temp_dir / "out"
+        dest = tmp_path / "out"
         extract_archive(str(archive), str(dest), [])
 
         assert (dest / "payload.txt").read_bytes() == PAYLOAD

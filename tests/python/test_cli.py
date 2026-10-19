@@ -42,7 +42,7 @@ from compresso.frontend.archive_api import (
     ExtractJob,
 )
 
-from .helpers import renamed
+from .helpers import file_entry, link_entry, make_tar, renamed, umask
 
 runner = CliRunner()
 
@@ -72,34 +72,34 @@ def invoke(*args: str | Path, expect: int | None = EXIT_OK) -> Result:
 
 
 @pytest.fixture
-def payload(temp_dir: Path) -> Path:
+def payload(tmp_path: Path) -> Path:
     """A small incompressible file, below the progress bar threshold.
 
     Args:
-        temp_dir: The temporary directory to use for the payload.
+        tmp_path: The temporary directory to use for the payload.
 
     Returns:
         The path to the payload file.
     """
-    path = temp_dir / "payload.bin"
+    path = tmp_path / "payload.bin"
     path.write_bytes(os.urandom(PAYLOAD_SIZE))
 
     return path
 
 
 @pytest.fixture
-def source_tree(temp_dir: Path) -> Path:
+def source_tree(tmp_path: Path) -> Path:
     """A small directory tree to archive.
 
     Function-scoped because some tests delete it.
 
     Args:
-        temp_dir: The temporary directory to use for the source tree.
+        tmp_path: The temporary directory to use for the source tree.
 
     Returns:
         The path to the source tree root.
     """
-    root = temp_dir / "tree"
+    root = tmp_path / "tree"
     root.mkdir()
     for i in range(3):
         (root / f"f{i}.bin").write_bytes(os.urandom(TREE_FILE_SIZE))
@@ -108,7 +108,7 @@ def source_tree(temp_dir: Path) -> Path:
 
 
 @pytest.fixture
-def make_archive(source_tree: Path, temp_dir: Path) -> Callable[[str], Path]:
+def make_archive(source_tree: Path, tmp_path: Path) -> Callable[[str], Path]:
     """Build an archive of `source_tree` as input for a test.
 
     Built through the API rather than the CLI, and checked, so a broken setup
@@ -116,14 +116,14 @@ def make_archive(source_tree: Path, temp_dir: Path) -> Callable[[str], Path]:
 
     Args:
         source_tree: The tree to archive.
-        temp_dir: The directory to write the archive in.
+        tmp_path: The directory to write the archive in.
 
     Returns:
         A function taking the format and returning the archive's path.
     """
 
     def make(fmt: str) -> Path:
-        archive = temp_dir / f"out.{fmt}"
+        archive = tmp_path / f"out.{fmt}"
         options = ArchiveOptions(format=fmt)
         result = ArchiveJob.from_paths([source_tree], archive, options).run()
         assert result.ok, result.error
@@ -143,7 +143,7 @@ class CompressTarget:
 
 @pytest.fixture(params=["file", "tree"])
 def compress_target(
-    request: pytest.FixtureRequest, payload: Path, source_tree: Path, temp_dir: Path
+    request: pytest.FixtureRequest, payload: Path, source_tree: Path, tmp_path: Path
 ) -> CompressTarget:
     """A single file into a .comp container, or a tree into a tar archive.
 
@@ -154,15 +154,15 @@ def compress_target(
         request: Pytest request object.
         payload: The single-file input.
         source_tree: The directory input.
-        temp_dir: The directory to write the output in.
+        tmp_path: The directory to write the output in.
 
     Returns:
         The input, output and any extra arguments for the call.
     """
     if request.param == "file":
-        return CompressTarget(payload, temp_dir / "out.comp", ())
+        return CompressTarget(payload, tmp_path / "out.comp", ())
 
-    return CompressTarget(source_tree, temp_dir / "out.tar", ("-f", "tar"))
+    return CompressTarget(source_tree, tmp_path / "out.tar", ("-f", "tar"))
 
 
 @dataclass
@@ -326,26 +326,26 @@ class TestProgressBar:
         ids=["large", "large-quiet", "small"],
     )
     def test_compress_bar_follows_size_and_quiet(
-        self, temp_dir: Path, bars: list[Bar], size: int, quiet: bool, expected: bool
+        self, tmp_path: Path, bars: list[Bar], size: int, quiet: bool, expected: bool
     ) -> None:
         """Test that the bar needs both a job past the threshold and no --quiet."""
-        source = temp_dir / "source.bin"
+        source = tmp_path / "source.bin"
         source.write_bytes(os.urandom(size))
 
         invoke(
-            "compress", source, "-o", temp_dir / "out.comp", *(["-q"] if quiet else [])
+            "compress", source, "-o", tmp_path / "out.comp", *(["-q"] if quiet else [])
         )
 
         assert [bar.enabled for bar in bars] == [expected]
 
     def test_file_round_trip_draws_both_bars(
-        self, temp_dir: Path, bars: list[Bar]
+        self, tmp_path: Path, bars: list[Bar]
     ) -> None:
         """Test that compress and extract each drive a bar with real progress."""
-        source = temp_dir / "source.bin"
+        source = tmp_path / "source.bin"
         source.write_bytes(os.urandom(LARGE_PAYLOAD_SIZE))
-        packed = temp_dir / "out.comp"
-        restored = temp_dir / "restored.bin"
+        packed = tmp_path / "out.comp"
+        restored = tmp_path / "restored.bin"
 
         invoke("compress", source, "-o", packed)
         invoke("extract", packed, "-o", restored)
@@ -355,15 +355,15 @@ class TestProgressBar:
         assert restored.read_bytes() == source.read_bytes()
 
     def test_archive_round_trip_draws_both_bars(
-        self, temp_dir: Path, bars: list[Bar]
+        self, tmp_path: Path, bars: list[Bar]
     ) -> None:
         """Test that archiving and extracting a tree each drive a bar too."""
-        tree = temp_dir / "big_tree"
+        tree = tmp_path / "big_tree"
         tree.mkdir()
         for i in range(2):
             (tree / f"f{i}.bin").write_bytes(os.urandom(LARGE_PAYLOAD_SIZE // 2))
-        archive = temp_dir / "out.tar"
-        dest = temp_dir / "dest"
+        archive = tmp_path / "out.tar"
+        dest = tmp_path / "dest"
 
         invoke("compress", tree, "-o", archive, "-f", "tar")
         invoke("extract", archive, "-o", dest)
@@ -379,10 +379,10 @@ class TestProgressBar:
 class TestCompressRoundTrip:
     """Test compress and decompress, end to end."""
 
-    def test_compress_then_decompress(self, payload: Path, temp_dir: Path) -> None:
+    def test_compress_then_decompress(self, payload: Path, tmp_path: Path) -> None:
         """Test that a file survives a round trip through the CLI unchanged."""
-        archive = temp_dir / "out.comp"
-        restored = temp_dir / "restored.bin"
+        archive = tmp_path / "out.comp"
+        restored = tmp_path / "restored.bin"
 
         result = invoke("compress", payload, "-o", archive)
         assert "Compression successful" in result.output
@@ -392,28 +392,28 @@ class TestCompressRoundTrip:
 
         assert restored.read_bytes() == payload.read_bytes()
 
-    def test_quiet_suppresses_output(self, payload: Path, temp_dir: Path) -> None:
+    def test_quiet_suppresses_output(self, payload: Path, tmp_path: Path) -> None:
         """Test that --quiet prints nothing on success."""
-        result = invoke("compress", payload, "-o", temp_dir / "q.comp", "-q")
+        result = invoke("compress", payload, "-o", tmp_path / "q.comp", "-q")
         assert result.output.strip() == ""
 
     @pytest.mark.parametrize("algo", ["zlib", "zstd", "lz4", "bzip2", "lzma"])
     def test_algorithms_round_trip(
-        self, payload: Path, temp_dir: Path, algo: str
+        self, payload: Path, tmp_path: Path, algo: str
     ) -> None:
         """Test that each backend is reachable through the CLI."""
-        archive = temp_dir / f"{algo}.comp"
-        restored = temp_dir / f"{algo}.out"
+        archive = tmp_path / f"{algo}.comp"
+        restored = tmp_path / f"{algo}.out"
 
         invoke("compress", payload, "-o", archive, "-a", algo, "-q")
         invoke("decompress", archive, "-o", restored, "-q")
 
         assert restored.read_bytes() == payload.read_bytes()
 
-    def test_level_above_nine_round_trips(self, payload: Path, temp_dir: Path) -> None:
+    def test_level_above_nine_round_trips(self, payload: Path, tmp_path: Path) -> None:
         """Test that a level above the old 0-9 cap reaches a backend that takes it."""
-        archive = temp_dir / "zstd19.comp"
-        restored = temp_dir / "zstd19.out"
+        archive = tmp_path / "zstd19.comp"
+        restored = tmp_path / "zstd19.out"
 
         invoke("compress", payload, "-o", archive, "-a", "zstd", "-l", "19", "-q")
         invoke("decompress", archive, "-o", restored, "-q")
@@ -426,11 +426,11 @@ class TestArchiveRoundTrip:
 
     @pytest.mark.parametrize("fmt", ["tar", "tar.gz", "tar.zst", "zip"])
     def test_archive_then_extract(
-        self, source_tree: Path, temp_dir: Path, fmt: str
+        self, source_tree: Path, tmp_path: Path, fmt: str
     ) -> None:
         """Test that a tree survives a round trip through each archive format."""
-        archive = temp_dir / f"out.{fmt}"
-        dest = temp_dir / f"dest.{fmt}"
+        archive = tmp_path / f"out.{fmt}"
+        dest = tmp_path / f"dest.{fmt}"
 
         result = invoke("compress", source_tree, "-o", archive, "-f", fmt)
         assert "Archive created" in result.output
@@ -444,12 +444,12 @@ class TestArchiveRoundTrip:
 
     def test_extract_list_only(
         self,
-        temp_dir: Path,
+        tmp_path: Path,
         make_archive: Callable[[str], Path],
     ) -> None:
         """Test that --list prints each entry's size and path without writing anything."""
         archive = make_archive("tar")
-        dest = temp_dir / "dest"
+        dest = tmp_path / "dest"
 
         result = invoke("extract", archive, "--list", "-o", dest)
 
@@ -490,12 +490,12 @@ class TestArchiveRoundTrip:
     def test_extract_renames_clashing_top_level_dir_by_default(
         self,
         source_tree: Path,
-        temp_dir: Path,
+        tmp_path: Path,
         make_archive: Callable[[str], Path],
     ) -> None:
         """Test that a repeat extraction renames the clashing top-level directory."""
         archive = make_archive("tar")
-        dest = temp_dir / "dest"
+        dest = tmp_path / "dest"
 
         invoke("extract", archive, "-o", dest, "-q")
         before = sorted(p.name for p in dest.rglob("*") if p.is_file())
@@ -516,11 +516,11 @@ class TestArchiveRoundTrip:
         )
 
     def test_extract_error_on_conflict_still_refuses(
-        self, temp_dir: Path, make_archive: Callable[[str], Path]
+        self, tmp_path: Path, make_archive: Callable[[str], Path]
     ) -> None:
         """Test that --error-on-conflict reproduces the old refuse-by-default behavior."""
         archive = make_archive("tar")
-        dest = temp_dir / "dest"
+        dest = tmp_path / "dest"
 
         invoke("extract", archive, "-o", dest, "-q")
         invoke(
@@ -535,11 +535,11 @@ class TestArchiveRoundTrip:
 
     @pytest.mark.parametrize("flag", ["--overwrite", "--skip-existing"])
     def test_extract_over_existing_with_a_flag(
-        self, temp_dir: Path, make_archive: Callable[[str], Path], flag: str
+        self, tmp_path: Path, make_archive: Callable[[str], Path], flag: str
     ) -> None:
         """Test that either flag makes a repeat extraction succeed."""
         archive = make_archive("tar")
-        dest = temp_dir / "dest"
+        dest = tmp_path / "dest"
         invoke("extract", archive, "-o", dest, "-q")
 
         invoke("extract", archive, "-o", dest, flag, "-q")
@@ -549,32 +549,23 @@ class TestArchiveRoundTrip:
     )
     @pytest.mark.parametrize("exact", [False, True], ids=["umask", "same-perms"])
     def test_same_permissions_skips_the_umask(
-        self, temp_dir: Path, exact: bool
+        self, tmp_path: Path, exact: bool
     ) -> None:
         """Test that -p restores an entry's mode without the umask applied."""
-        archive = temp_dir / "modes.tar"
-        info = tarfile.TarInfo("a.txt")
-        info.mode = 0o777
-        with tarfile.open(archive, "w") as tar:
-            tar.addfile(info)
-        dest = temp_dir / "dest"
+        archive = tmp_path / "modes.tar"
+        make_tar(archive, file_entry("a.txt", mode=0o777))
+        dest = tmp_path / "dest"
 
         invoke("extract", archive, "-o", dest, *(["-p"] if exact else []), "-q")
 
-        umask = os.umask(0)
-        os.umask(umask)
-        expected = 0o777 if exact else 0o777 & ~umask
+        expected = 0o777 if exact else 0o777 & ~umask()
         assert (dest / "a.txt").stat().st_mode & 0o7777 == expected
 
-    def test_symlinks_flag_reaches_the_policy(self, temp_dir: Path) -> None:
+    def test_symlinks_flag_reaches_the_policy(self, tmp_path: Path) -> None:
         """Test that a symlink refused by default extracts with `--symlinks file`."""
-        archive = temp_dir / "link.tar"
-        info = tarfile.TarInfo("link")
-        info.type = tarfile.SYMTYPE
-        info.linkname = "target"
-        with tarfile.open(archive, "w") as tar:
-            tar.addfile(info)
-        dest = temp_dir / "dest"
+        archive = tmp_path / "link.tar"
+        make_tar(archive, link_entry("link", "target", kind=tarfile.SYMTYPE))
+        dest = tmp_path / "dest"
 
         invoke("extract", archive, "-o", dest, "-q", expect=EXIT_FAILED)
         invoke("extract", archive, "-o", dest, "--symlinks", "file", "-q")
@@ -637,27 +628,27 @@ class TestDecompressConflicts:
     """Test what decompressing one file does when its output already exists."""
 
     def test_renames_clashing_output_by_default(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that an existing output is kept and the new one renamed."""
-        archive = temp_dir / "out.comp"
-        restored = temp_dir / "restored.bin"
+        archive = tmp_path / "out.comp"
+        restored = tmp_path / "restored.bin"
         invoke("compress", payload, "-o", archive, "-q")
         restored.write_bytes(b"stale")
 
         result = invoke("decompress", archive, "-o", restored)
 
-        sibling = temp_dir / renamed(restored.name)
+        sibling = tmp_path / renamed(restored.name)
         assert f"Renamed to:        {sibling}" in result.output
         assert restored.read_bytes() == b"stale"
         assert sibling.read_bytes() == payload.read_bytes()
 
     def test_overwrite_replaces_the_existing_output(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that --overwrite replaces the existing output."""
-        archive = temp_dir / "out.comp"
-        restored = temp_dir / "restored.bin"
+        archive = tmp_path / "out.comp"
+        restored = tmp_path / "restored.bin"
         invoke("compress", payload, "-o", archive, "-q")
         restored.write_bytes(b"stale")
 
@@ -673,33 +664,33 @@ class TestDecompressName:
         ("flags", "expected"), [((), "renamed"), (("-N",), "orig.txt")]
     )
     def test_name_flag(
-        self, temp_dir: Path, flags: tuple[str, ...], expected: str
+        self, tmp_path: Path, flags: tuple[str, ...], expected: str
     ) -> None:
         """Test that the stored name is used only with -N."""
-        src = temp_dir / "renamed.gz"
+        src = tmp_path / "renamed.gz"
         with src.open("wb") as f, gzip.GzipFile("orig.txt", "wb", fileobj=f) as gz:
             gz.write(b"payload")
 
         invoke("extract", src, *flags, "-q")
 
-        assert (temp_dir / expected).read_bytes() == b"payload"
+        assert (tmp_path / expected).read_bytes() == b"payload"
 
 
 class TestInspectAndList:
     """Test the read-only commands."""
 
-    def test_inspect_reports_a_valid_file(self, payload: Path, temp_dir: Path) -> None:
+    def test_inspect_reports_a_valid_file(self, payload: Path, tmp_path: Path) -> None:
         """Test that inspect describes a file the CLI just wrote."""
-        archive = temp_dir / "out.comp"
+        archive = tmp_path / "out.comp"
         invoke("compress", payload, "-o", archive, "-q")
 
         result = invoke("inspect", archive)
 
         assert "Valid Compresso file" in result.output
 
-    def test_inspect_json(self, payload: Path, temp_dir: Path) -> None:
+    def test_inspect_json(self, payload: Path, tmp_path: Path) -> None:
         """Test that --json emits parseable output."""
-        archive = temp_dir / "out.comp"
+        archive = tmp_path / "out.comp"
         invoke("compress", payload, "-o", archive, "-q")
 
         result = invoke("inspect", archive, "--json")
@@ -770,9 +761,9 @@ class TestInspectAndList:
 class TestExitCodes:
     """Test 0 success, 1 the operation failed, 2 the request could not be made."""
 
-    def test_missing_input_is_usage(self, temp_dir: Path) -> None:
+    def test_missing_input_is_usage(self, tmp_path: Path) -> None:
         """Test that compressing a file that is not there is a usage error."""
-        invoke("compress", temp_dir / "nope.bin", expect=EXIT_USAGE)
+        invoke("compress", tmp_path / "nope.bin", expect=EXIT_USAGE)
 
     def test_decompressing_a_non_compresso_file_is_usage(self, payload: Path) -> None:
         """Test that the input is wrong, rather than the operation having failed."""
@@ -799,16 +790,16 @@ class TestExitCodes:
     def test_mutually_exclusive_flag_usage(
         self,
         source_tree: Path,
-        temp_dir: Path,
+        tmp_path: Path,
         make_archive: Callable[[str], Path],
         command: str,
         flags: list[str],
     ) -> None:
         """Test that combining any two overwrite-mode flags is contradictory."""
         if command == "compress":
-            args = [source_tree, "-o", temp_dir / "out.tar", "-f", "tar"]
+            args = [source_tree, "-o", tmp_path / "out.tar", "-f", "tar"]
         else:
-            args = [make_archive("tar"), "-o", temp_dir / "d"]
+            args = [make_archive("tar"), "-o", tmp_path / "d"]
 
         result = invoke(command, *args, *flags, expect=EXIT_USAGE)
         assert "mutually exclusive" in result.output
@@ -822,19 +813,19 @@ class TestExitCodes:
         ],
     )
     def test_out_of_range_level_is_usage(
-        self, payload: Path, temp_dir: Path, args: list[str], message: str
+        self, payload: Path, tmp_path: Path, args: list[str], message: str
     ) -> None:
         """Test that a level the backend rejects is refused up front, naming the range."""
-        dest = temp_dir / "out.bin"
+        dest = tmp_path / "out.bin"
         result = invoke("compress", payload, "-o", dest, *args, expect=EXIT_USAGE)
         assert message in result.output
         assert not dest.exists()
 
     def test_out_of_range_archive_level_is_usage(
-        self, source_tree: Path, temp_dir: Path
+        self, source_tree: Path, tmp_path: Path
     ) -> None:
         """Test that an archive's level is checked against the stage that compresses."""
-        dest = temp_dir / "out.tar"
+        dest = tmp_path / "out.tar"
         result = invoke(
             "compress",
             source_tree,
@@ -854,24 +845,24 @@ class TestExitCodes:
         invoke("benchmark", payload, "--levels", "nope", expect=EXIT_USAGE)
 
     def test_unknown_archive_format_is_usage(
-        self, source_tree: Path, temp_dir: Path
+        self, source_tree: Path, tmp_path: Path
     ) -> None:
         """Test that a format that cannot hold multiple entries is refused up front."""
         invoke(
             "compress",
             source_tree,
             "-o",
-            temp_dir / "o.gz",
+            tmp_path / "o.gz",
             "-f",
             "gz",
             expect=EXIT_USAGE,
         )
 
     def test_recognised_but_unsupported_archive_names_itself(
-        self, source_tree: Path, temp_dir: Path
+        self, source_tree: Path, tmp_path: Path
     ) -> None:
         """Test that a detected-but-unwritable container reports its own name."""
-        dest = temp_dir / "o.7z"
+        dest = tmp_path / "o.7z"
         result = invoke(
             "compress", source_tree, "-o", dest, "-f", "7z", expect=EXIT_FAILED
         )
@@ -879,20 +870,20 @@ class TestExitCodes:
         assert not dest.exists()
 
     def test_unsupported_archive_suffix_is_not_written_as_zip(
-        self, source_tree: Path, temp_dir: Path
+        self, source_tree: Path, tmp_path: Path
     ) -> None:
         """Test that `-o x.7z` alone names 7z rather than writing a zip there."""
-        dest = temp_dir / "o.7z"
+        dest = tmp_path / "o.7z"
         result = invoke("compress", source_tree, "-o", dest, expect=EXIT_FAILED)
         assert "7z archives are recognised but not supported yet" in result.output
         assert not dest.exists()
 
     def test_failed_operation_is_one(
-        self, temp_dir: Path, make_archive: Callable[[str], Path]
+        self, tmp_path: Path, make_archive: Callable[[str], Path]
     ) -> None:
         """Test that a job that starts and then fails exits 1, not 2."""
         archive = make_archive("tar")
-        dest = temp_dir / "dest"
+        dest = tmp_path / "dest"
         invoke("extract", archive, "-o", dest, "-q")
 
         invoke(
@@ -977,10 +968,10 @@ class TestSmartCompress:
         assert payload.with_suffix(payload.suffix + suffix).exists()
 
     def test_standalone_output_is_a_real_gzip(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that the .gz written is the format, not merely the name."""
-        output = temp_dir / "out.gz"
+        output = tmp_path / "out.gz"
         invoke("compress", payload, "-o", output, "-q")
 
         with gzip.open(output, "rb") as f:
@@ -993,12 +984,12 @@ class TestSmartCompress:
         assert (source_tree.parent / f"{source_tree.name}.zip").exists()
 
     def test_several_files_become_an_archive(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that multiple files become an archive."""
-        second = temp_dir / "second.bin"
+        second = tmp_path / "second.bin"
         second.write_bytes(os.urandom(1024))
-        output = temp_dir / "both.tar"
+        output = tmp_path / "both.tar"
 
         invoke("compress", payload, second, "-o", output, "-q")
 
@@ -1014,20 +1005,20 @@ class TestSmartCompress:
         ],
     )
     def test_format_inferred_from_the_output_name(
-        self, payload: Path, temp_dir: Path, name: str, expected_magic: bytes
+        self, payload: Path, tmp_path: Path, name: str, expected_magic: bytes
     ) -> None:
         """Test that a recognisable extension on -o chooses the format by itself."""
-        output = temp_dir / name
+        output = tmp_path / name
 
         invoke("compress", payload, "-o", output, "-q")
 
         assert output.read_bytes().startswith(expected_magic)
 
     def test_explicit_format_beats_the_output_name(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that -f overrides whatever the extension suggests."""
-        output = temp_dir / "misleading.gz"
+        output = tmp_path / "misleading.gz"
 
         invoke("compress", payload, "-o", output, "-f", "zst", "-q")
 
@@ -1037,20 +1028,20 @@ class TestSmartCompress:
         "name", ["out.tar.zst", "out.tar.lz4", "out.tlz4", "out.tar.sz"]
     )
     def test_tar_inside_a_codec_is_an_archive(
-        self, source_tree: Path, temp_dir: Path, name: str
+        self, source_tree: Path, tmp_path: Path, name: str
     ) -> None:
         """Test that two-part extensions name an archive, not their codec alone."""
-        output = temp_dir / name
+        output = tmp_path / name
 
         invoke("compress", source_tree, "-o", output, "-q")
 
         # Round-trips as an archive rather than as a lone compressed file
-        dest = temp_dir / "back"
+        dest = tmp_path / "back"
         invoke("extract", output, "-o", dest, "-q")
         assert (dest / source_tree.name).is_dir()
 
     def test_single_file_format_refuses_several_inputs(
-        self, source_tree: Path, temp_dir: Path
+        self, source_tree: Path, tmp_path: Path
     ) -> None:
         """Test that a .gz holds one file, so a directory cannot go into one."""
         result = invoke(
@@ -1059,7 +1050,7 @@ class TestSmartCompress:
             "-f",
             "gz",
             "-o",
-            temp_dir / "o.gz",
+            tmp_path / "o.gz",
             expect=EXIT_USAGE,
         )
 
@@ -1116,11 +1107,11 @@ class TestSmartExtract:
 
     @pytest.mark.parametrize("fmt", ["gz", "bz2", "xz", "zst", "lz4", "sz"])
     def test_standalone_round_trip(
-        self, payload: Path, temp_dir: Path, fmt: str
+        self, payload: Path, tmp_path: Path, fmt: str
     ) -> None:
         """Test every standalone container goes out and comes back."""
-        packed = temp_dir / f"p.{fmt}"
-        restored = temp_dir / f"back.{fmt}"
+        packed = tmp_path / f"p.{fmt}"
+        restored = tmp_path / f"back.{fmt}"
 
         invoke("compress", payload, "-o", packed, "-q")
         invoke("extract", packed, "-o", restored, "-q")
@@ -1128,15 +1119,15 @@ class TestSmartExtract:
         assert restored.read_bytes() == payload.read_bytes()
 
     def test_dispatch_follows_the_bytes_not_the_name(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that a renamed .gz is still recognised as one."""
-        packed = temp_dir / "p.gz"
+        packed = tmp_path / "p.gz"
         invoke("compress", payload, "-o", packed, "-q")
 
-        disguised = temp_dir / "mystery.dat"
+        disguised = tmp_path / "mystery.dat"
         disguised.write_bytes(packed.read_bytes())
-        restored = temp_dir / "back.bin"
+        restored = tmp_path / "back.bin"
 
         invoke("extract", disguised, "-o", restored, "-q")
 
@@ -1145,13 +1136,13 @@ class TestSmartExtract:
     def test_an_archive_named_like_anything_still_extracts(
         self,
         source_tree: Path,
-        temp_dir: Path,
+        tmp_path: Path,
         make_archive: Callable[[str], Path],
     ) -> None:
         """Test that a renamed archive still extracts."""
-        disguised = temp_dir / "riddle.bin"
+        disguised = tmp_path / "riddle.bin"
         disguised.write_bytes(make_archive("tar").read_bytes())
-        dest = temp_dir / "out"
+        dest = tmp_path / "out"
 
         invoke("extract", disguised, "-o", dest, "-q")
 
@@ -1160,7 +1151,7 @@ class TestSmartExtract:
     def test_an_archive_unpacks_beside_itself(
         self,
         source_tree: Path,
-        temp_dir: Path,
+        tmp_path: Path,
         make_archive: Callable[[str], Path],
     ) -> None:
         """Test that with no -o, entries land next to the archive, not in the cwd."""
@@ -1173,40 +1164,40 @@ class TestSmartExtract:
 
         invoke("extract", packed, "-q")
 
-        assert (temp_dir / source_tree.name).is_dir()
+        assert (tmp_path / source_tree.name).is_dir()
         assert not (Path.cwd() / source_tree.name).exists()
 
     def test_output_directory_receives_a_single_file(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that -o naming an existing directory puts the file inside it."""
-        packed = temp_dir / "p.gz"
+        packed = tmp_path / "p.gz"
         invoke("compress", payload, "-o", packed, "-q")
 
-        into = temp_dir / "into"
+        into = tmp_path / "into"
         into.mkdir()
 
         invoke("extract", packed, "-o", into, "-q")
 
         assert (into / "p").read_bytes() == payload.read_bytes()
 
-    def test_several_inputs_in_one_go(self, payload: Path, temp_dir: Path) -> None:
+    def test_several_inputs_in_one_go(self, payload: Path, tmp_path: Path) -> None:
         """Test that each input is dispatched on its own."""
-        first = temp_dir / "a.gz"
-        second = temp_dir / "b.zst"
+        first = tmp_path / "a.gz"
+        second = tmp_path / "b.zst"
         invoke("compress", payload, "-o", first, "-q")
         invoke("compress", payload, "-o", second, "-q")
 
         invoke("extract", first, second, "-q")
 
-        assert (temp_dir / "a").read_bytes() == payload.read_bytes()
-        assert (temp_dir / "b").read_bytes() == payload.read_bytes()
+        assert (tmp_path / "a").read_bytes() == payload.read_bytes()
+        assert (tmp_path / "b").read_bytes() == payload.read_bytes()
 
     def test_listing_a_single_file_container_is_refused(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that there is nothing to list in a container holding one file."""
-        packed = temp_dir / "p.gz"
+        packed = tmp_path / "p.gz"
         invoke("compress", payload, "-o", packed, "-q")
 
         result = invoke("extract", packed, "--list", expect=EXIT_USAGE)
@@ -1219,10 +1210,10 @@ class TestMergedVerbCompatibility:
 
     @pytest.mark.parametrize("name", ["archive", "a", "ar"])
     def test_archive_names_reach_compress(
-        self, source_tree: Path, temp_dir: Path, name: str
+        self, source_tree: Path, tmp_path: Path, name: str
     ) -> None:
         """Test that `archive` is an alias of `compress`."""
-        output = temp_dir / "out.tar.zst"
+        output = tmp_path / "out.tar.zst"
 
         invoke(name, source_tree, "-o", output, "-q")
 
@@ -1230,11 +1221,11 @@ class TestMergedVerbCompatibility:
 
     @pytest.mark.parametrize("name", ["decompress", "d", "decomp"])
     def test_decompress_names_reach_extract(
-        self, payload: Path, temp_dir: Path, name: str
+        self, payload: Path, tmp_path: Path, name: str
     ) -> None:
         """Test that `decompress` is an alias of `extract`."""
-        packed = temp_dir / "p.comp"
-        restored = temp_dir / "back.bin"
+        packed = tmp_path / "p.comp"
+        restored = tmp_path / "back.bin"
         invoke("compress", payload, "-o", packed, "-q")
 
         invoke(name, packed, "-o", restored, "-q")
@@ -1244,11 +1235,11 @@ class TestMergedVerbCompatibility:
     def test_decompress_now_handles_archives_too(
         self,
         source_tree: Path,
-        temp_dir: Path,
+        tmp_path: Path,
         make_archive: Callable[[str], Path],
     ) -> None:
         """Test that the merged verb does not care which name was typed."""
-        dest = temp_dir / "out"
+        dest = tmp_path / "out"
 
         invoke("decompress", make_archive("tar"), "-o", dest, "-q")
 
