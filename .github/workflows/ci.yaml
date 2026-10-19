@@ -107,7 +107,7 @@ jobs:
   # Every Python version on Linux, 3.14 elsewhere; entries with sanitize set
   # also run the C tests
   tests:
-    name: Run all tests (${{ matrix.os }}, py${{ matrix.python }})
+    name: Run tests (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -168,7 +168,7 @@ jobs:
           uv run meson test -C build/c-tests --print-errorlogs
 
   test-python-windows:
-    name: Python tests (windows-latest, py3.14)
+    name: Run tests (windows-latest, py3.14)
     runs-on: windows-latest
     needs: vcpkg-windows
     steps:
