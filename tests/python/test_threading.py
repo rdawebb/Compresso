@@ -127,10 +127,10 @@ class TestStart:
     """Tests `start()` and the handle it returns."""
 
     def test_result_waits_and_returns_the_outcome(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that `result()` blocks until the job finishes, then reports success."""
-        output = temp_dir / "out.comp"
+        output = tmp_path / "out.comp"
 
         with quick_job(payload, output).start() as handle:
             assert isinstance(handle, JobHandle)
@@ -142,10 +142,10 @@ class TestStart:
         assert output.stat().st_size > 0
 
     def test_done_is_false_until_it_finishes(
-        self, payload: Path, temp_dir: Path, gate: Gate
+        self, payload: Path, tmp_path: Path, gate: Gate
     ) -> None:
         """Test that `done()` tracks the job rather than the call to `start()`."""
-        with quick_job(payload, temp_dir / "out.comp").start(
+        with quick_job(payload, tmp_path / "out.comp").start(
             progress=gate, cancel=gate.token
         ) as handle:
             gate.wait_until_held()
@@ -155,19 +155,19 @@ class TestStart:
             handle.result(timeout=30)
             assert handle.done() is True
 
-    def test_result_is_repeatable(self, payload: Path, temp_dir: Path) -> None:
+    def test_result_is_repeatable(self, payload: Path, tmp_path: Path) -> None:
         """Test that asking twice gives the same answer rather than blocking again."""
-        with quick_job(payload, temp_dir / "out.comp").start() as handle:
+        with quick_job(payload, tmp_path / "out.comp").start() as handle:
             first = handle.result(timeout=30)
             second = handle.result(timeout=1)
 
         assert first is second
 
     def test_result_times_out_while_running(
-        self, payload: Path, temp_dir: Path, gate: Gate
+        self, payload: Path, tmp_path: Path, gate: Gate
     ) -> None:
         """Test that a timeout that expires raises rather than returning a half-result."""
-        with quick_job(payload, temp_dir / "out.comp").start(
+        with quick_job(payload, tmp_path / "out.comp").start(
             progress=gate, cancel=gate.token
         ) as handle:
             gate.wait_until_held()
@@ -176,13 +176,13 @@ class TestStart:
                 handle.result(timeout=0.01)
 
     def test_progress_callback_runs_on_the_job_thread(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that the progress callback runs on the job thread."""
         caller = threading.get_ident()
         seen: list[int] = []
 
-        with quick_job(payload, temp_dir / "out.comp").start(
+        with quick_job(payload, tmp_path / "out.comp").start(
             progress=lambda f, done, total: seen.append(threading.get_ident())
         ) as handle:
             handle.result(timeout=30)
@@ -191,9 +191,9 @@ class TestStart:
         assert all(ident != caller for ident in seen)
         assert len(set(seen)) == 1, "expected a single job thread"
 
-    def test_start_works_for_archive_jobs(self, payload: Path, temp_dir: Path) -> None:
+    def test_start_works_for_archive_jobs(self, payload: Path, tmp_path: Path) -> None:
         """Test that threading is shared by every job type, not only compression."""
-        output = temp_dir / "out.tar.zst"
+        output = tmp_path / "out.tar.zst"
 
         with ArchiveJob.from_paths(sources=[payload], output=output).start() as handle:
             result = handle.result(timeout=30)
@@ -201,14 +201,14 @@ class TestStart:
         assert result.ok is True
         assert output.stat().st_size > 0
 
-    def test_start_works_for_extract_jobs(self, payload: Path, temp_dir: Path) -> None:
+    def test_start_works_for_extract_jobs(self, payload: Path, tmp_path: Path) -> None:
         """Test that extraction can be backgrounded too."""
         # Archived as a directory so extraction has a nested path to recreate
-        tree = temp_dir / "tree"
+        tree = tmp_path / "tree"
         tree.mkdir()
         (tree / payload.name).write_bytes(payload.read_bytes())
 
-        archive = temp_dir / "in.tar"
+        archive = tmp_path / "in.tar"
         assert (
             ArchiveJob.from_paths(
                 sources=[tree], output=archive, options=ArchiveOptions(format="tar")
@@ -217,7 +217,7 @@ class TestStart:
             .ok
         )
 
-        dest = temp_dir / "out"
+        dest = tmp_path / "out"
         with ExtractJob.from_archive(
             archive=archive, output_dir=dest
         ).start() as handle:
@@ -231,10 +231,10 @@ class TestHandleCancellation:
     """Tests stopping a backgrounded job."""
 
     def test_cancel_stops_the_job(
-        self, payload: Path, temp_dir: Path, gate: Gate
+        self, payload: Path, tmp_path: Path, gate: Gate
     ) -> None:
         """Test that a cancelled job reports through the flag, not as a failure."""
-        output = temp_dir / "cancelled.comp"
+        output = tmp_path / "cancelled.comp"
 
         with quick_job(payload, output).start(
             progress=gate, cancel=gate.token
@@ -249,10 +249,10 @@ class TestHandleCancellation:
         assert not output.exists()
 
     def test_cancel_after_completion_is_harmless(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that cancelling a finished job leaves its result alone."""
-        with quick_job(payload, temp_dir / "out.comp").start() as handle:
+        with quick_job(payload, tmp_path / "out.comp").start() as handle:
             result = handle.result(timeout=30)
 
             handle.cancel()
@@ -261,10 +261,10 @@ class TestHandleCancellation:
             assert handle.result(timeout=1) is result
 
     def test_cancel_is_idempotent(
-        self, payload: Path, temp_dir: Path, gate: Gate
+        self, payload: Path, tmp_path: Path, gate: Gate
     ) -> None:
         """Test that cancelling twice behaves like cancelling once."""
-        with quick_job(payload, temp_dir / "out.comp").start(
+        with quick_job(payload, tmp_path / "out.comp").start(
             progress=gate, cancel=gate.token
         ) as handle:
             gate.wait_until_held()
@@ -276,13 +276,13 @@ class TestHandleCancellation:
         assert result.cancelled is True
 
     def test_supplied_token_cancels_several_jobs_at_once(
-        self, payload: Path, temp_dir: Path, gate: Gate
+        self, payload: Path, tmp_path: Path, gate: Gate
     ) -> None:
         """Test that one token passed to several jobs stops all of them."""
         with ExitStack() as stack:
             handles = [
                 stack.enter_context(
-                    quick_job(payload, temp_dir / f"multi{i}.comp").start(
+                    quick_job(payload, tmp_path / f"multi{i}.comp").start(
                         progress=gate, cancel=gate.token
                     )
                 )
@@ -303,10 +303,10 @@ class TestHandleContextManager:
     """Test `with job.start() as handle:`."""
 
     def test_exit_cancels_and_waits_for_the_job(
-        self, payload: Path, temp_dir: Path, gate: Gate
+        self, payload: Path, tmp_path: Path, gate: Gate
     ) -> None:
         """Test that leaving the block stops a running job and waits for it."""
-        output = temp_dir / "ctx.comp"
+        output = tmp_path / "ctx.comp"
 
         with quick_job(payload, output).start(
             progress=gate, cancel=gate.token
@@ -318,10 +318,10 @@ class TestHandleContextManager:
         assert not output.exists()
 
     def test_a_completed_job_survives_the_block(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that cancelling after the work is done does not undo it."""
-        output = temp_dir / "ctx.comp"
+        output = tmp_path / "ctx.comp"
 
         with quick_job(payload, output).start() as handle:
             result = handle.result(timeout=30)
@@ -330,14 +330,14 @@ class TestHandleContextManager:
         assert output.stat().st_size > 0
 
     def test_exception_in_the_block_still_cancels(
-        self, payload: Path, temp_dir: Path, gate: Gate
+        self, payload: Path, tmp_path: Path, gate: Gate
     ) -> None:
         """Test that an error in the body must not leak a running job."""
         handle: JobHandle | None = None
 
         with (
             pytest.raises(RuntimeError, match="boom"),
-            quick_job(payload, temp_dir / "ctx.comp").start(
+            quick_job(payload, tmp_path / "ctx.comp").start(
                 progress=gate, cancel=gate.token
             ) as h,
         ):
@@ -353,9 +353,9 @@ class TestHandleContextManager:
 class TestRunAsync:
     """Test `run_async`, the asyncio veneer over the same threading path."""
 
-    def test_awaits_to_a_result(self, payload: Path, temp_dir: Path) -> None:
+    def test_awaits_to_a_result(self, payload: Path, tmp_path: Path) -> None:
         """Test that awaiting returns the same JobResult a sync run would."""
-        output = temp_dir / "async.comp"
+        output = tmp_path / "async.comp"
 
         async def main() -> JobResult:
             return await quick_job(payload, output).run_async()
@@ -366,13 +366,13 @@ class TestRunAsync:
         assert output.stat().st_size > 0
 
     def test_does_not_block_the_event_loop(
-        self, payload: Path, temp_dir: Path, gate: Gate
+        self, payload: Path, tmp_path: Path, gate: Gate
     ) -> None:
         """Test that other coroutines keep running while the job does."""
 
         async def main() -> JobResult:
             task = asyncio.create_task(
-                quick_job(payload, temp_dir / "async.comp").run_async(
+                quick_job(payload, tmp_path / "async.comp").run_async(
                     progress=gate, cancel=gate.token
                 )
             )
@@ -385,10 +385,10 @@ class TestRunAsync:
         assert asyncio.run(main()).ok is True
 
     def test_cancelling_the_task_cancels_the_job(
-        self, payload: Path, temp_dir: Path, gate: Gate
+        self, payload: Path, tmp_path: Path, gate: Gate
     ) -> None:
         """Test that cancelling the awaiting task stops the job and cleans up."""
-        output = temp_dir / "async_cancelled.comp"
+        output = tmp_path / "async_cancelled.comp"
 
         async def main() -> None:
             task = asyncio.create_task(
@@ -408,12 +408,12 @@ class TestRunAsync:
         assert gate.token.cancelled is True
         assert not output.exists()
 
-    def test_reports_progress(self, payload: Path, temp_dir: Path) -> None:
+    def test_reports_progress(self, payload: Path, tmp_path: Path) -> None:
         """Test that progress reporting works the same way through the async path."""
         calls: list[tuple[float, int, int]] = []
 
         async def main() -> JobResult:
-            return await quick_job(payload, temp_dir / "async.comp").run_async(
+            return await quick_job(payload, tmp_path / "async.comp").run_async(
                 progress=lambda f, done, total: calls.append((f, done, total))
             )
 
@@ -425,7 +425,7 @@ class TestRunAsync:
 class TestParallelism:
     """Tests started jobs run at the same time."""
 
-    def test_two_jobs_overlap_in_time(self, payload: Path, temp_dir: Path) -> None:
+    def test_two_jobs_overlap_in_time(self, payload: Path, tmp_path: Path) -> None:
         """Test that both jobs are mid-flight at the same moment."""
         barrier = threading.Barrier(2, timeout=HOLD_TIMEOUT)
 
@@ -443,7 +443,7 @@ class TestParallelism:
         with ExitStack() as stack:
             handles = [
                 stack.enter_context(
-                    quick_job(payload, temp_dir / f"p{i}.comp").start(
+                    quick_job(payload, tmp_path / f"p{i}.comp").start(
                         progress=meet_once()
                     )
                 )
@@ -453,7 +453,7 @@ class TestParallelism:
 
         assert all(r.ok for r in results), [r.error for r in results]
 
-    def test_parallel_jobs_produce_correct_output(self, temp_dir: Path) -> None:
+    def test_parallel_jobs_produce_correct_output(self, tmp_path: Path) -> None:
         """Test that concurrency must not corrupt anything.
 
         Each call gets its own CoreContext on its own stack, rather than state
@@ -461,7 +461,7 @@ class TestParallelism:
         """
         sources = []
         for i in range(4):
-            path = temp_dir / f"c{i}.bin"
+            path = tmp_path / f"c{i}.bin"
             path.write_bytes(os.urandom(2 * 1024 * 1024))
             sources.append(path)
 
@@ -469,7 +469,7 @@ class TestParallelism:
             handles = [
                 stack.enter_context(
                     CompressionJob.from_file(
-                        src=sources[i], dest=temp_dir / f"c{i}.comp"
+                        src=sources[i], dest=tmp_path / f"c{i}.comp"
                     ).start()
                 )
                 for i in range(4)
@@ -479,16 +479,16 @@ class TestParallelism:
         assert all(r.ok for r in results)
 
         for i in range(4):
-            restored = temp_dir / f"r{i}.bin"
+            restored = tmp_path / f"r{i}.bin"
             assert (
-                DecompressionJob.from_file(src=temp_dir / f"c{i}.comp", dest=restored)
+                DecompressionJob.from_file(src=tmp_path / f"c{i}.comp", dest=restored)
                 .run()
                 .ok
             )
             assert restored.read_bytes() == sources[i].read_bytes()
 
     def test_cancelling_one_job_leaves_the_others_alone(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that each job's token is its own."""
         gates = [Gate() for _ in range(3)]
@@ -496,7 +496,7 @@ class TestParallelism:
         with ExitStack() as stack:
             handles = [
                 stack.enter_context(
-                    quick_job(payload, temp_dir / f"i{i}.comp").start(
+                    quick_job(payload, tmp_path / f"i{i}.comp").start(
                         progress=gates[i], cancel=gates[i].token
                     )
                 )
@@ -514,16 +514,16 @@ class TestParallelism:
         assert results[0].ok is True
         assert results[1].cancelled is True
         assert results[2].ok is True
-        assert not (temp_dir / "i1.comp").exists()
+        assert not (tmp_path / "i1.comp").exists()
         assert not any(g.timed_out for g in gates)
 
     def test_zip_creation_lets_other_threads_run(
-        self, payload: Path, temp_dir: Path
+        self, payload: Path, tmp_path: Path
     ) -> None:
         """Test that libzip compresses inside zip_close without holding the GIL."""
         job = ArchiveJob.from_paths(
             sources=[payload],
-            output=temp_dir / "out.zip",
+            output=tmp_path / "out.zip",
             options=ArchiveOptions(format="zip"),
         )
 
@@ -540,28 +540,28 @@ class TestParallelism:
 class TestThreadsOption:
     """Test that every job hands its `threads` option to the core."""
 
-    def test_each_job_passes_it_on(self, payload: Path, temp_dir: Path) -> None:
+    def test_each_job_passes_it_on(self, payload: Path, tmp_path: Path) -> None:
         """Test that a negative count reaches the core's check from each job."""
-        comp = temp_dir / "in.comp"
-        archive = temp_dir / "in.tar.xz"
+        comp = tmp_path / "in.comp"
+        archive = tmp_path / "in.tar.xz"
         assert quick_job(payload, comp).run().ok
         assert ArchiveJob.from_paths(sources=[payload], output=archive).run().ok
 
         jobs = [
             CompressionJob.from_file(
                 src=payload,
-                dest=temp_dir / "c.comp",
+                dest=tmp_path / "c.comp",
                 options=CompressionOptions(threads=-1),
             ),
-            DecompressionJob.from_file(src=comp, dest=temp_dir / "d", threads=-1),
+            DecompressionJob.from_file(src=comp, dest=tmp_path / "d", threads=-1),
             ArchiveJob.from_paths(
                 sources=[payload],
-                output=temp_dir / "a.tar.zst",
+                output=tmp_path / "a.tar.zst",
                 options=ArchiveOptions(threads=-1),
             ),
             ExtractJob.from_archive(
                 archive=archive,
-                output_dir=temp_dir / "x",
+                output_dir=tmp_path / "x",
                 options=ExtractOptions(threads=-1),
             ),
         ]

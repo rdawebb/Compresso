@@ -75,7 +75,7 @@ class TestCoreExceptions:
         """Test that bad input is told apart from a backend failure."""
         assert not issubclass(CorruptDataError, BackendError)
 
-    def test_each_module_raises_its_own(self, temp_dir: Path) -> None:
+    def test_each_module_raises_its_own(self, tmp_path: Path) -> None:
         """Test that a second _core module object raises its own classes."""
         spec = importlib.util.find_spec("compresso._core")
         assert spec and spec.loader
@@ -83,12 +83,12 @@ class TestCoreExceptions:
         spec.loader.exec_module(fresh)
         assert fresh.Cancelled is not Cancelled
 
-        source = temp_dir / "input.txt"
+        source = tmp_path / "input.txt"
         source.write_bytes(b"data")
         token = fresh.CancelToken()
         token.cancel()
         with pytest.raises(fresh.Cancelled):
-            fresh.compress_file(source, temp_dir / "out.comp", cancel=token)
+            fresh.compress_file(source, tmp_path / "out.comp", cancel=token)
 
 
 class TestCapabilities:
@@ -146,11 +146,11 @@ class TestCompressFile:
     """Test the compress_file function."""
 
     def test_round_trip_every_backend(
-        self, sample_binary_file: Path, temp_dir: Path, compression_algo: str
+        self, sample_binary_file: Path, tmp_path: Path, compression_algo: str
     ) -> None:
         """Test that each backend's output decompresses back to the original bytes."""
-        compressed = temp_dir / f"{compression_algo}.comp"
-        restored = temp_dir / f"{compression_algo}.out"
+        compressed = tmp_path / f"{compression_algo}.comp"
+        restored = tmp_path / f"{compression_algo}.out"
 
         written = compress_file(
             str(sample_binary_file), str(compressed), compression_algo, "balanced", -1
@@ -161,10 +161,10 @@ class TestCompressFile:
         assert restored.read_bytes() == sample_binary_file.read_bytes()
 
     def test_unknown_strategy_is_refused(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that a misspelt strategy raises rather than meaning balanced."""
-        compressed = temp_dir / "typo.comp"
+        compressed = tmp_path / "typo.comp"
 
         with pytest.raises(ValueError, match="Unknown strategy: fsat"):
             compress_file(str(sample_text_file), str(compressed), "", "fsat", -1)
@@ -173,33 +173,33 @@ class TestCompressFile:
 
     @pytest.mark.parametrize("strategy", ["fast", "balanced", "max_ratio"])
     def test_round_trip_every_strategy(
-        self, sample_text_file: Path, temp_dir: Path, strategy: str
+        self, sample_text_file: Path, tmp_path: Path, strategy: str
     ) -> None:
         """Test that the backend each strategy picks round-trips too.
 
         No algorithm is named, so the strategy is what chooses the backend.
         """
-        compressed = temp_dir / f"{strategy}.comp"
-        restored = temp_dir / f"{strategy}.out"
+        compressed = tmp_path / f"{strategy}.comp"
+        restored = tmp_path / f"{strategy}.out"
 
         compress_file(str(sample_text_file), str(compressed), "", strategy, -1)
         decompress_file(str(compressed), str(restored), "")
 
         assert restored.read_bytes() == sample_text_file.read_bytes()
 
-    def test_compress_nonexistent_file(self, temp_dir: Path) -> None:
+    def test_compress_nonexistent_file(self, tmp_path: Path) -> None:
         """Test compressing a file that doesn't exist."""
-        input_file = temp_dir / "nonexistent.txt"
-        output_file = temp_dir / "output.comp"
+        input_file = tmp_path / "nonexistent.txt"
+        output_file = tmp_path / "output.comp"
 
         with pytest.raises(FileNotFoundError):
             compress_file(str(input_file), str(output_file), "zlib", "balanced", 6)
 
     def test_compress_large_file(
-        self, large_compressible_file: Path, temp_dir: Path
+        self, large_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test compressing a large file."""
-        output_file = temp_dir / "compressed_large.comp"
+        output_file = tmp_path / "compressed_large.comp"
 
         result = compress_file(
             str(large_compressible_file), str(output_file), "zlib", "balanced", 6
@@ -213,33 +213,33 @@ class TestCompressFile:
 class TestDecompressFile:
     """Test the decompress_file function."""
 
-    def test_decompress_nonexistent_file(self, temp_dir: Path) -> None:
+    def test_decompress_nonexistent_file(self, tmp_path: Path) -> None:
         """Test decompressing a file that doesn't exist."""
-        input_file = temp_dir / "nonexistent.comp"
-        output_file = temp_dir / "output.txt"
+        input_file = tmp_path / "nonexistent.comp"
+        output_file = tmp_path / "output.txt"
 
         with pytest.raises(FileNotFoundError):
             decompress_file(str(input_file), str(output_file), "")
 
-    def test_decompress_directory(self, temp_dir: Path) -> None:
+    def test_decompress_directory(self, tmp_path: Path) -> None:
         """Test that a directory is refused as unreadable, not as unrecognised."""
         # Windows refuses to open a directory at all, so it reports EACCES
         with pytest.raises((IsADirectoryError, PermissionError)):
-            decompress_file(str(temp_dir), str(temp_dir / "output.txt"), "")
+            decompress_file(str(tmp_path), str(tmp_path / "output.txt"), "")
 
     def test_decompress_invalid_file(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that a file in no recognised format is refused as such."""
-        output_file = temp_dir / "output.txt"
+        output_file = tmp_path / "output.txt"
 
         with pytest.raises(Error, match="Unknown or unsupported format"):
             decompress_file(str(sample_text_file), str(output_file), "")
 
-    def test_round_trip_small_file(self, small_file: Path, temp_dir: Path) -> None:
+    def test_round_trip_small_file(self, small_file: Path, tmp_path: Path) -> None:
         """Test compression and decompression of very small files."""
-        compressed_file = temp_dir / "compressed_small.comp"
-        decompressed_file = temp_dir / "decompressed_small.txt"
+        compressed_file = tmp_path / "compressed_small.comp"
+        decompressed_file = tmp_path / "decompressed_small.txt"
 
         original_content = small_file.read_text()
 
@@ -259,19 +259,19 @@ class TestDecompressFile:
             "emoji-🗜️-file",  # Outside the BMP: a surrogate pair in UTF-16
         ],
     )
-    def test_round_trip_non_ascii_filename(self, temp_dir: Path, name: str) -> None:
+    def test_round_trip_non_ascii_filename(self, tmp_path: Path, name: str) -> None:
         """Test that paths outside ASCII survive a compress/decompress round trip.
 
         Paths reach the C layer as UTF-8: on Windows the narrow CRT would read
         those bytes in the active code page and open the wrong file, so this is the
         check that the wide-character path handling works.
         """
-        source = temp_dir / f"{name}.txt"
+        source = tmp_path / f"{name}.txt"
         content = f"contents of {name}" * 50
         source.write_text(content, encoding="utf-8")
 
-        compressed_file = temp_dir / f"{name}.comp"
-        decompressed_file = temp_dir / f"{name}-restored.txt"
+        compressed_file = tmp_path / f"{name}.comp"
+        decompressed_file = tmp_path / f"{name}-restored.txt"
 
         compress_file(str(source), str(compressed_file), "zlib", "balanced", 6)
         assert compressed_file.is_file()
@@ -282,12 +282,12 @@ class TestDecompressFile:
 
     @pytest.mark.parametrize(("algo", "refused"), [("zstd", True), ("zlib", False)])
     def test_algo_is_checked_against_a_container(
-        self, temp_dir: Path, algo: str, refused: bool
+        self, tmp_path: Path, algo: str, refused: bool
     ) -> None:
         """Test that an explicit algo must match a gzip file's engine."""
-        source = temp_dir / "data.gz"
+        source = tmp_path / "data.gz"
         source.write_bytes(gzip.compress(b"payload"))
-        output = temp_dir / "data"
+        output = tmp_path / "data"
 
         message = _value_error(lambda: decompress_file(source, output, algo))
 
@@ -300,12 +300,12 @@ class TestDecompressFile:
 
     @pytest.mark.parametrize(("algo", "refused"), [("zstd", True), ("zlib", False)])
     def test_algo_is_checked_against_a_comp_header(
-        self, small_file: Path, temp_dir: Path, algo: str, refused: bool
+        self, small_file: Path, tmp_path: Path, algo: str, refused: bool
     ) -> None:
         """Test that an explicit algo must match the one a .comp header records."""
-        compressed = temp_dir / "data.comp"
+        compressed = tmp_path / "data.comp"
         compress_file(small_file, compressed, "zlib", "balanced", 6)
-        output = temp_dir / "data"
+        output = tmp_path / "data"
 
         message = _value_error(lambda: decompress_file(compressed, output, algo))
 
@@ -326,28 +326,28 @@ class TestStandaloneErrors:
 
     @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_archive_format_is_refused_not_fatal(
-        self, sample_text_file: Path, temp_dir: Path, fmt: str
+        self, sample_text_file: Path, tmp_path: Path, fmt: str
     ) -> None:
         """Test that an archive format raises rather than reading a bad pointer."""
         with pytest.raises(ValueError, match="cannot compress a single file"):
             _core.compress_standalone(
-                str(sample_text_file), str(temp_dir / f"out.{fmt}"), fmt, 3
+                str(sample_text_file), str(tmp_path / f"out.{fmt}"), fmt, 3
             )
 
     @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_archive_format_is_refused_when_decompressing(
-        self, sample_text_file: Path, temp_dir: Path, fmt: str
+        self, sample_text_file: Path, tmp_path: Path, fmt: str
     ) -> None:
         """Test that the decompression side has the same defect."""
         with pytest.raises(ValueError, match="cannot decompress a single file"):
             _core.decompress_standalone(
-                str(sample_text_file), str(temp_dir / "out.bin"), fmt
+                str(sample_text_file), str(tmp_path / "out.bin"), fmt
             )
 
     @pytest.mark.parametrize("fmt", [None, "gzip"])
-    def test_decompress_nonexistent_file(self, temp_dir: Path, fmt: str | None) -> None:
+    def test_decompress_nonexistent_file(self, tmp_path: Path, fmt: str | None) -> None:
         """Test that a missing input is reported as such, with or without a format."""
-        args = [str(temp_dir / "missing.gz"), str(temp_dir / "out.bin")]
+        args = [str(tmp_path / "missing.gz"), str(tmp_path / "out.bin")]
         if fmt:
             args.append(fmt)
 
@@ -356,31 +356,31 @@ class TestStandaloneErrors:
 
     @pytest.mark.parametrize("fmt", ["bogus", "comp", ""])
     def test_unknown_format_is_refused(
-        self, sample_text_file: Path, temp_dir: Path, fmt: str
+        self, sample_text_file: Path, tmp_path: Path, fmt: str
     ) -> None:
         """Test that a name that resolves to no format at all is refused earlier."""
         with pytest.raises(ValueError):
             _core.compress_standalone(
-                str(sample_text_file), str(temp_dir / "out.bin"), fmt, 3
+                str(sample_text_file), str(tmp_path / "out.bin"), fmt, 3
             )
 
 
 class TestListArchiveContentsArgs:
     """Test the argument handling of list_archive_contents."""
 
-    def test_keyword_arguments_are_refused(self, temp_dir: Path) -> None:
+    def test_keyword_arguments_are_refused(self, tmp_path: Path) -> None:
         """Test that a stray keyword raises rather than being silently dropped."""
         with pytest.raises(TypeError, match="keyword"):
-            _core.list_archive_contents(str(temp_dir / "a.tar"), bogus=1)  # type: ignore[call-arg]  # ty:ignore[unknown-argument]
+            _core.list_archive_contents(str(tmp_path / "a.tar"), bogus=1)  # type: ignore[call-arg]  # ty:ignore[unknown-argument]
 
 
 class TestDetectFormat:
     """Test detect_format's handling of a path it cannot read."""
 
-    def test_missing_file_raises(self, temp_dir: Path) -> None:
+    def test_missing_file_raises(self, tmp_path: Path) -> None:
         """Test that a missing file is reported as such, not as "unknown"."""
         with pytest.raises(FileNotFoundError):
-            _core.detect_format(temp_dir / "missing.gz")
+            _core.detect_format(tmp_path / "missing.gz")
 
 
 class TestFormatIsArchive:
@@ -400,16 +400,16 @@ class TestFormatIsArchive:
 class TestPathArguments:
     """Test how the entry points convert filesystem paths."""
 
-    def test_path_like_round_trip(self, sample_text_file: Path, temp_dir: Path) -> None:
+    def test_path_like_round_trip(self, sample_text_file: Path, tmp_path: Path) -> None:
         """Test that Path and bytes paths work, and input_paths takes any sequence."""
-        archive = temp_dir / "out.tar"
+        archive = tmp_path / "out.tar"
 
         _core.create_archive(archive, "tar", (sample_text_file,))
         listed = _core.list_archive_contents(os.fsencode(archive))
-        _core.extract_archive(archive, temp_dir / "out", [])
+        _core.extract_archive(archive, tmp_path / "out", [])
 
         assert [e["path"] for e in listed] == [sample_text_file.name]
-        assert (temp_dir / "out" / sample_text_file.name).read_bytes() == (
+        assert (tmp_path / "out" / sample_text_file.name).read_bytes() == (
             sample_text_file.read_bytes()
         )
 
@@ -426,11 +426,11 @@ class TestPathArguments:
     def test_embedded_nul_is_refused(
         self,
         sample_text_file: Path,
-        temp_dir: Path,
+        tmp_path: Path,
         call: Callable[[str, str], object],
     ) -> None:
         """Test that a NUL raises rather than truncating the path."""
-        dst = str(temp_dir / "out")
+        dst = str(tmp_path / "out")
 
         with pytest.raises(ValueError, match="null"):
             call(str(sample_text_file), dst)
@@ -438,12 +438,12 @@ class TestPathArguments:
         assert not os.path.exists(dst)
 
     def test_bare_path_as_input_paths_is_refused(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that a path passed bare isn't read as a path per character."""
         with pytest.raises(TypeError, match="sequence of paths"):
             _core.create_archive(
-                str(temp_dir / "out.tar"), "tar", str(sample_text_file)
+                str(tmp_path / "out.tar"), "tar", str(sample_text_file)
             )
 
 
@@ -451,16 +451,16 @@ class TestExtractArchiveFilesArg:
     """Test the validation of extract_archive's `files` selection."""
 
     @pytest.fixture
-    def two_files(self, temp_dir: Path) -> Path:
+    def two_files(self, tmp_path: Path) -> Path:
         """A tar holding a.txt and b.txt.
 
         Args:
-            temp_dir: Pytest temporary path fixture.
+            tmp_path: Pytest temporary path fixture.
 
         Returns:
             Path to the tar.
         """
-        archive = temp_dir / "two.tar"
+        archive = tmp_path / "two.tar"
         _tar_of(archive, [("a.txt", 0o644, 0), ("b.txt", 0o644, 0)])
 
         return archive
@@ -471,18 +471,18 @@ class TestExtractArchiveFilesArg:
         ids=["list", "tuple", "iterator"],
     )
     def test_any_sequence_selects(
-        self, two_files: Path, temp_dir: Path, files: object
+        self, two_files: Path, tmp_path: Path, files: object
     ) -> None:
         """Test that a tuple or iterator selects like a list, not as "everything"."""
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(two_files), str(out), files)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
 
         assert sorted(p.name for p in out.iterdir()) == ["a.txt"]
 
-    def test_empty_selects_everything(self, two_files: Path, temp_dir: Path) -> None:
+    def test_empty_selects_everything(self, two_files: Path, tmp_path: Path) -> None:
         """Test that no names at all extracts every entry."""
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(two_files), str(out), ())
 
@@ -490,19 +490,19 @@ class TestExtractArchiveFilesArg:
 
     @pytest.mark.parametrize("files", [["a.txt", 1], [None]], ids=["int", "none"])
     def test_non_str_name_is_refused(
-        self, two_files: Path, temp_dir: Path, files: list[object]
+        self, two_files: Path, tmp_path: Path, files: list[object]
     ) -> None:
         """Test that a name that isn't a str raises rather than crashing."""
         with pytest.raises(TypeError, match="files must contain only str"):
-            _core.extract_archive(str(two_files), str(temp_dir / "out"), files)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+            _core.extract_archive(str(two_files), str(tmp_path / "out"), files)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
 
     @pytest.mark.parametrize("files", ["a.txt", b"a.txt"], ids=["str", "bytes"])
     def test_bare_string_is_refused(
-        self, two_files: Path, temp_dir: Path, files: object
+        self, two_files: Path, tmp_path: Path, files: object
     ) -> None:
         """Test that one name passed bare isn't read as a name per character."""
         with pytest.raises(TypeError, match="files must be a sequence of str"):
-            _core.extract_archive(str(two_files), str(temp_dir / "out"), files)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+            _core.extract_archive(str(two_files), str(tmp_path / "out"), files)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
 
 
 class TestSelectByPrefix:
@@ -511,17 +511,17 @@ class TestSelectByPrefix:
     NAMES = ("d/", "d/x.txt", "d/sub/", "d/sub/y.txt", "dx.txt", "e.txt")
 
     @pytest.fixture(params=["tar", "zip"])
-    def archive(self, request: pytest.FixtureRequest, temp_dir: Path) -> Path:
+    def archive(self, request: pytest.FixtureRequest, tmp_path: Path) -> Path:
         """A tar or zip holding NAMES.
 
         Args:
             request: Pytest request, carrying the format.
-            temp_dir: Pytest temporary path fixture.
+            tmp_path: Pytest temporary path fixture.
 
         Returns:
             Path to the archive.
         """
-        path = temp_dir / f"sel.{request.param}"
+        path = tmp_path / f"sel.{request.param}"
         if request.param == "tar":
             _tar_of(path, [(name, 0o755, 0) for name in self.NAMES])
         else:
@@ -543,10 +543,10 @@ class TestSelectByPrefix:
         ids=["dir", "trailing-slash", "nested", "files", "overlapping"],
     )
     def test_selects_at_component_boundaries(
-        self, archive: Path, temp_dir: Path, files: list[str], expected: list[str]
+        self, archive: Path, tmp_path: Path, files: list[str], expected: list[str]
     ) -> None:
         """Test that a name matches whole components, never part of one."""
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), files)
 
@@ -554,10 +554,10 @@ class TestSelectByPrefix:
         assert sorted(p for p in extracted if (out / p).is_file()) == expected
 
     def test_unmatched_names_are_reported_after_the_rest(
-        self, archive: Path, temp_dir: Path
+        self, archive: Path, tmp_path: Path
     ) -> None:
         """Test that names matching nothing raise, keeping what was found, as bsdtar does."""
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with pytest.raises(
             IncompleteExtractionError, match=r"Not found in archive: d/x, nope$"
@@ -571,16 +571,16 @@ class TestRecognisedButUnsupportedArchive:
     """Test that a detected archive format without a backend names itself."""
 
     @pytest.fixture
-    def fake_7z(self, temp_dir: Path) -> Path:
+    def fake_7z(self, tmp_path: Path) -> Path:
         """A file that detects as 7z by its magic bytes alone.
 
         Args:
-            temp_dir: Pytest temporary path fixture.
+            tmp_path: Pytest temporary path fixture.
 
         Returns:
             Path to the fake 7z file.
         """
-        path = temp_dir / "fake.7z"
+        path = tmp_path / "fake.7z"
         path.write_bytes(b"7z\xbc\xaf\x27\x1c" + bytes(32))
 
         return path
@@ -590,19 +590,19 @@ class TestRecognisedButUnsupportedArchive:
         with pytest.raises(BackendError, match="7z archives are recognised"):
             _core.list_archive_contents(str(fake_7z))
 
-    def test_extracting_names_the_format(self, fake_7z: Path, temp_dir: Path) -> None:
+    def test_extracting_names_the_format(self, fake_7z: Path, tmp_path: Path) -> None:
         """Test that extraction reports 7z and writes nothing."""
-        out = temp_dir / "out"
+        out = tmp_path / "out"
         out.mkdir()
         with pytest.raises(BackendError, match="7z archives are recognised"):
             _core.extract_archive(str(fake_7z), str(out), [])
         assert list(out.iterdir()) == []
 
     def test_creating_names_the_format(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that creation reports 7z and leaves no output behind."""
-        dest = temp_dir / "new.7z"
+        dest = tmp_path / "new.7z"
         with pytest.raises(BackendError, match="7z archives are recognised"):
             _core.create_archive(str(dest), "7z", [str(sample_text_file)])
         assert not dest.exists()
@@ -630,24 +630,24 @@ def _two_entry_tar(path: Path) -> bytes:
 class TestCompressedTarListing:
     """Test listing a compressed tar, which decodes it as libarchive reads."""
 
-    def _tar_gz(self, temp_dir: Path) -> bytearray:
+    def _tar_gz(self, tmp_path: Path) -> bytearray:
         """Gzip a two-entry tar, padded past its end-of-archive records.
 
         Args:
-            temp_dir: Pytest temporary path fixture.
+            tmp_path: Pytest temporary path fixture.
 
         Returns:
             The compressed archive as a bytearray.
         """
-        return bytearray(gzip.compress(_two_entry_tar(temp_dir / "plain.tar")))
+        return bytearray(gzip.compress(_two_entry_tar(tmp_path / "plain.tar")))
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
-    def test_lists_from_a_read_only_directory(self, temp_dir: Path) -> None:
+    def test_lists_from_a_read_only_directory(self, tmp_path: Path) -> None:
         """Test that listing writes nothing beside the archive."""
-        read_only = temp_dir / "ro"
+        read_only = tmp_path / "ro"
         read_only.mkdir()
         archive = read_only / "a.tar.gz"
-        archive.write_bytes(self._tar_gz(temp_dir))
+        archive.write_bytes(self._tar_gz(tmp_path))
         read_only.chmod(0o555)
 
         entries = _core.list_archive_contents(str(archive))
@@ -655,21 +655,21 @@ class TestCompressedTarListing:
         assert [e["path"] for e in entries] == ["a.bin", "b.bin"]
 
     def test_checksum_after_the_last_entry_is_still_checked(
-        self, temp_dir: Path
+        self, tmp_path: Path
     ) -> None:
         """Test that the stream is read to its end, past the tar's end records."""
-        damaged = self._tar_gz(temp_dir)
+        damaged = self._tar_gz(tmp_path)
         damaged[-8] ^= 0xFF  # The CRC-32 in the gzip trailer
-        archive = temp_dir / "damaged.tar.gz"
+        archive = tmp_path / "damaged.tar.gz"
         archive.write_bytes(damaged)
 
         with pytest.raises(CorruptDataError, match="incorrect data check"):
             _core.list_archive_contents(str(archive))
 
-    def test_damaged_stream_reports_the_codec_error(self, temp_dir: Path) -> None:
+    def test_damaged_stream_reports_the_codec_error(self, tmp_path: Path) -> None:
         """Test that the codec's error wins over libarchive's failed read."""
-        damaged = self._tar_gz(temp_dir)
-        archive = temp_dir / "truncated.tar.gz"
+        damaged = self._tar_gz(tmp_path)
+        archive = tmp_path / "truncated.tar.gz"
         archive.write_bytes(damaged[:600])
 
         with pytest.raises(CorruptDataError, match="Truncated or incomplete gzip"):
@@ -681,29 +681,29 @@ class TestExtractionUndo:
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
     def test_compressed_tar_extracts_from_a_read_only_directory(
-        self, temp_dir: Path
+        self, tmp_path: Path
     ) -> None:
         """Test that the archive is decoded as it is read, not into a temp."""
-        read_only = temp_dir / "ro"
+        read_only = tmp_path / "ro"
         read_only.mkdir()
         archive = read_only / "a.tar.gz"
-        archive.write_bytes(gzip.compress(_two_entry_tar(temp_dir / "plain.tar")))
+        archive.write_bytes(gzip.compress(_two_entry_tar(tmp_path / "plain.tar")))
         read_only.chmod(0o555)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), [])
 
         assert sorted(p.name for p in out.iterdir()) == ["a.bin", "b.bin"]
 
-    def test_damaged_checksum_undoes_the_entries(self, temp_dir: Path) -> None:
+    def test_damaged_checksum_undoes_the_entries(self, tmp_path: Path) -> None:
         """Test that a failure found only after the last entry removes them all."""
         # Padding, so the trailer is only decoded after both entries are written
-        tar = _two_entry_tar(temp_dir / "plain.tar") + bytes(200_000)
+        tar = _two_entry_tar(tmp_path / "plain.tar") + bytes(200_000)
         damaged = bytearray(gzip.compress(tar))
         damaged[-8] ^= 0xFF  # The CRC-32 in the gzip trailer
-        archive = temp_dir / "damaged.tar.gz"
+        archive = tmp_path / "damaged.tar.gz"
         archive.write_bytes(damaged)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with pytest.raises(CorruptDataError, match="incorrect data check"):
             _core.extract_archive(str(archive), str(out), [])
@@ -711,10 +711,10 @@ class TestExtractionUndo:
         assert list(out.iterdir()) == []
 
     def test_refused_entry_restores_what_overwrite_replaced(
-        self, temp_dir: Path
+        self, tmp_path: Path
     ) -> None:
         """Test that the file OVERWRITE moved aside is put back."""
-        plain = temp_dir / "plain.tar"
+        plain = tmp_path / "plain.tar"
         with tarfile.open(plain, "w", format=tarfile.GNU_FORMAT) as tf:
             info = tarfile.TarInfo("d/a.txt")
             info.size = 3
@@ -723,9 +723,9 @@ class TestExtractionUndo:
             link.type = tarfile.SYMTYPE
             link.linkname = "a.txt"
             tf.addfile(link)
-        archive = temp_dir / "a.tar.zst"
+        archive = tmp_path / "a.tar.zst"
         _core.compress_standalone(str(plain), str(archive), "zst")
-        out = temp_dir / "out"
+        out = tmp_path / "out"
         (out / "d").mkdir(parents=True)
         (out / "d" / "a.txt").write_text("original")
 
@@ -735,11 +735,11 @@ class TestExtractionUndo:
         assert os.listdir(out / "d") == ["a.txt"]
         assert (out / "d" / "a.txt").read_text() == "original"
 
-    def test_overwrite_drops_the_originals_on_success(self, temp_dir: Path) -> None:
+    def test_overwrite_drops_the_originals_on_success(self, tmp_path: Path) -> None:
         """Test that no moved-aside original outlives a finished extraction."""
-        archive = temp_dir / "a.tar"
+        archive = tmp_path / "a.tar"
         _tar_with_hardlink(archive, "d/a")
-        out = temp_dir / "out"
+        out = tmp_path / "out"
         (out / "d").mkdir(parents=True)
         (out / "d" / "a").write_text("old a")
         (out / "d" / "b").write_text("old b")
@@ -749,11 +749,11 @@ class TestExtractionUndo:
         assert sorted(os.listdir(out / "d")) == ["a", "b"]
         assert (out / "d" / "b").read_text() == "x"
 
-    def test_failure_after_validation_undoes_a_plain_tar(self, temp_dir: Path) -> None:
+    def test_failure_after_validation_undoes_a_plain_tar(self, tmp_path: Path) -> None:
         """Test that what only fails while writing is undone, directories too."""
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_with_hardlink(archive, "d")
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with pytest.raises(ExtractionPolicyError, match="not a file"):
             _core.extract_archive(str(archive), str(out), [])
@@ -764,108 +764,108 @@ class TestExtractionUndo:
 class TestArchiveErrorTypes:
     """Test that archive failures say whether the input, the OS or policy failed."""
 
-    def test_damaged_later_tar_header_is_corrupt_data(self, temp_dir: Path) -> None:
+    def test_damaged_later_tar_header_is_corrupt_data(self, tmp_path: Path) -> None:
         """Test that a bad checksum on the second header is corrupt input."""
-        damaged = bytearray(_two_entry_tar(temp_dir / "good.tar"))
+        damaged = bytearray(_two_entry_tar(tmp_path / "good.tar"))
         damaged[512 + 5120 + 100] ^= 0xFF
-        archive = temp_dir / "damaged.tar"
+        archive = tmp_path / "damaged.tar"
         archive.write_bytes(damaged)
 
         with pytest.raises(CorruptDataError, match="Damaged tar archive"):
-            _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+            _core.extract_archive(str(archive), str(tmp_path / "out"), [])
 
-    def test_truncated_tar_is_corrupt_data(self, temp_dir: Path) -> None:
+    def test_truncated_tar_is_corrupt_data(self, tmp_path: Path) -> None:
         """Test that a tar cut off inside an entry's data is corrupt input."""
-        archive = temp_dir / "truncated.tar"
-        archive.write_bytes(_two_entry_tar(temp_dir / "good.tar")[:3000])
+        archive = tmp_path / "truncated.tar"
+        archive.write_bytes(_two_entry_tar(tmp_path / "good.tar")[:3000])
 
         with pytest.raises(CorruptDataError, match="Truncated"):
             _core.list_archive_contents(str(archive))
 
-    def test_damaged_zip_data_is_corrupt_data(self, temp_dir: Path) -> None:
+    def test_damaged_zip_data_is_corrupt_data(self, tmp_path: Path) -> None:
         """Test that a zip entry whose deflate stream is damaged is corrupt input."""
-        good = temp_dir / "good.zip"
+        good = tmp_path / "good.zip"
         with zipfile.ZipFile(good, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("a.txt", b"hello world " * 500)
         damaged = bytearray(good.read_bytes())
         damaged[60] ^= 0xFF  # Inside the first entry's compressed data
-        archive = temp_dir / "damaged.zip"
+        archive = tmp_path / "damaged.zip"
         archive.write_bytes(damaged)
 
         with pytest.raises(CorruptDataError):
-            _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+            _core.extract_archive(str(archive), str(tmp_path / "out"), [])
 
-    def test_truncated_zip_is_corrupt_data(self, temp_dir: Path) -> None:
+    def test_truncated_zip_is_corrupt_data(self, tmp_path: Path) -> None:
         """Test that a zip missing the end of its central directory is corrupt."""
-        good = temp_dir / "good.zip"
+        good = tmp_path / "good.zip"
         with zipfile.ZipFile(good, "w") as zf:
             zf.writestr("a.txt", b"hello")
-        archive = temp_dir / "truncated.zip"
+        archive = tmp_path / "truncated.zip"
         archive.write_bytes(good.read_bytes()[:-30])
 
         with pytest.raises(CorruptDataError):
             _core.list_archive_contents(str(archive))
 
     @pytest.mark.parametrize("call", ["extract", "list"])
-    def test_missing_archive_is_file_not_found(self, temp_dir: Path, call: str) -> None:
+    def test_missing_archive_is_file_not_found(self, tmp_path: Path, call: str) -> None:
         """Test that a missing archive is an OS error, not an unknown format."""
-        missing = str(temp_dir / "missing.tar")
+        missing = str(tmp_path / "missing.tar")
 
         with pytest.raises(FileNotFoundError):
             if call == "extract":
-                _core.extract_archive(missing, str(temp_dir / "out"), [])
+                _core.extract_archive(missing, str(tmp_path / "out"), [])
             else:
                 _core.list_archive_contents(missing)
 
     @pytest.mark.parametrize("call", ["extract", "list"])
-    def test_directory_archive_is_unreadable(self, temp_dir: Path, call: str) -> None:
+    def test_directory_archive_is_unreadable(self, tmp_path: Path, call: str) -> None:
         """Test that a directory is refused as unreadable, not as unrecognised."""
         # Windows refuses to open a directory at all, so it reports EACCES
         with pytest.raises((IsADirectoryError, PermissionError)):
             if call == "extract":
-                _core.extract_archive(str(temp_dir), str(temp_dir / "out"), [])
+                _core.extract_archive(str(tmp_path), str(tmp_path / "out"), [])
             else:
-                _core.list_archive_contents(str(temp_dir))
+                _core.list_archive_contents(str(tmp_path))
 
     # libzip refuses a name that isn't UTF-8, which only Linux allows
     @pytest.mark.skipif(sys.platform != "linux", reason="needs non-UTF-8 names")
     @pytest.mark.parametrize("kind", ["directory", "symlink"])
     def test_entry_refused_inside_a_tree_fails_the_archive(
-        self, temp_dir: Path, kind: str
+        self, tmp_path: Path, kind: str
     ) -> None:
         """Test that a nested entry the writer refuses fails the whole job."""
-        tree = temp_dir / "tree"
+        tree = tmp_path / "tree"
         tree.mkdir()
         bad_name = os.fsencode(tree) + b"/bad\xff"
         if kind == "directory":
             os.mkdir(bad_name)
         else:
             os.symlink(b"target", bad_name)
-        output = temp_dir / "out.zip"
+        output = tmp_path / "out.zip"
 
         with pytest.raises(BackendError, match=f"Failed to add {kind}"):
             _core.create_archive(str(output), "zip", [str(tree)])
 
         assert not output.exists()
 
-    def test_missing_output_dir_parents_are_created(self, temp_dir: Path) -> None:
+    def test_missing_output_dir_parents_are_created(self, tmp_path: Path) -> None:
         """Test that every missing parent is made, whichever separator the path uses.
 
         Also includes str() of a Windows path, which uses backslashes.
         """
-        archive = temp_dir / "x.tar"
+        archive = tmp_path / "x.tar"
         _tar_of(archive, [("f", 0o644, 0)])
-        out = temp_dir / "a" / "b" / "c"
+        out = tmp_path / "a" / "b" / "c"
 
         _core.extract_archive(str(archive), str(out), [])
 
         assert (out / "f").read_bytes() == b"x"
 
-    def test_output_dir_that_is_a_file_is_not_a_directory(self, temp_dir: Path) -> None:
+    def test_output_dir_that_is_a_file_is_not_a_directory(self, tmp_path: Path) -> None:
         """Test that the output path itself is named, before any entry is tried."""
-        archive = temp_dir / "x.tar"
+        archive = tmp_path / "x.tar"
         _tar_of(archive, [("f", 0o644, 0)])
-        not_a_dir = temp_dir / "afile"
+        not_a_dir = tmp_path / "afile"
         not_a_dir.write_text("x")
 
         with pytest.raises(NotADirectoryError) as info:
@@ -874,11 +874,11 @@ class TestArchiveErrorTypes:
         assert info.value.filename == str(not_a_dir)
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
-    def test_output_dir_that_cannot_be_created_says_why(self, temp_dir: Path) -> None:
+    def test_output_dir_that_cannot_be_created_says_why(self, tmp_path: Path) -> None:
         """Test that a read-only parent is a permission error, not a missing path."""
-        archive = temp_dir / "x.tar"
+        archive = tmp_path / "x.tar"
         _tar_of(archive, [("f", 0o644, 0)])
-        read_only = temp_dir / "ro"
+        read_only = tmp_path / "ro"
         read_only.mkdir(mode=0o555)
 
         with pytest.raises(PermissionError) as info:
@@ -888,11 +888,11 @@ class TestArchiveErrorTypes:
 
     @pytest.mark.parametrize("fmt", ["tar", "zip", "tar.gz"])
     def test_failed_walk_reports_its_own_error(
-        self, sample_text_file: Path, temp_dir: Path, fmt: str
+        self, sample_text_file: Path, tmp_path: Path, fmt: str
     ) -> None:
         """Test that abandoning the half-built archive doesn't replace the error."""
-        missing = temp_dir / "missing"
-        output = temp_dir / f"out.{fmt}"
+        missing = tmp_path / "missing"
+        output = tmp_path / f"out.{fmt}"
 
         with pytest.raises(FileNotFoundError) as info:
             _core.create_archive(
@@ -900,14 +900,14 @@ class TestArchiveErrorTypes:
             )
 
         assert info.value.filename == str(missing)
-        assert sorted(p.name for p in temp_dir.iterdir()) == [sample_text_file.name]
+        assert sorted(p.name for p in tmp_path.iterdir()) == [sample_text_file.name]
 
     @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_unwritable_destination_is_an_os_error(
-        self, sample_text_file: Path, temp_dir: Path, fmt: str
+        self, sample_text_file: Path, tmp_path: Path, fmt: str
     ) -> None:
         """Test that a destination in a missing directory carries its errno."""
-        dest = temp_dir / "missing" / f"out.{fmt}"
+        dest = tmp_path / "missing" / f"out.{fmt}"
 
         with pytest.raises(FileNotFoundError) as info:
             _core.create_archive(str(dest), fmt, [str(sample_text_file)])
@@ -932,19 +932,19 @@ sys.stdout.buffer.write(orjson.dumps([e["path"] for e in _core.list_archive_cont
 class TestArchiveSpecialFiles:
     """Test that tar stores FIFOs and devices, zip skips them, and neither reads them."""
 
-    def test_zip_skips_a_fifo(self, temp_dir: Path) -> None:
+    def test_zip_skips_a_fifo(self, tmp_path: Path) -> None:
         """Test that a FIFO in the tree, or named directly, is left out of a zip."""
         fmt = "zip"
-        tree = temp_dir / "tree"
+        tree = tmp_path / "tree"
         tree.mkdir()
         (tree / "a.txt").write_text("a")
         os.mkfifo(tree / "pipe")
-        os.mkfifo(temp_dir / "named_pipe")
-        output = temp_dir / f"out.{fmt}"
+        os.mkfifo(tmp_path / "named_pipe")
+        output = tmp_path / f"out.{fmt}"
 
         result = subprocess.run(
             [sys.executable, "-c", _ARCHIVE_AND_LIST, str(output), fmt]
-            + [str(tree), str(temp_dir / "named_pipe")],
+            + [str(tree), str(tmp_path / "named_pipe")],
             capture_output=True,
             text=True,
             timeout=60,
@@ -953,19 +953,19 @@ class TestArchiveSpecialFiles:
 
         assert result.returncode == 0, result.stderr
         assert orjson.loads(result.stdout) == ["tree/", "tree/a.txt"]
-        for skipped in (tree / "pipe", temp_dir / "named_pipe"):
+        for skipped in (tree / "pipe", tmp_path / "named_pipe"):
             assert f"WARNING Skipped {skipped}:" in result.stderr
 
     def test_nothing_left_to_archive_gives_an_empty_archive(
-        self, temp_dir: Path
+        self, tmp_path: Path
     ) -> None:
         """Test that an archive whose only input is skipped is written empty."""
-        os.mkfifo(temp_dir / "pipe")
-        output = temp_dir / "out.zip"
+        os.mkfifo(tmp_path / "pipe")
+        output = tmp_path / "out.zip"
 
         result = subprocess.run(
             [sys.executable, "-c", _ARCHIVE_AND_LIST, str(output), "zip"]
-            + [str(temp_dir / "pipe")],
+            + [str(tmp_path / "pipe")],
             capture_output=True,
             text=True,
             timeout=60,
@@ -978,12 +978,12 @@ class TestArchiveSpecialFiles:
             assert zf.namelist() == []
 
     @pytest.mark.parametrize("fmt", ["tar", "tar.gz"])
-    def test_tar_stores_a_fifo_not_its_data(self, temp_dir: Path, fmt: str) -> None:
+    def test_tar_stores_a_fifo_not_its_data(self, tmp_path: Path, fmt: str) -> None:
         """Test that a FIFO is stored as a FIFO entry, as GNU tar stores one."""
-        tree = temp_dir / "tree"
+        tree = tmp_path / "tree"
         tree.mkdir()
         os.mkfifo(tree / "pipe")
-        output = temp_dir / f"out.{fmt}"
+        output = tmp_path / f"out.{fmt}"
 
         result = subprocess.run(
             [sys.executable, "-c", _ARCHIVE_AND_LIST, str(output), fmt, str(tree)],
@@ -1001,9 +1001,9 @@ class TestArchiveSpecialFiles:
         assert member.mode == stat.S_IMODE((tree / "pipe").stat().st_mode)
 
     @pytest.mark.skipif(not os.path.exists("/dev/null"), reason="needs /dev/null")
-    def test_tar_stores_a_device_with_its_number(self, temp_dir: Path) -> None:
+    def test_tar_stores_a_device_with_its_number(self, tmp_path: Path) -> None:
         """Test that a character device keeps its major and minor numbers."""
-        output = temp_dir / "out.tar"
+        output = tmp_path / "out.tar"
         rdev = os.stat("/dev/null").st_rdev
 
         _core.create_archive(str(output), "tar", ["/dev/null"])
@@ -1015,13 +1015,13 @@ class TestArchiveSpecialFiles:
 
     def test_tar_skips_a_socket(
         self,
-        temp_dir: Path,
+        tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test that a socket is left out of a tar with a warning, as GNU tar does."""
         # A relative name, since a socket path's length is capped near 100 bytes
-        monkeypatch.chdir(temp_dir)
+        monkeypatch.chdir(tmp_path)
         Path("tree").mkdir()
         with socket.socket(socket.AF_UNIX) as sock:
             sock.bind("tree/sock")
@@ -1062,9 +1062,9 @@ def _tar_with_specials(path: Path, *kinds: bytes) -> None:
 class TestSpecialExtraction:
     """Test that FIFOs and devices are created as tar creates them."""
 
-    def test_listing_names_the_kind(self, temp_dir: Path) -> None:
+    def test_listing_names_the_kind(self, tmp_path: Path) -> None:
         """Test that each node is listed by its kind rather than as special."""
-        archive = temp_dir / "nodes.tar"
+        archive = tmp_path / "nodes.tar"
         _tar_with_specials(archive, tarfile.FIFOTYPE, tarfile.CHRTYPE, tarfile.BLKTYPE)
 
         entries = _core.list_archive_contents(str(archive))
@@ -1077,16 +1077,16 @@ class TestSpecialExtraction:
         ]
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no FIFOs")
-    def test_fifo_is_created_with_its_metadata(self, temp_dir: Path) -> None:
+    def test_fifo_is_created_with_its_metadata(self, tmp_path: Path) -> None:
         """Test that a FIFO is made, with the stored mode under the umask, and mtime."""
-        archive = temp_dir / "nodes.tar"
+        archive = tmp_path / "nodes.tar"
         _tar_with_specials(archive, tarfile.FIFOTYPE)
         umask = os.umask(0)
         os.umask(umask)
 
-        _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+        _core.extract_archive(str(archive), str(tmp_path / "out"), [])
 
-        st = os.lstat(temp_dir / "out" / "fifo")
+        st = os.lstat(tmp_path / "out" / "fifo")
         assert stat.S_ISFIFO(st.st_mode)
         assert stat.S_IMODE(st.st_mode) == 0o640 & ~umask
         assert st.st_mtime == 1_000_000_000
@@ -1095,12 +1095,12 @@ class TestSpecialExtraction:
         sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX, not root"
     )
     def test_device_is_skipped_without_root(
-        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Test that a device is skipped with a warning, the rest still extracted."""
-        archive = temp_dir / "nodes.tar"
+        archive = tmp_path / "nodes.tar"
         _tar_with_specials(archive, tarfile.CHRTYPE)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with caplog.at_level(logging.WARNING, logger="compresso"):
             _core.extract_archive(str(archive), str(out), [])
@@ -1111,25 +1111,25 @@ class TestSpecialExtraction:
     @pytest.mark.skipif(
         sys.platform == "win32" or os.geteuid() != 0, reason="needs root"
     )
-    def test_device_is_created_as_root(self, temp_dir: Path) -> None:
+    def test_device_is_created_as_root(self, tmp_path: Path) -> None:
         """Test that a device is made with its stored number."""
-        archive = temp_dir / "nodes.tar"
+        archive = tmp_path / "nodes.tar"
         _tar_with_specials(archive, tarfile.CHRTYPE)
 
-        _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+        _core.extract_archive(str(archive), str(tmp_path / "out"), [])
 
-        st = os.lstat(temp_dir / "out" / "char")
+        st = os.lstat(tmp_path / "out" / "char")
         assert stat.S_ISCHR(st.st_mode)
         assert st.st_rdev == os.makedev(1, 3)
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only")
     def test_windows_skips_a_fifo(
-        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Test that a FIFO is skipped with a warning, the rest still extracted."""
-        archive = temp_dir / "nodes.tar"
+        archive = tmp_path / "nodes.tar"
         _tar_with_specials(archive, tarfile.FIFOTYPE)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with caplog.at_level(logging.WARNING, logger="compresso"):
             _core.extract_archive(str(archive), str(out), [])
@@ -1145,13 +1145,13 @@ class TestArchiveSkipsItsOwnOutput:
     @pytest.mark.parametrize("overwrite", [False, True], ids=["new", "overwrite"])
     def test_output_in_the_tree_is_not_archived(
         self,
-        temp_dir: Path,
+        tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
         fmt: str,
         overwrite: bool,
     ) -> None:
         """Test that neither the output nor the temp file beside it is archived."""
-        tree = temp_dir / "tree"
+        tree = tmp_path / "tree"
         tree.mkdir()
         (tree / "a.txt").write_text("a" * 10000)
         output = tree / f"out.{fmt}"
@@ -1170,9 +1170,9 @@ class TestArchiveSkipsItsOwnOutput:
         )
         assert sorted(p.name for p in tree.iterdir()) == ["a.txt", output.name]
 
-    def test_progress_total_leaves_out_the_old_archive(self, temp_dir: Path) -> None:
+    def test_progress_total_leaves_out_the_old_archive(self, tmp_path: Path) -> None:
         """Test that the progress total counts only what is archived."""
-        tree = temp_dir / "tree"
+        tree = tmp_path / "tree"
         tree.mkdir()
         (tree / "a.txt").write_text("a" * 10000)
         output = tree / "out.tar"
@@ -1207,16 +1207,16 @@ print(len(_core.list_archive_contents(sys.argv[1])))
 class TestArchiveWalk:
     """Test the walk over the source tree."""
 
-    def test_deep_tree_needs_no_deep_stack(self, temp_dir: Path) -> None:
+    def test_deep_tree_needs_no_deep_stack(self, tmp_path: Path) -> None:
         """Test that nesting depth costs heap, not C stack."""
         # Shallow enough that the full path stays under Windows' MAX_PATH
-        deepest = temp_dir / "t" / Path(*["d"] * 60)
+        deepest = tmp_path / "t" / Path(*["d"] * 60)
         deepest.mkdir(parents=True)
         (deepest / "f").write_text("f")
 
         result = subprocess.run(
             [sys.executable, "-c", _ARCHIVE_ON_SMALL_STACK]
-            + [str(temp_dir / "out.tar"), str(temp_dir / "t")],
+            + [str(tmp_path / "out.tar"), str(tmp_path / "t")],
             capture_output=True,
             text=True,
             timeout=60,
@@ -1226,14 +1226,14 @@ class TestArchiveWalk:
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "62"
 
-    def test_entries_follow_their_directory(self, temp_dir: Path) -> None:
+    def test_entries_follow_their_directory(self, tmp_path: Path) -> None:
         """Test that each directory's contents come straight after it."""
         for rel in ("t/a/x", "t/a/y/z", "t/b"):
-            (temp_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-            (temp_dir / rel).write_text(rel)
-        output = temp_dir / "out.tar"
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_text(rel)
+        output = tmp_path / "out.tar"
 
-        _core.create_archive(str(output), "tar", [str(temp_dir / "t")])
+        _core.create_archive(str(output), "tar", [str(tmp_path / "t")])
 
         listed = [e["path"] for e in _core.list_archive_contents(str(output))]
         assert sorted(listed) == sorted(
@@ -1258,7 +1258,7 @@ class TestSizeChange:
     )
     def test_warns_and_keeps_the_walked_size(
         self,
-        temp_dir: Path,
+        tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
         fmt: str,
         change: str,
@@ -1266,11 +1266,11 @@ class TestSizeChange:
         message: str,
     ) -> None:
         """Test that the entry keeps its walked size, with a warning."""
-        first = temp_dir / "a.bin"
+        first = tmp_path / "a.bin"
         first.write_bytes(b"a" * (4 << 20))
-        source = temp_dir / "f.bin"
+        source = tmp_path / "f.bin"
         source.write_bytes(b"x" * (4 << 20))
-        output = temp_dir / f"out.{fmt}"
+        output = tmp_path / f"out.{fmt}"
         changed = False
 
         def change_source(done: int, total: int) -> None:
@@ -1302,13 +1302,13 @@ class TestSizeChange:
         assert f"{source}: {message}" in caplog.text
 
     @pytest.mark.parametrize("fmt", ["tar", "zip"])
-    def test_file_removed_before_its_read(self, temp_dir: Path, fmt: str) -> None:
+    def test_file_removed_before_its_read(self, tmp_path: Path, fmt: str) -> None:
         """Test that a file gone by its turn names itself, and no output is left."""
-        first = temp_dir / "a.bin"
+        first = tmp_path / "a.bin"
         first.write_bytes(b"a" * (4 << 20))
-        source = temp_dir / "f.bin"
+        source = tmp_path / "f.bin"
         source.write_bytes(b"x")
-        output = temp_dir / f"out.{fmt}"
+        output = tmp_path / f"out.{fmt}"
 
         def remove_source(done: int, total: int) -> None:
             source.unlink(missing_ok=True)
@@ -1319,7 +1319,7 @@ class TestSizeChange:
             )
 
         assert info.value.filename == str(source)
-        assert sorted(p.name for p in temp_dir.iterdir()) == ["a.bin"]
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.bin"]
 
 
 def _tar_of(path: Path, entries: list[tuple[str, int, int]]) -> None:
@@ -1348,19 +1348,19 @@ class TestDirectoryMetadata:
 
     MTIME = 1577836800  # 2020-01-01T00:00:00Z
 
-    def test_directory_mtime_is_restored(self, temp_dir: Path) -> None:
+    def test_directory_mtime_is_restored(self, tmp_path: Path) -> None:
         """Test that writing a directory's files doesn't leave it with today's mtime."""
-        archive = temp_dir / "dated.tar"
+        archive = tmp_path / "dated.tar"
         _tar_of(archive, [("d/", 0o755, self.MTIME), ("d/f", 0o644, self.MTIME)])
 
-        _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+        _core.extract_archive(str(archive), str(tmp_path / "out"), [])
 
-        assert int((temp_dir / "out" / "d").stat().st_mtime) == self.MTIME
+        assert int((tmp_path / "out" / "d").stat().st_mtime) == self.MTIME
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
-    def test_nested_read_only_directories_are_filled(self, temp_dir: Path) -> None:
+    def test_nested_read_only_directories_are_filled(self, tmp_path: Path) -> None:
         """Test that read-only directories, nested, all get their files and modes."""
-        archive = temp_dir / "readonly.tar"
+        archive = tmp_path / "readonly.tar"
         _tar_of(
             archive,
             [
@@ -1370,7 +1370,7 @@ class TestDirectoryMetadata:
                 ("a/g", 0o644, self.MTIME),
             ],
         )
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), [])
 
@@ -1380,28 +1380,28 @@ class TestDirectoryMetadata:
             assert stat.S_IMODE(directory.stat().st_mode) == 0o555
             assert int(directory.stat().st_mtime) == self.MTIME
 
-    def test_existing_directory_keeps_its_metadata(self, temp_dir: Path) -> None:
+    def test_existing_directory_keeps_its_metadata(self, tmp_path: Path) -> None:
         """Test that merging into a directory that already exists leaves it as is."""
-        archive = temp_dir / "dated.tar"
+        archive = tmp_path / "dated.tar"
         _tar_of(archive, [("d/", 0o700, self.MTIME), ("d/f", 0o644, self.MTIME)])
-        existing = temp_dir / "out" / "d"
+        existing = tmp_path / "out" / "d"
         existing.mkdir(parents=True)
         before = existing.stat()
 
-        _core.extract_archive(str(archive), str(temp_dir / "out"), [])
+        _core.extract_archive(str(archive), str(tmp_path / "out"), [])
 
         assert existing.stat().st_mode == before.st_mode
         assert int(existing.stat().st_mtime) != self.MTIME
 
-    def test_opt_in_restores_an_existing_directory(self, temp_dir: Path) -> None:
+    def test_opt_in_restores_an_existing_directory(self, tmp_path: Path) -> None:
         """Test that overwrite_dir_metadata applies GNU tar's behaviour."""
-        archive = temp_dir / "dated.tar"
+        archive = tmp_path / "dated.tar"
         _tar_of(archive, [("d/", 0o700, self.MTIME), ("d/f", 0o644, self.MTIME)])
-        existing = temp_dir / "out" / "d"
+        existing = tmp_path / "out" / "d"
         existing.mkdir(parents=True)
 
         _core.extract_archive(
-            str(archive), str(temp_dir / "out"), [], overwrite_dir_metadata=True
+            str(archive), str(tmp_path / "out"), [], overwrite_dir_metadata=True
         )
 
         assert int(existing.stat().st_mtime) == self.MTIME
@@ -1409,30 +1409,30 @@ class TestDirectoryMetadata:
             assert stat.S_IMODE(existing.stat().st_mode) == 0o700
 
     def test_opt_in_covers_a_directory_listed_after_its_contents(
-        self, temp_dir: Path
+        self, tmp_path: Path
     ) -> None:
         """Test that a directory created as a parent still gets its own entry's metadata."""
-        archive = temp_dir / "late.tar"
+        archive = tmp_path / "late.tar"
         _tar_of(archive, [("d/f", 0o644, self.MTIME), ("d/", 0o755, self.MTIME)])
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), [], overwrite_dir_metadata=True)
 
         assert int((out / "d").stat().st_mtime) == self.MTIME
 
     def test_opt_in_never_touches_an_existing_directory_when_skipping(
-        self, temp_dir: Path
+        self, tmp_path: Path
     ) -> None:
         """Test that SKIP mode keeps its promise to leave existing paths alone."""
-        archive = temp_dir / "dated.tar"
+        archive = tmp_path / "dated.tar"
         _tar_of(archive, [("d/", 0o700, self.MTIME), ("d/f", 0o644, self.MTIME)])
-        existing = temp_dir / "out" / "d"
+        existing = tmp_path / "out" / "d"
         existing.mkdir(parents=True)
         before = existing.stat()
 
         _core.extract_archive(
             str(archive),
-            str(temp_dir / "out"),
+            str(tmp_path / "out"),
             [],
             overwrite=1,
             overwrite_dir_metadata=True,
@@ -1471,10 +1471,10 @@ class TestTarHeaderWarnings:
     """Test that a header libarchive only warns about is still read."""
 
     def test_listing_warns_and_keeps_the_entry(
-        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Test that the entry is listed, its name kept by surrogateescape."""
-        archive = temp_dir / "warn.tar"
+        archive = tmp_path / "warn.tar"
         _tar_with_non_utf8_pax_name(archive)
 
         with caplog.at_level(logging.WARNING, logger="compresso"):
@@ -1490,12 +1490,12 @@ class TestTarHeaderWarnings:
     # macOS refuses a file name that isn't UTF-8, so only Linux can write it
     @pytest.mark.skipif(sys.platform != "linux", reason="needs non-UTF-8 names")
     def test_extraction_warns_once_and_writes_the_entry(
-        self, temp_dir: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Test that extraction carries on, warning once despite two passes."""
-        archive = temp_dir / "warn.tar"
+        archive = tmp_path / "warn.tar"
         _tar_with_non_utf8_pax_name(archive)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with caplog.at_level(logging.WARNING, logger="compresso"):
             _core.extract_archive(str(archive), str(out), [])
@@ -1505,13 +1505,13 @@ class TestTarHeaderWarnings:
         assert len(caplog.records) == 1
 
     def test_creation_keeps_a_name_the_locale_cant_convert(
-        self, temp_dir: Path
+        self, tmp_path: Path
     ) -> None:
         """Test that a non-ASCII name under the C locale is archived, as bsdtar does."""
-        tree = temp_dir / "tree"
+        tree = tmp_path / "tree"
         tree.mkdir()
         (tree / "café").write_text("x")
-        output = temp_dir / "out.tar"
+        output = tmp_path / "out.tar"
         # UTF-8 mode without coercion keeps libarchive's locale at plain C
         env = {
             **os.environ,
@@ -1535,17 +1535,17 @@ class TestTarHeaderWarnings:
 class TestTarUtf8Names:
     """Test that tar names reach the archive as UTF-8, as pax requires."""
 
-    def test_names_outside_the_ansi_code_page_round_trip(self, temp_dir: Path) -> None:
+    def test_names_outside_the_ansi_code_page_round_trip(self, tmp_path: Path) -> None:
         """Test that a name and symlink target outside ASCII and cp1252 survive."""
         name = "日本-ж"
-        tree = temp_dir / "tree"
+        tree = tmp_path / "tree"
         tree.mkdir()
         (tree / name).write_text("x")
         has_symlink = sys.platform != "win32"
         if has_symlink:
             os.symlink(name, tree / f"{name}-sym")
         names = sorted(os.listdir(tree))
-        output = temp_dir / "out.tar"
+        output = tmp_path / "out.tar"
 
         _core.create_archive(str(output), "tar", [str(tree)])
 
@@ -1554,8 +1554,8 @@ class TestTarUtf8Names:
         with tarfile.open(output) as tf:
             if has_symlink:
                 assert tf.getmember(f"tree/{name}-sym").linkname == name
-        _core.extract_archive(str(output), str(temp_dir / "out"), [], allow_symlinks=1)
-        assert sorted(os.listdir(temp_dir / "out" / "tree")) == names
+        _core.extract_archive(str(output), str(tmp_path / "out"), [], allow_symlinks=1)
+        assert sorted(os.listdir(tmp_path / "out" / "tree")) == names
 
 
 def _tar_with_hardlink(
@@ -1592,23 +1592,23 @@ class TestHardlinkExtraction:
 
     @pytest.mark.parametrize("target", ["../outside", "/etc/passwd"])
     def test_target_outside_the_root_is_refused(
-        self, temp_dir: Path, target: str
+        self, tmp_path: Path, target: str
     ) -> None:
         """Test that the whole archive is refused before anything is written."""
-        archive = temp_dir / "evil.tar"
+        archive = tmp_path / "evil.tar"
         _tar_with_hardlink(archive, target)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with pytest.raises(ExtractionPolicyError):
             _core.extract_archive(str(archive), str(out), [])
 
         assert not (out / "d").exists()
 
-    def test_unselected_target_is_reported(self, temp_dir: Path) -> None:
+    def test_unselected_target_is_reported(self, tmp_path: Path) -> None:
         """Test that a link whose target wasn't extracted names the missing file."""
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_with_hardlink(archive, "d/a")
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with pytest.raises(
             IncompleteExtractionError, match=r"^Hardlink target missing: d/b -> d/a$"
@@ -1617,11 +1617,11 @@ class TestHardlinkExtraction:
 
         assert list(out.iterdir()) == []
 
-    def test_missing_target_is_skipped_keeping_the_rest(self, temp_dir: Path) -> None:
+    def test_missing_target_is_skipped_keeping_the_rest(self, tmp_path: Path) -> None:
         """Test that the link is reported with any unmatched name, as tar does."""
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_with_hardlink(archive, "d/missing")
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with pytest.raises(
             IncompleteExtractionError,
@@ -1633,27 +1633,27 @@ class TestHardlinkExtraction:
         assert os.listdir(out / "d") == ["a"]
 
     @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privilege")
-    def test_target_replaced_by_a_symlink_is_refused(self, temp_dir: Path) -> None:
+    def test_target_replaced_by_a_symlink_is_refused(self, tmp_path: Path) -> None:
         """Test that a link is never made to whatever a planted symlink points at."""
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_with_hardlink(archive, "d/s")
-        out = temp_dir / "out"
+        out = tmp_path / "out"
         (out / "d").mkdir(parents=True)
-        (temp_dir / "secret").write_text("secret")
-        (out / "d" / "s").symlink_to(temp_dir / "secret")
+        (tmp_path / "secret").write_text("secret")
+        (out / "d" / "s").symlink_to(tmp_path / "secret")
 
         with pytest.raises(ExtractionPolicyError, match="not a file, FIFO or device"):
             _core.extract_archive(str(archive), str(out), [], overwrite=2)
 
     def test_existing_link_path_follows_the_overwrite_mode(
-        self, temp_dir: Path
+        self, tmp_path: Path
     ) -> None:
         """Test ERROR, SKIP, OVERWRITE and RENAME against an existing d/b."""
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_with_hardlink(archive, "d/a")
 
         def extract(mode: int) -> Path:
-            out = temp_dir / f"out{mode}"
+            out = tmp_path / f"out{mode}"
             (out / "d").mkdir(parents=True)
             (out / "d" / "b").write_text("existing")
             _core.extract_archive(str(archive), str(out), [], overwrite=mode)
@@ -1677,11 +1677,11 @@ class TestHardlinkExtraction:
 class TestSymlinksAsFiles:
     """Test allow_symlinks=2, which writes a symlink's target as a regular file."""
 
-    def test_link_becomes_a_file_holding_its_target(self, temp_dir: Path) -> None:
+    def test_link_becomes_a_file_holding_its_target(self, tmp_path: Path) -> None:
         """Test the file's content, and that the link's 0777 mode isn't applied."""
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_with_hardlink(archive, "a", kind=tarfile.SYMTYPE)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), [], allow_symlinks=2)
 
@@ -1691,11 +1691,11 @@ class TestSymlinksAsFiles:
         if sys.platform != "win32":
             assert link.stat().st_mode & 0o111 == 0
 
-    def test_target_text_counts_toward_the_size_cap(self, temp_dir: Path) -> None:
+    def test_target_text_counts_toward_the_size_cap(self, tmp_path: Path) -> None:
         """Test that the cap covers the written target, and nothing is left."""
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_with_hardlink(archive, "a", kind=tarfile.SYMTYPE)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with pytest.raises(ExtractionPolicyError, match="maximum extracted size"):
             _core.extract_archive(
@@ -1728,13 +1728,13 @@ def _symlinks_work(where: Path) -> bool:
 class TestSymlinkExtraction:
     """Test allow_symlinks=1, which creates links whose targets stay inside."""
 
-    def test_link_is_created_as_stored(self, temp_dir: Path) -> None:
+    def test_link_is_created_as_stored(self, tmp_path: Path) -> None:
         """Test that the link holds its target verbatim, and resolves to it."""
-        if not _symlinks_work(temp_dir):
+        if not _symlinks_work(tmp_path):
             pytest.skip("symlinks need privilege")
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_with_hardlink(archive, "a", kind=tarfile.SYMTYPE)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
 
@@ -1747,47 +1747,47 @@ class TestSymlinkExtraction:
         "target", ["../../x", "/etc/passwd", "C:x", "a/../a", "../d/../a", ""]
     )
     def test_target_that_may_escape_is_refused(
-        self, temp_dir: Path, target: str
+        self, tmp_path: Path, target: str
     ) -> None:
         """Test escapes, absolute targets and a ".." after a name, before any write."""
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_with_hardlink(archive, target, kind=tarfile.SYMTYPE)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with pytest.raises(ExtractionPolicyError, match="symlink|Symlink"):
             _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
 
         assert list(out.iterdir()) == []
 
-    def test_target_counts_from_where_the_link_lands(self, temp_dir: Path) -> None:
+    def test_target_counts_from_where_the_link_lands(self, tmp_path: Path) -> None:
         """Test that a link under an extracted `s -> .` can't climb out.
 
         `s/l -> ../x` looks contained, but `s` is the root itself, so the
         target resolves outside it.
         """
-        if not _symlinks_work(temp_dir):
+        if not _symlinks_work(tmp_path):
             pytest.skip("symlinks need privilege")
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         with tarfile.open(archive, "w", format=tarfile.GNU_FORMAT) as tf:
             for name, target in (("s", "."), ("s/l", "../x")):
                 info = tarfile.TarInfo(name)
                 info.type = tarfile.SYMTYPE
                 info.linkname = target
                 tf.addfile(info)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with pytest.raises(ExtractionPolicyError, match="symlink target"):
             _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
 
         assert list(out.iterdir()) == []
 
-    def test_link_gets_its_own_mtime(self, temp_dir: Path) -> None:
+    def test_link_gets_its_own_mtime(self, tmp_path: Path) -> None:
         """Test that the stored mtime lands on the link, not on its target."""
-        if not _symlinks_work(temp_dir):
+        if not _symlinks_work(tmp_path):
             pytest.skip("symlinks need privilege")
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_with_hardlink(archive, "a", kind=tarfile.SYMTYPE, mtime=1_000_000_000)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
 
@@ -1816,13 +1816,13 @@ def _tar_symlink_then_hardlink(path: Path, link: str) -> None:
 class TestHardlinkToSymlink:
     """Test a hardlink naming an extracted symlink, which links the symlink."""
 
-    def test_symlink_itself_is_linked(self, temp_dir: Path) -> None:
+    def test_symlink_itself_is_linked(self, tmp_path: Path) -> None:
         """Test that the link is the symlink's inode, not its target's."""
-        if not _symlinks_work(temp_dir):
+        if not _symlinks_work(tmp_path):
             pytest.skip("symlinks need privilege")
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_symlink_then_hardlink(archive, "d/b")
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
 
@@ -1830,13 +1830,13 @@ class TestHardlinkToSymlink:
         assert Path(os.readlink(link)) == Path("../x")
         assert link.lstat().st_ino == (out / "d" / "s").lstat().st_ino
 
-    def test_target_is_checked_from_where_the_link_lands(self, temp_dir: Path) -> None:
+    def test_target_is_checked_from_where_the_link_lands(self, tmp_path: Path) -> None:
         """Test that `../x`, inside from d/, is refused for a link at the root."""
-        if not _symlinks_work(temp_dir):
+        if not _symlinks_work(tmp_path):
             pytest.skip("symlinks need privilege")
-        archive = temp_dir / "links.tar"
+        archive = tmp_path / "links.tar"
         _tar_symlink_then_hardlink(archive, "b")
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         with pytest.raises(ExtractionPolicyError, match="symlink target"):
             _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
@@ -1847,13 +1847,13 @@ class TestHardlinkToSymlink:
 class TestHardlinkCreation:
     """Test that tar stores a file's later names as links to its first."""
 
-    def _round_trip(self, temp_dir: Path, make: Callable[[Path], object]) -> Path:
+    def _round_trip(self, tmp_path: Path, make: Callable[[Path], object]) -> Path:
         """Archive src/a and its hardlink src/b, check the listing, and extract."""
-        src = temp_dir / "src"
+        src = tmp_path / "src"
         src.mkdir()
         make(src / "a")
         os.link(src / "a", src / "b")
-        archive = temp_dir / "a.tar"
+        archive = tmp_path / "a.tar"
 
         _core.create_archive(str(archive), "tar", [str(src)])
 
@@ -1861,32 +1861,32 @@ class TestHardlinkCreation:
         first, later = sorted(["src/a", "src/b"], key=list(entries).index)
         assert entries[later]["type"] == "hardlink"
         assert entries[later]["link_target"] == first
-        out = temp_dir / "out"
+        out = tmp_path / "out"
         _core.extract_archive(str(archive), str(out), [])
         return out / "src"
 
-    def test_file_is_stored_once(self, temp_dir: Path) -> None:
+    def test_file_is_stored_once(self, tmp_path: Path) -> None:
         """Test that the extracted names share an inode."""
-        out = self._round_trip(temp_dir, lambda p: p.write_text("x"))
+        out = self._round_trip(tmp_path, lambda p: p.write_text("x"))
 
         assert (out / "a").read_text() == "x"
         assert (out / "a").stat().st_ino == (out / "b").stat().st_ino
 
     @pytest.mark.skipif(sys.platform == "win32", reason="no FIFOs on Windows")
-    def test_fifo_is_linked(self, temp_dir: Path) -> None:
+    def test_fifo_is_linked(self, tmp_path: Path) -> None:
         """Test that a link naming a FIFO links it, as bsdtar does."""
-        out = self._round_trip(temp_dir, os.mkfifo)
+        out = self._round_trip(tmp_path, os.mkfifo)
 
         assert stat.S_ISFIFO((out / "b").lstat().st_mode)
         assert (out / "a").lstat().st_ino == (out / "b").lstat().st_ino
 
-    def test_zip_keeps_copies(self, temp_dir: Path) -> None:
+    def test_zip_keeps_copies(self, tmp_path: Path) -> None:
         """Test that zip stores each name in full, as Info-ZIP does."""
-        src = temp_dir / "src"
+        src = tmp_path / "src"
         src.mkdir()
         (src / "a").write_text("x")
         os.link(src / "a", src / "b")
-        archive = temp_dir / "a.zip"
+        archive = tmp_path / "a.zip"
 
         _core.create_archive(str(archive), "zip", [str(src)])
 
@@ -1917,14 +1917,14 @@ class TestZipModesAndSymlinks:
     """Test that zip keeps Unix modes and symlinks in its external attributes."""
 
     @pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX modes")
-    def test_modes_are_stored(self, temp_dir: Path) -> None:
+    def test_modes_are_stored(self, tmp_path: Path) -> None:
         """Test that each entry's mode lands in the attributes, typed."""
-        src = temp_dir / "src"
+        src = tmp_path / "src"
         src.mkdir()
         (src / "run").write_bytes(b"x")
         (src / "run").chmod(0o750)
         src.chmod(0o750)
-        archive = temp_dir / "a.zip"
+        archive = tmp_path / "a.zip"
 
         _core.create_archive(str(archive), "zip", [str(src)])
 
@@ -1933,14 +1933,14 @@ class TestZipModesAndSymlinks:
         assert modes["src/run"] == 0o100750
         assert modes["src/"] == 0o040750
 
-    def test_link_is_stored_as_a_link(self, temp_dir: Path) -> None:
+    def test_link_is_stored_as_a_link(self, tmp_path: Path) -> None:
         """Test that a symlink is its target text, marked S_IFLNK."""
-        if not _symlinks_work(temp_dir):
+        if not _symlinks_work(tmp_path):
             pytest.skip("symlinks need privilege")
-        src = temp_dir / "src"
+        src = tmp_path / "src"
         src.mkdir()
         (src / "link").symlink_to("target")
-        archive = temp_dir / "a.zip"
+        archive = tmp_path / "a.zip"
 
         _core.create_archive(str(archive), "zip", [str(src)])
 
@@ -1950,11 +1950,11 @@ class TestZipModesAndSymlinks:
             assert zf.read(info) == b"target"
 
     @pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX modes")
-    def test_modes_are_restored(self, temp_dir: Path) -> None:
+    def test_modes_are_restored(self, tmp_path: Path) -> None:
         """Test the stored modes, and the usual default for a DOS entry."""
-        archive = temp_dir / "a.zip"
+        archive = tmp_path / "a.zip"
         _zip_with_unix_modes(archive)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), [], exact_permissions=True)
 
@@ -1962,9 +1962,9 @@ class TestZipModesAndSymlinks:
         assert stat.S_IMODE((out / "d" / "run").stat().st_mode) == 0o750
         assert stat.S_IMODE((out / "dos").stat().st_mode) == 0o644
 
-    def test_link_is_listed_with_its_target(self, temp_dir: Path) -> None:
+    def test_link_is_listed_with_its_target(self, tmp_path: Path) -> None:
         """Test that listing reports the link's type and target, not its data."""
-        archive = temp_dir / "a.zip"
+        archive = tmp_path / "a.zip"
         _zip_with_unix_modes(archive)
 
         entries = {e["path"]: e for e in _core.list_archive_contents(str(archive))}
@@ -1972,24 +1972,24 @@ class TestZipModesAndSymlinks:
         assert entries["d/link"]["type"] == "symlink"
         assert entries["d/link"]["link_target"] == "run"
 
-    def test_link_becomes_a_file_by_default(self, temp_dir: Path) -> None:
+    def test_link_becomes_a_file_by_default(self, tmp_path: Path) -> None:
         """Test that zip's default is mode 2, as before links were recognised."""
-        archive = temp_dir / "a.zip"
+        archive = tmp_path / "a.zip"
         _zip_with_unix_modes(archive)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), [])
 
         assert not (out / "d" / "link").is_symlink()
         assert (out / "d" / "link").read_bytes() == b"run"
 
-    def test_link_is_created_on_request(self, temp_dir: Path) -> None:
+    def test_link_is_created_on_request(self, tmp_path: Path) -> None:
         """Test that allow_symlinks=1 creates the link itself."""
-        if not _symlinks_work(temp_dir):
+        if not _symlinks_work(tmp_path):
             pytest.skip("symlinks need privilege")
-        archive = temp_dir / "a.zip"
+        archive = tmp_path / "a.zip"
         _zip_with_unix_modes(archive)
-        out = temp_dir / "out"
+        out = tmp_path / "out"
 
         _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
 
@@ -2001,13 +2001,13 @@ class TestZipModesAndSymlinks:
 class TestOverwriteReplacesSymlinks:
     """Test that OVERWRITE replaces a symlink at an entry's path."""
 
-    def test_symlink_at_the_entry_path_is_not_followed(self, temp_dir: Path) -> None:
+    def test_symlink_at_the_entry_path_is_not_followed(self, tmp_path: Path) -> None:
         """Test that the entry's data never lands where the link points."""
-        archive = temp_dir / "a.tar"
+        archive = tmp_path / "a.tar"
         _tar_of(archive, [("a.txt", 0o644, 1_000_000_000)])
-        outside = temp_dir / "outside.txt"
+        outside = tmp_path / "outside.txt"
         outside.write_text("keep me")
-        out = temp_dir / "out"
+        out = tmp_path / "out"
         out.mkdir()
         (out / "a.txt").symlink_to(outside)
 
@@ -2031,43 +2031,43 @@ class TestOutputsCommitOnlyOnSuccess:
 
     @pytest.mark.parametrize("fmt", ["comp", "gz"])
     def test_failed_decompression_keeps_the_existing_file(
-        self, temp_dir: Path, fmt: str
+        self, tmp_path: Path, fmt: str
     ) -> None:
         """Test that corrupt input onto an existing file neither truncates nor removes it."""
-        source = temp_dir / "source.bin"
+        source = tmp_path / "source.bin"
         source.write_bytes(os.urandom(64 * 1024))
-        compressed = temp_dir / f"source.{fmt}"
+        compressed = tmp_path / f"source.{fmt}"
         _compress_to(fmt, source, compressed)
         data = compressed.read_bytes()
         compressed.write_bytes(data[: len(data) // 2])
 
-        existing = temp_dir / "existing.bin"
+        existing = tmp_path / "existing.bin"
         existing.write_bytes(b"keep me")
 
         with pytest.raises(CorruptDataError):
             decompress_file(str(compressed), str(existing), "", overwrite=2)
 
         assert existing.read_bytes() == b"keep me"
-        assert not list(temp_dir.glob(".compresso-*"))
+        assert not list(tmp_path.glob(".compresso-*"))
 
     @pytest.mark.parametrize("fmt", ["tar", "tar.gz", "zip"])
     def test_failed_archive_creation_keeps_the_existing_file(
-        self, sample_text_file: Path, temp_dir: Path, fmt: str
+        self, sample_text_file: Path, tmp_path: Path, fmt: str
     ) -> None:
         """Test that an archive that fails part way never replaces the one there."""
-        existing = temp_dir / f"existing.{fmt}"
+        existing = tmp_path / f"existing.{fmt}"
         existing.write_bytes(b"keep me")
 
         with pytest.raises(FileNotFoundError):
             _core.create_archive(
                 str(existing),
                 fmt,
-                [str(sample_text_file), str(temp_dir / "missing")],
+                [str(sample_text_file), str(tmp_path / "missing")],
                 overwrite=2,
             )
 
         assert existing.read_bytes() == b"keep me"
-        assert not list(temp_dir.glob(".compresso-*"))
+        assert not list(tmp_path.glob(".compresso-*"))
 
     @pytest.mark.parametrize("fmt", ["comp", "gz"])
     def test_overwriting_the_input_itself_is_refused(
@@ -2101,9 +2101,9 @@ class TestOutputsKeepSourceMetadata:
         return compressed, restored
 
     @pytest.mark.parametrize("fmt", ["comp", "gz"])
-    def test_mtime_carries_through_both_ways(self, temp_dir: Path, fmt: str) -> None:
+    def test_mtime_carries_through_both_ways(self, tmp_path: Path, fmt: str) -> None:
         """Test that the compressed file, then the restored one, keep the date."""
-        source = temp_dir / "a.txt"
+        source = tmp_path / "a.txt"
         source.write_bytes(b"hello" * 100)
         os.utime(source, (self.MTIME, self.MTIME))
 
@@ -2118,10 +2118,10 @@ class TestOutputsKeepSourceMetadata:
         ids=["private", "no-umask", "setuid"],
     )
     def test_mode_carries_through_without_setuid(
-        self, temp_dir: Path, fmt: str, mode: int, expected: int
+        self, tmp_path: Path, fmt: str, mode: int, expected: int
     ) -> None:
         """Test the permission bits are copied as is, setuid aside, both ways."""
-        source = temp_dir / "a.txt"
+        source = tmp_path / "a.txt"
         source.write_bytes(b"hello" * 100)
         source.chmod(mode)
 
@@ -2173,14 +2173,14 @@ class TestLevelValidation:
     def test_compress_file_refuses_out_of_range(
         self,
         sample_text_file: Path,
-        temp_dir: Path,
+        tmp_path: Path,
         algo: str,
         strategy: str,
         level: int,
         match: str,
     ) -> None:
         """Test that an out-of-range level is refused before anything is written."""
-        dest = temp_dir / "out.comp"
+        dest = tmp_path / "out.comp"
         with pytest.raises(ValueError, match=match):
             compress_file(str(sample_text_file), str(dest), algo, strategy, level)
         assert not dest.exists()
@@ -2190,11 +2190,11 @@ class TestLevelValidation:
         [("zlib", 9), ("bzip2", 1), ("zstd", 22), ("lz4", 12), ("snappy", -1)],
     )
     def test_compress_file_accepts_range_ends(
-        self, sample_text_file: Path, temp_dir: Path, algo: str, level: int
+        self, sample_text_file: Path, tmp_path: Path, algo: str, level: int
     ) -> None:
         """Test that each end of a backend's range, and the default, still work."""
         compress_file(
-            str(sample_text_file), str(temp_dir / "out.comp"), algo, "", level
+            str(sample_text_file), str(tmp_path / "out.comp"), algo, "", level
         )
 
     @pytest.mark.parametrize(
@@ -2206,12 +2206,12 @@ class TestLevelValidation:
         ],
     )
     def test_compress_standalone_refuses_out_of_range(
-        self, sample_text_file: Path, temp_dir: Path, fmt: str, level: int, match: str
+        self, sample_text_file: Path, tmp_path: Path, fmt: str, level: int, match: str
     ) -> None:
         """Test that the standalone formats check the level too."""
         with pytest.raises(ValueError, match=match):
             _core.compress_standalone(
-                str(sample_text_file), str(temp_dir / f"out.{fmt}"), fmt, level
+                str(sample_text_file), str(tmp_path / f"out.{fmt}"), fmt, level
             )
 
     @pytest.mark.parametrize(
@@ -2225,20 +2225,20 @@ class TestLevelValidation:
         ],
     )
     def test_create_archive_refuses_out_of_range(
-        self, sample_text_file: Path, temp_dir: Path, fmt: str, level: int, match: str
+        self, sample_text_file: Path, tmp_path: Path, fmt: str, level: int, match: str
     ) -> None:
         """Test that archives check the level of whichever stage compresses."""
-        dest = temp_dir / f"out.{fmt}"
+        dest = tmp_path / f"out.{fmt}"
         with pytest.raises(ValueError, match=match):
             _core.create_archive(str(dest), fmt, [str(sample_text_file)], level)
         assert not dest.exists()
 
     def test_create_archive_accepts_a_codec_stage_level(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that tar.zst takes zstd's levels even though tar has none."""
         _core.create_archive(
-            str(temp_dir / "out.tar.zst"), "tar.zst", [str(sample_text_file)], 19
+            str(tmp_path / "out.tar.zst"), "tar.zst", [str(sample_text_file)], 19
         )
 
     @pytest.mark.parametrize(
@@ -2246,14 +2246,14 @@ class TestLevelValidation:
         [("zlib", 9), ("zlib", 10), ("bzip2", 0), ("zstd", 22), ("snappy", 1)],
     )
     def test_check_level_agrees_with_compress_file(
-        self, sample_text_file: Path, temp_dir: Path, algo: str, level: int
+        self, sample_text_file: Path, tmp_path: Path, algo: str, level: int
     ) -> None:
         """Test that the up-front check refuses exactly what compression refuses."""
 
         checked = _value_error(lambda: _core.check_level(level, algo=algo))
         compressed = _value_error(
             lambda: compress_file(
-                str(sample_text_file), str(temp_dir / "o.comp"), algo, "", level
+                str(sample_text_file), str(tmp_path / "o.comp"), algo, "", level
             )
         )
         assert checked == compressed
@@ -2262,12 +2262,12 @@ class TestLevelValidation:
         "fmt,level", [("gz", 10), ("tar", 1), ("tar.zst", 23), ("zip", 9)]
     )
     def test_check_level_agrees_with_create_archive(
-        self, sample_text_file: Path, temp_dir: Path, fmt: str, level: int
+        self, sample_text_file: Path, tmp_path: Path, fmt: str, level: int
     ) -> None:
         """Test that the up-front check matches archive and standalone creation."""
 
         checked = _value_error(lambda: _core.check_level(level, format=fmt))
-        dest = str(temp_dir / f"o.{fmt}")
+        dest = str(tmp_path / f"o.{fmt}")
         if fmt == "gz":
             created = _value_error(
                 lambda: _core.compress_standalone(
@@ -2302,12 +2302,12 @@ class TestCodecThreads:
 
     @pytest.mark.parametrize("fmt", ["zstd", "xz"])
     def test_output_is_the_same_for_any_thread_count(
-        self, several_blocks: Path, temp_dir: Path, fmt: str
+        self, several_blocks: Path, tmp_path: Path, fmt: str
     ) -> None:
         """Test that a file doesn't depend on the machine that wrote it."""
         outputs = []
         for threads in (1, 3):
-            out = temp_dir / f"{threads}.{fmt}"
+            out = tmp_path / f"{threads}.{fmt}"
             _core.compress_standalone(
                 str(several_blocks), str(out), fmt, 1, threads=threads
             )
@@ -2315,24 +2315,24 @@ class TestCodecThreads:
 
         assert outputs[0].read_bytes() == outputs[1].read_bytes()
 
-        restored = temp_dir / "restored"
+        restored = tmp_path / "restored"
         _core.decompress_standalone(str(outputs[1]), str(restored), fmt, threads=3)
         assert restored.read_bytes() == several_blocks.read_bytes()
 
     def test_threaded_xz_is_read_by_the_stdlib(
-        self, several_blocks: Path, temp_dir: Path
+        self, several_blocks: Path, tmp_path: Path
     ) -> None:
         """Test that the multi-block layout is ordinary .xz."""
-        out = temp_dir / "out.xz"
+        out = tmp_path / "out.xz"
         _core.compress_standalone(str(several_blocks), str(out), "xz", 1, threads=2)
 
         assert lzma.decompress(out.read_bytes()) == several_blocks.read_bytes()
 
     def test_zstd_frame_records_the_content_size(
-        self, several_blocks: Path, temp_dir: Path
+        self, several_blocks: Path, tmp_path: Path
     ) -> None:
         """Test that a streamed input's size is pledged and written to the header."""
-        out = temp_dir / "out.zst"
+        out = tmp_path / "out.zst"
         _core.compress_standalone(str(several_blocks), str(out), "zstd", 1)
 
         descriptor = out.read_bytes()[4]
@@ -2341,27 +2341,27 @@ class TestCodecThreads:
 
     @pytest.mark.parametrize("algo", ["lzma", "zstd"])
     def test_max_ratio_reaches_the_codec(
-        self, several_blocks: Path, temp_dir: Path, algo: str
+        self, several_blocks: Path, tmp_path: Path, algo: str
     ) -> None:
         """Test that max_ratio adds lzma's extreme preset and zstd's long matching."""
         outputs = {}
         for strategy in ("balanced", "max_ratio"):
-            out = temp_dir / f"{strategy}.comp"
+            out = tmp_path / f"{strategy}.comp"
             compress_file(str(several_blocks), str(out), algo, strategy, 1)
             outputs[strategy] = out
 
-            restored = temp_dir / f"{strategy}.out"
+            restored = tmp_path / f"{strategy}.out"
             decompress_file(str(out), str(restored), "")
             assert restored.read_bytes() == several_blocks.read_bytes()
 
         assert outputs["balanced"].read_bytes() != outputs["max_ratio"].read_bytes()
 
     def test_negative_count_is_refused(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that threads below 0 raise rather than meaning one per core."""
         with pytest.raises(ValueError, match="threads must be 0"):
             _core.compress_standalone(
-                str(sample_text_file), str(temp_dir / "out.zst"), "zstd", threads=-1
+                str(sample_text_file), str(tmp_path / "out.zst"), "zstd", threads=-1
             )
-        assert not (temp_dir / "out.zst").exists()
+        assert not (tmp_path / "out.zst").exists()

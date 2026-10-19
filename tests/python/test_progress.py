@@ -84,7 +84,7 @@ class TestCompressionProgress:
     """Test progress reporting from _core.compress_file."""
 
     def test_reports_are_incremental_over_the_input_size(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that progress arrives during the job, out of the source file's size.
 
@@ -93,7 +93,7 @@ class TestCompressionProgress:
         recorder = Recorder()
         compress_file(
             str(big_compressible_file),
-            str(temp_dir / "out.comp"),
+            str(tmp_path / "out.comp"),
             "zstd",
             "balanced",
             3,
@@ -106,13 +106,13 @@ class TestCompressionProgress:
 
     @pytest.mark.parametrize("algo", BACKENDS)
     def test_progress_is_monotonic_and_completes(
-        self, big_compressible_file: Path, temp_dir: Path, algo: str
+        self, big_compressible_file: Path, tmp_path: Path, algo: str
     ) -> None:
         """Test that every backend reports rising byte counts ending exactly at the total."""
         recorder = Recorder()
         compress_file(
             str(big_compressible_file),
-            str(temp_dir / f"{algo}.comp"),
+            str(tmp_path / f"{algo}.comp"),
             algo,
             "balanced",
             fast_level(algo),
@@ -123,10 +123,10 @@ class TestCompressionProgress:
         recorder.assert_finished()
 
     def test_runs_without_a_callback(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that omitting progress leaves the pre-context behaviour untouched."""
-        output = temp_dir / "out.comp"
+        output = tmp_path / "out.comp"
         compress_file(str(big_compressible_file), str(output), "zstd", "balanced", 3)
 
         assert output.stat().st_size > 0
@@ -137,11 +137,11 @@ class TestDecompressionProgress:
 
     @pytest.mark.parametrize("algo", BACKENDS)
     def test_progress_is_monotonic_and_completes(
-        self, big_incompressible_file: Path, temp_dir: Path, algo: str
+        self, big_incompressible_file: Path, tmp_path: Path, algo: str
     ) -> None:
         """Test that decompression reports too, counting compressed bytes consumed."""
-        compressed = temp_dir / f"{algo}.comp"
-        restored = temp_dir / f"{algo}.out"
+        compressed = tmp_path / f"{algo}.comp"
+        restored = tmp_path / f"{algo}.out"
         compress_file(
             str(big_incompressible_file),
             str(compressed),
@@ -174,11 +174,11 @@ class TestStandaloneProgress:
         ],
     )
     def test_round_trip_reports_progress(
-        self, big_incompressible_file: Path, temp_dir: Path, fmt: str, ext: str
+        self, big_incompressible_file: Path, tmp_path: Path, fmt: str, ext: str
     ) -> None:
         """Test that both directions report, and the data survives the round trip."""
-        compressed = temp_dir / f"standalone{ext}"
-        restored = temp_dir / f"restored{ext}.out"
+        compressed = tmp_path / f"standalone{ext}"
+        restored = tmp_path / f"restored{ext}.out"
 
         compressing = Recorder()
         _core.compress_standalone(
@@ -226,10 +226,10 @@ class TestCancellation:
     """Test stopping a running job through a CancelToken."""
 
     def test_cancel_leaves_no_partial_file(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that the half-written destination is removed rather than left behind."""
-        output = temp_dir / "cancelled.comp"
+        output = tmp_path / "cancelled.comp"
         token = CancelToken()
 
         with pytest.raises(Cancelled):
@@ -246,14 +246,14 @@ class TestCancellation:
         assert not output.exists()
 
     def test_token_cancelled_before_the_call(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that a token cancelled up front stops the job immediately.
 
         No progress callback is passed, so this also shows cancellation does
         not depend on progress being requested.
         """
-        output = temp_dir / "never.comp"
+        output = tmp_path / "never.comp"
         token = CancelToken()
         token.cancel()
 
@@ -270,10 +270,10 @@ class TestCancellation:
         assert not output.exists()
 
     def test_uncancelled_token_does_not_interfere(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that passing a token that is never cancelled completes normally."""
-        output = temp_dir / "fine.comp"
+        output = tmp_path / "fine.comp"
         compress_file(
             str(big_compressible_file),
             str(output),
@@ -286,10 +286,10 @@ class TestCancellation:
         assert output.stat().st_size > 0
 
     def test_cancel_from_another_thread(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that a token can be cancelled by a thread other than the one compressing."""
-        output = temp_dir / "threaded.comp"
+        output = tmp_path / "threaded.comp"
         token = CancelToken()
         started = threading.Event()
 
@@ -319,7 +319,7 @@ class TestCallbackErrors:
     """Test progress callback error behaviour."""
 
     def test_exception_from_callback_propagates(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that the callback's own exception wins over any backend or Cancelled error."""
 
@@ -333,7 +333,7 @@ class TestCallbackErrors:
         with pytest.raises(Boom, match="callback failed"):
             compress_file(
                 str(big_compressible_file),
-                str(temp_dir / "boom.comp"),
+                str(tmp_path / "boom.comp"),
                 "zstd",
                 "balanced",
                 3,
@@ -341,10 +341,10 @@ class TestCallbackErrors:
             )
 
     def test_failed_callback_leaves_no_partial_file(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that a callback failure cleans up like any other failure."""
-        output = temp_dir / "boom.comp"
+        output = tmp_path / "boom.comp"
 
         def explode(done: int, total: int) -> None:
             """Raises RuntimeError to simulate a failed callback."""
@@ -363,13 +363,13 @@ class TestCallbackErrors:
         assert not output.exists()
 
     def test_non_callable_progress_is_rejected(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that a bad progress argument fails fast rather than mid-compression."""
         with pytest.raises(TypeError, match="progress must be callable"):
             compress_file(
                 str(sample_text_file),
-                str(temp_dir / "x.comp"),
+                str(tmp_path / "x.comp"),
                 "zstd",
                 "balanced",
                 3,
@@ -377,13 +377,13 @@ class TestCallbackErrors:
             )
 
     def test_wrong_cancel_type_is_rejected(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that cancel= only accepts a CancelToken."""
         with pytest.raises(TypeError, match="cancel must be a CancelToken"):
             compress_file(
                 str(sample_text_file),
-                str(temp_dir / "x.comp"),
+                str(tmp_path / "x.comp"),
                 "zstd",
                 "balanced",
                 3,
@@ -395,10 +395,10 @@ class TestSignalHandling:
     """Test that pending signals are run mid-compression, not just when the call returns."""
 
     def test_signal_raised_during_callback_aborts(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that a signal pending when the bridge runs interrupts the compression."""
-        output = temp_dir / "interrupted.comp"
+        output = tmp_path / "interrupted.comp"
 
         def raise_sigint(done: int, total: int) -> None:
             """Raise a SIGINT signal to interrupt the compression."""
@@ -420,10 +420,10 @@ class TestSignalHandling:
         not hasattr(signal, "setitimer"), reason="setitimer is POSIX-only"
     )
     def test_signal_aborts_without_a_progress_callback(
-        self, big_incompressible_file: Path, temp_dir: Path
+        self, big_incompressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that signals are checked even when no progress was requested."""
-        output = temp_dir / "alarmed.comp"
+        output = tmp_path / "alarmed.comp"
 
         class Alarm(Exception):
             """Mock alarm exception."""
@@ -456,7 +456,7 @@ class TestConcurrency:
     """Test that two jobs at once must not share progress or cancellation state."""
 
     def test_parallel_jobs_keep_separate_contexts(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that cancelling one job leaves the other to finish."""
         finished: dict[str, object] = {}
@@ -467,7 +467,7 @@ class TestConcurrency:
             try:
                 compress_file(
                     str(big_compressible_file),
-                    str(temp_dir / "a.comp"),
+                    str(tmp_path / "a.comp"),
                     "zstd",
                     "balanced",
                     3,
@@ -482,7 +482,7 @@ class TestConcurrency:
             recorder = Recorder()
             compress_file(
                 str(big_compressible_file),
-                str(temp_dir / "b.comp"),
+                str(tmp_path / "b.comp"),
                 "zstd",
                 "balanced",
                 3,
@@ -501,25 +501,25 @@ class TestConcurrency:
             thread.join(timeout=60)
 
         assert finished["a"] == "cancelled"
-        assert not (temp_dir / "a.comp").exists()
+        assert not (tmp_path / "a.comp").exists()
 
         recorder = finished["b"]
         assert isinstance(recorder, Recorder)
         recorder.assert_monotonic()
         recorder.assert_finished()
-        assert (temp_dir / "b.comp").stat().st_size > 0
+        assert (tmp_path / "b.comp").stat().st_size > 0
 
 
 class TestJobIntegration:
     """Test that the frontend jobs surface progress and cancellation without raising."""
 
     def test_compression_job_reports_progress(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that CompressionJob.run drives the callback with real byte counts."""
         calls: list[tuple[float, int, int]] = []
         job = CompressionJob.from_file(
-            src=big_compressible_file, dest=temp_dir / "job.comp"
+            src=big_compressible_file, dest=tmp_path / "job.comp"
         )
 
         result = job.run(progress=lambda f, done, total: calls.append((f, done, total)))
@@ -533,10 +533,10 @@ class TestJobIntegration:
         assert fraction == pytest.approx(1.0)
 
     def test_compression_job_reports_cancellation(
-        self, big_compressible_file: Path, temp_dir: Path
+        self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that a cancelled job comes back flagged, not raising and not an error."""
-        output = temp_dir / "job_cancelled.comp"
+        output = tmp_path / "job_cancelled.comp"
         token = CancelToken()
         job = CompressionJob.from_file(src=big_compressible_file, dest=output)
 
@@ -548,14 +548,14 @@ class TestJobIntegration:
         assert not output.exists()
 
     def test_decompression_job_reports_progress(
-        self, big_incompressible_file: Path, temp_dir: Path
+        self, big_incompressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that DecompressionJob.run reports too, over the compressed size."""
-        compressed = temp_dir / "job.comp"
+        compressed = tmp_path / "job.comp"
         CompressionJob.from_file(src=big_incompressible_file, dest=compressed).run()
 
         calls: list[tuple[float, int, int]] = []
-        job = DecompressionJob.from_file(src=compressed, dest=temp_dir / "job.out")
+        job = DecompressionJob.from_file(src=compressed, dest=tmp_path / "job.out")
         result = job.run(progress=lambda f, done, total: calls.append((f, done, total)))
 
         assert result.ok is True
@@ -564,10 +564,10 @@ class TestJobIntegration:
         assert done == total
 
     def test_job_result_defaults_to_not_cancelled(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that a job that ran to completion is not reported as cancelled."""
         job = CompressionJob.from_file(
-            src=sample_text_file, dest=temp_dir / "plain.comp"
+            src=sample_text_file, dest=tmp_path / "plain.comp"
         )
         assert job.run().cancelled is False

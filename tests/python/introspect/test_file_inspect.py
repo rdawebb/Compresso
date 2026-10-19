@@ -21,9 +21,9 @@ class TestHeaderStruct:
 class TestInspect:
     """Test the inspect function."""
 
-    def test_inspect_nonexistent_file(self, temp_dir: Path) -> None:
+    def test_inspect_nonexistent_file(self, tmp_path: Path) -> None:
         """Test inspecting a file that doesn't exist."""
-        file_path = temp_dir / "nonexistent.comp"
+        file_path = tmp_path / "nonexistent.comp"
         result = inspect(file_path)
 
         assert result.is_compresso is False
@@ -48,10 +48,10 @@ class TestInspect:
         assert result.can_decompress is False
 
     def test_inspect_valid_compressed_file(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ):
         """Test inspecting a valid Compresso compressed file."""
-        compressed_file = temp_dir / "compressed.comp"
+        compressed_file = tmp_path / "compressed.comp"
 
         # First compress a file
         compress_file(
@@ -68,10 +68,10 @@ class TestInspect:
         assert result.version is not None
 
     def test_inspect_path_as_string(
-        self, sample_text_file: Path, temp_dir: Path
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test inspect with path as string."""
-        compressed_file = temp_dir / "compressed.comp"
+        compressed_file = tmp_path / "compressed.comp"
 
         compress_file(
             str(sample_text_file), str(compressed_file), "zlib", "balanced", 6
@@ -83,9 +83,9 @@ class TestInspect:
         assert isinstance(result.path, Path)
         assert result.is_compresso is True
 
-    def test_inspect_file_too_small(self, temp_dir: Path) -> None:
+    def test_inspect_file_too_small(self, tmp_path: Path) -> None:
         """Test inspecting a file that's too small to be valid."""
-        small_file = temp_dir / "small.comp"
+        small_file = tmp_path / "small.comp"
         small_file.write_bytes(b"COMP")  # Only 4 bytes, needs 16
 
         result = inspect(small_file)
@@ -93,9 +93,9 @@ class TestInspect:
         assert result.is_compresso is False
         assert result.header_ok is False
 
-    def test_inspect_invalid_magic(self, temp_dir: Path) -> None:
+    def test_inspect_invalid_magic(self, tmp_path: Path) -> None:
         """Test inspecting a file with invalid magic bytes."""
-        invalid_file = temp_dir / "invalid.comp"
+        invalid_file = tmp_path / "invalid.comp"
         # Write 16 bytes but with wrong magic
         invalid_file.write_bytes(b"XXXX" + b"\x00" * 12)
 
