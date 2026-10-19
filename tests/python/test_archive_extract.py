@@ -5,6 +5,8 @@ import io
 import logging
 import os
 import stat
+import struct
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -1052,3 +1054,373 @@ class TestOverwriteReplacesSymlinks:
         assert outside.read_text() == "keep me"
         assert not (out / "a.txt").is_symlink()
         assert (out / "a.txt").read_bytes() == b"x"
+
+
+class TestExtractionRefusesDeniedEntryTypes:
+    """Test that the default policy refuses symlink entries."""
+
+    def test_refuses_a_symlink(self, tmp_path: Path) -> None:
+        """Test that the entry is refused by policy, naming what it is."""
+        archive = tmp_path / "typed.tar"
+        make_tar(archive, link_entry("entry", "target", kind=tarfile.SYMTYPE))
+
+        with pytest.raises(
+            ExtractionPolicyError, match="contains symlink, but policy denies it"
+        ):
+            _core.extract_archive(str(archive), str(tmp_path / "out"), [])
+
+
+class TestExtractionRefusesUnsafePaths:
+    """Test that extraction refuses entry names that escape the output directory.
+
+    The Windows-absolute forms are rejected on POSIX too, so every case here
+    runs on all platforms rather than only on the Windows CI leg.
+    """
+
+    @pytest.mark.parametrize(
+        "entry_name",
+        [
+            "/etc/passwd",  # POSIX absolute
+            "\\evil.txt",  # Windows root-relative
+            "C:\\Windows\\evil.txt",  # Windows drive-absolute
+            "C:/Windows/evil.txt",  # ... with the other separator
+            "C:evil.txt",  # Windows drive-relative
+            "\\\\server\\share\\evil.txt",  # UNC
+            "\\\\?\\C:\\evil.txt",  # Extended-length prefix
+        ],
+    )
+    def test_rejects_absolute_entry(self, tmp_path: Path, entry_name: str) -> None:
+        """Test that an absolute or drive-qualified entry name fails extraction."""
+        archive = tmp_path / "evil.tar"
+        make_tar(archive, file_entry(entry_name))
+
+        with pytest.raises(ExtractionPolicyError, match="absolute path"):
+            _core.extract_archive(str(archive), str(tmp_path / "out"), [])
+
+    @pytest.mark.parametrize("entry_name", ["../escape.txt", "sub/../../escape.txt"])
+    def test_rejects_parent_traversal(self, tmp_path: Path, entry_name: str) -> None:
+        """Test that an entry climbing out of the output directory is refused."""
+        archive = tmp_path / "evil.tar"
+        make_tar(archive, file_entry(entry_name))
+
+        with pytest.raises(ExtractionPolicyError, match="traversal"):
+            _core.extract_archive(str(archive), str(tmp_path / "out"), [])
+
+        assert not (tmp_path / "escape.txt").exists()
+
+    def test_backslash_traversal_stays_contained(self, tmp_path: Path) -> None:
+        """Test that a backslash-separated traversal cannot escape on any platform.
+
+        On Windows `..\\..\\escape.txt` is a real traversal and is refused; on
+        POSIX it is one oddly-named file.
+        """
+        archive = tmp_path / "evil.tar"
+        make_tar(archive, file_entry("..\\..\\escape.txt"))
+        out = tmp_path / "out"
+
+        if sys.platform == "win32":
+            with pytest.raises(ExtractionPolicyError, match="traversal"):
+                _core.extract_archive(str(archive), str(out), [])
+
+        else:
+            _core.extract_archive(str(archive), str(out), [])
+            assert (out / "..\\..\\escape.txt").read_bytes() == b"x"
+
+        assert not (tmp_path / "escape.txt").exists()
+        assert not (tmp_path.parent / "escape.txt").exists()
+
+    @pytest.mark.parametrize(
+        "entry_name", ["notes.txt:evil.exe", "notes.txt:evil.exe:$DATA"]
+    )
+    def test_alternate_data_stream_writes_no_stream(
+        self, tmp_path: Path, entry_name: str
+    ) -> None:
+        """Test that an NTFS stream entry never attaches content to a real file.
+
+        On Windows the colon is a stream separator and the entry is refused; on
+        POSIX it is an ordinary filename character, so the entry extracts as one
+        literally-named file.
+        """
+        archive = tmp_path / "evil.tar"
+        make_tar(archive, file_entry(entry_name))
+        out = tmp_path / "out"
+
+        if sys.platform == "win32":
+            with pytest.raises(ExtractionPolicyError, match="alternate data stream"):
+                _core.extract_archive(str(archive), str(out), [])
+
+        else:
+            _core.extract_archive(str(archive), str(out), [])
+            assert (out / entry_name).read_bytes() == b"x"
+
+        assert not (out / "notes.txt").exists()
+
+    @pytest.mark.usefixtures("needs_symlinks")
+    def test_rejects_entry_writing_through_a_symlinked_component(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that an entry cannot write through a symlink already in the output."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "link").symlink_to(outside, target_is_directory=True)
+
+        archive = tmp_path / "evil.tar"
+        make_tar(archive, file_entry("link/sub/escape.txt"))
+
+        with pytest.raises(ExtractionPolicyError, match="traversal"):
+            _core.extract_archive(str(archive), str(out), [])
+
+        assert not (outside / "sub").exists()
+
+    @pytest.mark.skipif(
+        sys.platform != "win32", reason="junctions are a Windows filesystem feature"
+    )
+    def test_rejects_entry_writing_through_a_junction(self, tmp_path: Path) -> None:
+        """Test the junction form of the symlinked-component escape.
+
+        The Windows equivalent of the test above; junctions are used rather than
+        `mklink /D` symlinks because creating one needs no admin rights.
+        """
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        out = tmp_path / "out"
+        out.mkdir()
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(out / "link"), str(outside)],
+            check=True,
+            capture_output=True,
+        )
+
+        archive = tmp_path / "evil.tar"
+        make_tar(archive, file_entry("link/sub/escape.txt"))
+
+        with pytest.raises(ExtractionPolicyError, match="traversal"):
+            _core.extract_archive(str(archive), str(out), [])
+
+        assert not (outside / "sub").exists()
+
+    def test_accepts_nested_entry(self, tmp_path: Path) -> None:
+        """Test that a legitimate nested entry is still extracted.
+
+        Guards the containment check against over-rejecting: it compares the
+        byte after the resolved root prefix, which is a backslash on Windows.
+        """
+        archive = tmp_path / "nested.tar"
+        make_tar(archive, file_entry("sub/deep/leaf.txt"))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert (out / "sub" / "deep" / "leaf.txt").read_bytes() == b"x"
+
+
+class TestExtractionSizeCap:
+    """Test that `max_total_size` bounds what an archive can write."""
+
+    def test_no_cap_by_default(self, tmp_path: Path) -> None:
+        """Test that the shipped default places no limit on extracted bytes."""
+        archive = tmp_path / "big.tar"
+        make_tar(archive, file_entry("big.bin", 200_000))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert (out / "big.bin").stat().st_size == 200_000
+
+    def test_refuses_archive_over_the_cap(self, tmp_path: Path) -> None:
+        """Test that a total past the cap is refused with nothing written."""
+        archive = tmp_path / "bomb.tar"
+        make_tar(archive, file_entry("big.bin", 200_000))
+        out = tmp_path / "out"
+
+        with pytest.raises(ExtractionPolicyError, match="maximum extracted size"):
+            _core.extract_archive(str(archive), str(out), [], max_total_size=1000)
+
+        assert list(out.iterdir()) == []
+
+    def test_cap_applies_to_the_total_not_each_entry(self, tmp_path: Path) -> None:
+        """Test that entries individually under the cap still fail in total."""
+        archive = tmp_path / "many.tar"
+        make_tar(archive, *(file_entry(f"f{i}.bin", 400) for i in range(10)))
+
+        with pytest.raises(ExtractionPolicyError, match="maximum extracted size"):
+            _core.extract_archive(
+                str(archive), str(tmp_path / "out"), [], max_total_size=1000
+            )
+
+    def test_entry_under_the_cap_extracts(self, tmp_path: Path) -> None:
+        """Test that the cap does not over-reject an archive that fits."""
+        archive = tmp_path / "small.tar"
+        make_tar(archive, file_entry("small.bin", 500))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [], max_total_size=1000)
+
+        assert (out / "small.bin").stat().st_size == 500
+
+    def test_understated_entry_size_is_still_capped(self, tmp_path: Path) -> None:
+        """Test that the cap counts bytes written, not the declared size.
+
+        A zip's central directory is the only thing the pre-extraction pass can
+        read sizes from, and it is attacker-controlled: patched to claim ten
+        bytes, this entry passes that pass and has to be stopped mid-write.
+        """
+        archive = tmp_path / "lie.zip"
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("big.bin", b"x" * 200_000)
+
+        data = bytearray(archive.read_bytes())
+        central_dir = data.find(b"PK\x01\x02")
+        struct.pack_into("<I", data, central_dir + 24, 10)  # Uncompressed size
+        archive.write_bytes(bytes(data))
+        out = tmp_path / "out"
+
+        with pytest.raises(ExtractionPolicyError, match="maximum extracted size"):
+            _core.extract_archive(str(archive), str(out), [], max_total_size=1000)
+
+        assert not (out / "big.bin").exists()
+
+
+class TestExtractionDepthLimit:
+    """Test that `max_depth` bounds how deeply an entry may nest."""
+
+    def test_refuses_entry_past_the_depth_limit(self, tmp_path: Path) -> None:
+        """Test that an entry nested past the default limit is refused."""
+        archive = tmp_path / "deep.tar"
+        make_tar(archive, file_entry("/".join(f"d{i}" for i in range(40)) + "/x"))
+        out = tmp_path / "out"
+
+        with pytest.raises(ExtractionPolicyError, match="max depth"):
+            _core.extract_archive(str(archive), str(out), [])
+
+        assert list(out.iterdir()) == []
+
+    def test_accepts_entry_within_the_depth_limit(self, tmp_path: Path) -> None:
+        """Test that an entry just inside the limit still extracts."""
+        archive = tmp_path / "deep.tar"
+        parts = [f"d{i}" for i in range(31)]
+        make_tar(archive, file_entry("/".join([*parts, "leaf.txt"])))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert out.joinpath(*parts, "leaf.txt").exists()
+
+    def test_depth_limit_is_configurable(self, tmp_path: Path) -> None:
+        """Test that a tighter limit refuses what the default accepts."""
+        archive = tmp_path / "nested.tar"
+        make_tar(archive, file_entry("a/b/c/leaf.txt"))
+
+        with pytest.raises(ExtractionPolicyError, match="max depth"):
+            _core.extract_archive(str(archive), str(tmp_path / "out"), [], max_depth=2)
+
+
+class TestExtractionMetadata:
+    """Test that modes and modification times are restored as the policy says."""
+
+    def test_restores_mtime_by_default(self, tmp_path: Path) -> None:
+        """Test that the entry's modification time survives extraction."""
+        archive = tmp_path / "meta.tar"
+        make_tar(archive, file_entry("a.txt", mtime=1_000_000_000))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert (out / "a.txt").stat().st_mtime == pytest.approx(1_000_000_000, abs=2)
+
+    def test_read_only_entry_keeps_its_mode_and_mtime(self, tmp_path: Path) -> None:
+        """Test that both are set on the open file, read-only included.
+
+        On Windows the mode is only the read-only attribute.
+        """
+        archive = tmp_path / "meta.tar"
+        make_tar(archive, file_entry("a.txt", mode=0o444, mtime=1_000_000_000))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        extracted = (out / "a.txt").stat()
+        assert extracted.st_mode & 0o222 == 0
+        assert extracted.st_mtime == pytest.approx(1_000_000_000, abs=2)
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows has no POSIX permission bits"
+    )
+    def test_restores_mode_by_default(self, tmp_path: Path) -> None:
+        """Test that the entry's permission bits survive extraction."""
+        archive = tmp_path / "meta.tar"
+        make_tar(archive, file_entry("a.txt", mode=0o640))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert (out / "a.txt").stat().st_mode & 0o777 == 0o640
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows has no POSIX permission bits"
+    )
+    @pytest.mark.parametrize(
+        ("mode", "exact", "expected"),
+        [
+            (0o4755, False, 0o755),
+            (0o777, False, 0o777),
+            (0o777, True, 0o777),
+        ],
+        ids=["setuid", "umask", "exact"],
+    )
+    def test_mode_is_masked_unless_exact(
+        self, tmp_path: Path, mode: int, exact: bool, expected: int
+    ) -> None:
+        """Test that setuid and the umask's bits go unless exact modes are asked for."""
+        archive = tmp_path / "meta.tar"
+        make_tar(archive, file_entry("a.txt", mode=mode))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [], exact_permissions=exact)
+
+        if not exact:
+            expected &= ~umask()
+        assert (out / "a.txt").stat().st_mode & 0o7777 == expected
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows has no POSIX permission bits"
+    )
+    def test_directory_mode_is_masked_too(self, tmp_path: Path) -> None:
+        """Test that a directory loses setgid and the umask's bits by default."""
+        archive = tmp_path / "meta.tar"
+        make_tar(archive, dir_entry("d", 0o2777))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert (out / "d").stat().st_mode & 0o7777 == 0o777 & ~umask()
+
+
+class TestExtractionIsAllOrNothing:
+    """Test that a refused entry stops anything from being written."""
+
+    def test_later_bad_entry_blocks_the_earlier_good_one(self, tmp_path: Path) -> None:
+        """Test that an escape in the second entry keeps the first off disk."""
+        archive = tmp_path / "mixed.tar"
+        make_tar(archive, file_entry("good.txt"), file_entry("../escape.txt"))
+        out = tmp_path / "out"
+
+        with pytest.raises(ExtractionPolicyError, match="traversal"):
+            _core.extract_archive(str(archive), str(out), [])
+
+        assert not (out / "good.txt").exists()
+        assert not (tmp_path / "escape.txt").exists()
+
+    def test_parent_segment_check_allows_a_leading_dot_name(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that `..data` is a filename, not a traversal."""
+        archive = tmp_path / "dots.tar"
+        make_tar(archive, file_entry("..data"))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [])
+
+        assert (out / "..data").read_bytes() == b"x"
