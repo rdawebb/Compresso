@@ -209,3 +209,16 @@ def run_child(
         timeout=60,
         check=False,
     )
+
+
+# Runs in a child process: a FIFO opened for reading blocks with the GIL held,
+# so a regression would hang the test worker rather than fail
+ARCHIVE_AND_LIST = """
+import logging, sys
+import orjson
+logging.basicConfig(format="%(levelname)s %(message)s")
+from compresso import _core
+output, fmt, *inputs = sys.argv[1:]
+_core.create_archive(output, fmt, inputs)
+sys.stdout.buffer.write(orjson.dumps([e["path"] for e in _core.list_archive_contents(output)]))
+"""
