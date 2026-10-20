@@ -41,10 +41,10 @@ if not snappy_dep.found()
 endif
 
 deps = [
-  dependency('zlib'),
+  dependency('liblz4'),
   dependency('liblzma'),
   dependency('libzstd'),
-  dependency('liblz4'),
+  dependency('zlib'),
   bz2_dep,
   snappy_dep,
   # The backends raise Python exceptions, so the harness embeds an interpreter
@@ -61,27 +61,27 @@ unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 # support/test_stubs.c supplies the exception objects and archive backends instead
 under_test = static_library(
   'under_test',
-  'support/test_stubs.c',
   'support/backend_io.c',
   'support/files.c',
+  'support/test_stubs.c',
+  csrc / 'backends.c',
   csrc / 'common.c',
   csrc / 'comp_format.c',
   csrc / 'formats.c',
-  csrc / 'standalone.c',
   csrc / 'fsutil.c',
   csrc / fsutil_platform,
   csrc / 'pipeline.c',
   csrc / 'registry.c',
+  csrc / 'standalone.c',
   csrc / 'validate.c',
+  csrc / 'codec/bzip2.c',
   csrc / 'codec/codec.c',
-  csrc / 'codec/zstd.c',
+  csrc / 'codec/crc32c.c',
   csrc / 'codec/lz4.c',
   csrc / 'codec/lzma.c',
-  csrc / 'codec/bzip2.c',
-  csrc / 'codec/zlib.c',
   csrc / 'codec/snappy.c',
-  csrc / 'codec/crc32c.c',
-  csrc / 'backends.c',
+  csrc / 'codec/zlib.c',
+  csrc / 'codec/zstd.c',
   csrc / 'archives/paths.c',
   csrc / 'archives/select.c',
   include_directories: inc,
@@ -102,7 +102,7 @@ if fuzz
     'link_with': under_test,
     'dependencies': compile_deps,
   }
-  foreach name : ['gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'snappy']
+  foreach name : ['bzip2', 'gzip', 'lz4', 'snappy', 'xz', 'zstd']
     executable(
       'fuzz_' + name,
       'fuzz/decode.c',
