@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include "archive_ops.h"
+#include "paths.h"
 #include "../common.h"
 #include "../fsutil.h"
 #include "../standalone.h"
@@ -19,32 +20,6 @@ void entry_reset(ArchiveEntry *e) {
   free(e->path);
   free(e->link_target);
   memset(e, 0, sizeof(*e));
-}
-
-// ---- Path Helpers ----
-
-const char *next_segment(const char **p, size_t *len) {
-  const char *start = *p;
-  while (*start && FS_IS_SEP(*start))
-    start++;
-
-  const char *end = start;
-  while (*end && !FS_IS_SEP(*end))
-    end++;
-
-  *len = (size_t)(end - start);
-  *p = end;
-  return start;
-}
-
-int path_has_parent_segment(const char *path) {
-  for (const char *p = path; *p;) {
-    size_t len;
-    const char *start = next_segment(&p, &len);
-    if (len == 2 && start[0] == '.' && start[1] == '.')
-      return 1;
-  }
-  return 0;
 }
 
 int copy_entry_data(int64_t (*read)(void *, void *, size_t), void *handle,

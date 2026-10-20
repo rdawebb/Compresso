@@ -25,6 +25,7 @@ py.extension_module('_core',
     # Archives
     'csrc/archives/archive_ops.c',
     'csrc/archives/extract.c',
+    'csrc/archives/paths.c',
     'csrc/archives/tar.c',
     'csrc/archives/zip.c',
     'csrc/archives/walk.c',

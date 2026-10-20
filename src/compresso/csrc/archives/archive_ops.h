@@ -9,13 +9,6 @@
 // Release an entry's owned strings and clear it for the next iteration
 void entry_reset(ArchiveEntry *e);
 
-// Skips `*p` past any separators and the component after them, returning that
-// component; `*len` is 0 when only separators were left
-const char *next_segment(const char **p, size_t *len);
-
-// Whether any component of `path` is exactly ".."
-int path_has_parent_segment(const char *path);
-
 // Copies an entry's data from `read(handle, buffer, CODEC_CHUNK)` into
 // `output` with the GIL released, as CArchive.extract_entry_data; returns 0,
 // 1 if `read` failed (for the caller to raise), or a negative code with an
