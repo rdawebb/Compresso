@@ -1,4 +1,6 @@
-project('compresso', 'c',
+project(
+  'compresso',
+  'c',
   meson_version: '>=1.3.0',
   default_options: [
     # gnu11 on GCC/Clang, c11 on MSVC; strict ISO defines __STRICT_ANSI__,

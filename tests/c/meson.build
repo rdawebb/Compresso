@@ -2,7 +2,9 @@
 # Links the codec and format code directly rather than through the extension,
 # so it needs none of the archive libraries the root build does
 
-project('compresso-c-tests', 'c',
+project(
+  'compresso-c-tests',
+  'c',
   meson_version: '>=1.3.0',
   default_options: [
     # Matches the root build; see meson.build there
@@ -57,7 +59,8 @@ unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 
 # _core.c and the rest of archives/ are left out: they reach libarchive/libzip;
 # support/test_stubs.c supplies the exception objects and archive backends instead
-under_test = static_library('under_test',
+under_test = static_library(
+  'under_test',
   'support/test_stubs.c',
   'support/backend_io.c',
   'support/files.c',
@@ -80,6 +83,7 @@ under_test = static_library('under_test',
   csrc / 'codec/crc32c.c',
   csrc / 'backends.c',
   csrc / 'archives/paths.c',
+  csrc / 'archives/select.c',
   include_directories: inc,
   dependencies: deps,
 )
@@ -99,8 +103,12 @@ if fuzz
     'dependencies': compile_deps,
   }
   foreach name : ['gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'snappy']
-    executable('fuzz_' + name, 'fuzz/decode.c',
-      c_args: '-DFORMAT=FORMAT_' + name.to_upper(), kwargs: fuzz_kwargs)
+    executable(
+      'fuzz_' + name,
+      'fuzz/decode.c',
+      c_args: '-DFORMAT=FORMAT_' + name.to_upper(),
+      kwargs: fuzz_kwargs,
+    )
   endforeach
   foreach name : ['detect', 'gzip_name']
     executable('fuzz_' + name, 'fuzz' / name + '.c', kwargs: fuzz_kwargs)
@@ -113,9 +121,7 @@ generate_runner = files('unity/generate_test_runner.rb')
 
 # Tests run from the build dir so their scratch files land there, and find the
 # fixtures by absolute path instead
-fixture_dir = '-DFIXTURE_DIR="@0@"'.format(
-  meson.current_source_dir() / '..' / 'fixtures'
-)
+fixture_dir = '-DFIXTURE_DIR="@0@"'.format(meson.current_source_dir() / '..' / 'fixtures')
 
 suites = {
   'test_context.c': 'core',
@@ -124,6 +130,7 @@ suites = {
   'test_paths.c': 'core',
   'test_pipeline.c': 'core',
   'test_registry.c': 'core',
+  'test_select.c': 'core',
   'test_validate.c': 'core',
   'test_codec.c': 'codec',
   'test_crc32c.c': 'codec',
@@ -136,13 +143,17 @@ suites = {
 foreach source, suite : suites
   name = source.replace('.c', '')
 
-  runner = custom_target(name + '_runner',
+  runner = custom_target(
+    name + '_runner',
     input: source,
     output: name + '_Runner.c',
     command: [ruby, generate_runner, '--use_param_tests=1', '@INPUT@', '@OUTPUT@'],
   )
 
-  exe = executable(name, source, runner,
+  exe = executable(
+    name,
+    source,
+    runner,
     include_directories: inc,
     c_args: fixture_dir,
     link_with: [under_test, unity],

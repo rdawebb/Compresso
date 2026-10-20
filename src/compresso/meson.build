@@ -1,6 +1,7 @@
 fsutil_platform = host_machine.system() == 'windows' ? 'fsutil_win32.c' : 'fsutil_posix.c'
 
-py.extension_module('_core',
+py.extension_module(
+  '_core',
   files(
     'csrc/_core.c',
     'csrc/common.c',
@@ -26,6 +27,7 @@ py.extension_module('_core',
     'csrc/archives/archive_ops.c',
     'csrc/archives/extract.c',
     'csrc/archives/paths.c',
+    'csrc/archives/select.c',
     'csrc/archives/tar.c',
     'csrc/archives/zip.c',
     'csrc/archives/walk.c',
