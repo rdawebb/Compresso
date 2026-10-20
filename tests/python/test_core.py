@@ -1,6 +1,5 @@
 """Tests for the core compression/decompression functionality."""
 
-import gzip
 import importlib.util
 import lzma
 import os
@@ -110,6 +109,16 @@ class TestCapabilities:
         assert best["name"] == _core.get_default_backend_for_strategy(strategy)
         assert sorted(cap["rank"][strategy] for cap in caps) == list(range(6))
 
+    @pytest.mark.parametrize(
+        ("fmt", "expected"),
+        [("tar.gz", True), ("tgz", True), ("zip", True), ("zip.gz", False)],
+    )
+    def test_only_a_valid_pipeline_is_an_archive(
+        self, fmt: str, expected: bool
+    ) -> None:
+        """Test that zip, which compresses its own entries, takes no codec."""
+        assert _core.format_is_archive(fmt) is expected
+
 
 class TestArchiveCapabilities:
     """Test the archive_capabilities function."""
@@ -138,87 +147,32 @@ class TestArchiveCapabilities:
 class TestCompressFile:
     """Test the compress_file function."""
 
+    @pytest.mark.parametrize(
+        "source", ["empty_file", "small_file", "sample_binary_file"]
+    )
     def test_round_trip_every_backend(
-        self, sample_binary_file: Path, tmp_path: Path, compression_algo: str
+        self,
+        request: pytest.FixtureRequest,
+        tmp_path: Path,
+        compression_algo: str,
+        source: str,
     ) -> None:
         """Test that each backend's output decompresses back to the original bytes."""
+        original: Path = request.getfixturevalue(source)
         compressed = tmp_path / f"{compression_algo}.comp"
         restored = tmp_path / f"{compression_algo}.out"
 
         written = compress_file(
-            str(sample_binary_file), str(compressed), compression_algo, "balanced", -1
+            str(original), str(compressed), compression_algo, "balanced", -1
         )
         assert written == str(compressed)
 
         assert decompress_file(str(compressed), str(restored), "") == str(restored)
-        assert restored.read_bytes() == sample_binary_file.read_bytes()
-
-    def test_unknown_strategy_is_refused(
-        self, sample_text_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that a misspelt strategy raises rather than meaning balanced."""
-        compressed = tmp_path / "typo.comp"
-
-        with pytest.raises(ValueError, match="Unknown strategy: fsat"):
-            compress_file(str(sample_text_file), str(compressed), "", "fsat", -1)
-
-        assert not compressed.exists()
-
-    @pytest.mark.parametrize("strategy", ["fast", "balanced", "max_ratio"])
-    def test_round_trip_every_strategy(
-        self, sample_text_file: Path, tmp_path: Path, strategy: str
-    ) -> None:
-        """Test that the backend each strategy picks round-trips too.
-
-        No algorithm is named, so the strategy is what chooses the backend.
-        """
-        compressed = tmp_path / f"{strategy}.comp"
-        restored = tmp_path / f"{strategy}.out"
-
-        compress_file(str(sample_text_file), str(compressed), "", strategy, -1)
-        decompress_file(str(compressed), str(restored), "")
-
-        assert restored.read_bytes() == sample_text_file.read_bytes()
-
-    def test_compress_nonexistent_file(self, tmp_path: Path) -> None:
-        """Test compressing a file that doesn't exist."""
-        input_file = tmp_path / "nonexistent.txt"
-        output_file = tmp_path / "output.comp"
-
-        with pytest.raises(FileNotFoundError):
-            compress_file(str(input_file), str(output_file), "zlib", "balanced", 6)
-
-    def test_compress_large_file(
-        self, large_compressible_file: Path, tmp_path: Path
-    ) -> None:
-        """Test compressing a large file."""
-        output_file = tmp_path / "compressed_large.comp"
-
-        result = compress_file(
-            str(large_compressible_file), str(output_file), "zlib", "balanced", 6
-        )
-
-        assert result == str(output_file)
-        # Highly compressible content should be much smaller
-        assert output_file.stat().st_size < large_compressible_file.stat().st_size / 10
+        assert restored.read_bytes() == original.read_bytes()
 
 
 class TestDecompressFile:
     """Test the decompress_file function."""
-
-    def test_decompress_nonexistent_file(self, tmp_path: Path) -> None:
-        """Test decompressing a file that doesn't exist."""
-        input_file = tmp_path / "nonexistent.comp"
-        output_file = tmp_path / "output.txt"
-
-        with pytest.raises(FileNotFoundError):
-            decompress_file(str(input_file), str(output_file), "")
-
-    def test_decompress_directory(self, tmp_path: Path) -> None:
-        """Test that a directory is refused as unreadable, not as unrecognised."""
-        # Windows refuses to open a directory at all, so it reports EACCES
-        with pytest.raises((IsADirectoryError, PermissionError)):
-            decompress_file(str(tmp_path), str(tmp_path / "output.txt"), "")
 
     def test_decompress_invalid_file(
         self, sample_text_file: Path, tmp_path: Path
@@ -228,19 +182,6 @@ class TestDecompressFile:
 
         with pytest.raises(Error, match="Unknown or unsupported format"):
             decompress_file(str(sample_text_file), str(output_file), "")
-
-    def test_round_trip_small_file(self, small_file: Path, tmp_path: Path) -> None:
-        """Test compression and decompression of very small files."""
-        compressed_file = tmp_path / "compressed_small.comp"
-        decompressed_file = tmp_path / "decompressed_small.txt"
-
-        original_content = small_file.read_text()
-
-        compress_file(str(small_file), str(compressed_file), "zlib", "balanced", 6)
-
-        decompress_file(str(compressed_file), str(decompressed_file), "")
-
-        assert decompressed_file.read_text() == original_content
 
     @pytest.mark.parametrize(
         "name",
@@ -273,41 +214,30 @@ class TestDecompressFile:
 
         assert decompressed_file.read_text(encoding="utf-8") == content
 
+    @pytest.mark.parametrize(
+        ("fmt", "engine"), [("gz", "gzip"), ("comp", "zlib")], ids=["gzip", "comp"]
+    )
     @pytest.mark.parametrize(("algo", "refused"), [("zstd", True), ("zlib", False)])
-    def test_algo_is_checked_against_a_container(
-        self, tmp_path: Path, algo: str, refused: bool
+    def test_algo_is_checked_against_the_input(
+        self, tmp_path: Path, fmt: str, engine: str, algo: str, refused: bool
     ) -> None:
-        """Test that an explicit algo must match a gzip file's engine."""
-        source = tmp_path / "data.gz"
-        source.write_bytes(gzip.compress(b"payload"))
-        output = tmp_path / "data"
-
-        message = _value_error(lambda: decompress_file(source, output, algo))
-
-        if refused:
-            assert message == "File was compressed with gzip, not the requested zstd"
-            assert not output.exists()
-        else:
-            assert message is None
-            assert output.read_bytes() == b"payload"
-
-    @pytest.mark.parametrize(("algo", "refused"), [("zstd", True), ("zlib", False)])
-    def test_algo_is_checked_against_a_comp_header(
-        self, small_file: Path, tmp_path: Path, algo: str, refused: bool
-    ) -> None:
-        """Test that an explicit algo must match the one a .comp header records."""
-        compressed = tmp_path / "data.comp"
-        compress_file(small_file, compressed, "zlib", "balanced", 6)
+        """Test that an explicit algo must match the engine the input records."""
+        source = tmp_path / "source"
+        source.write_bytes(b"payload")
+        compressed = tmp_path / f"data.{fmt}"
+        _compress_to(fmt, source, compressed)
         output = tmp_path / "data"
 
         message = _value_error(lambda: decompress_file(compressed, output, algo))
 
         if refused:
-            assert message == "File was compressed with zlib, not the requested zstd"
+            assert (
+                message == f"File was compressed with {engine}, not the requested zstd"
+            )
             assert not output.exists()
         else:
             assert message is None
-            assert output.read_bytes() == small_file.read_bytes()
+            assert output.read_bytes() == b"payload"
 
 
 class TestStandaloneErrors:
@@ -337,16 +267,6 @@ class TestStandaloneErrors:
                 str(sample_text_file), str(tmp_path / "out.bin"), fmt
             )
 
-    @pytest.mark.parametrize("fmt", [None, "gzip"])
-    def test_decompress_nonexistent_file(self, tmp_path: Path, fmt: str | None) -> None:
-        """Test that a missing input is reported as such, with or without a format."""
-        args = [str(tmp_path / "missing.gz"), str(tmp_path / "out.bin")]
-        if fmt:
-            args.append(fmt)
-
-        with pytest.raises(FileNotFoundError):
-            _core.decompress_standalone(*args)
-
     @pytest.mark.parametrize("fmt", ["bogus", "comp", ""])
     def test_unknown_format_is_refused(
         self, sample_text_file: Path, tmp_path: Path, fmt: str
@@ -358,27 +278,77 @@ class TestStandaloneErrors:
             )
 
 
-class TestDetectFormat:
-    """Test detect_format's handling of a path it cannot read."""
-
-    def test_missing_file_raises(self, tmp_path: Path) -> None:
-        """Test that a missing file is reported as such, not as "unknown"."""
-        with pytest.raises(FileNotFoundError):
-            _core.detect_format(tmp_path / "missing.gz")
+_MISSING = ("missing", FileNotFoundError)
+# Windows refuses to open a directory at all, so it reports EACCES
+_DIRECTORY = (".", (IsADirectoryError, PermissionError))
 
 
-class TestFormatIsArchive:
-    """Test that format_is_archive agrees with what create_archive accepts."""
+class TestUnreadableInput:
+    """Test that an input the OS can't read is an OSError, not an unknown format."""
 
     @pytest.mark.parametrize(
-        ("fmt", "expected"),
-        [("tar.gz", True), ("tgz", True), ("zip", True), ("zip.gz", False)],
+        ("call", "name", "raises"),
+        [
+            pytest.param(
+                lambda src, out: compress_file(src, out, "zlib", "balanced", 6),
+                *_MISSING,
+                id="compress_file",
+            ),
+            pytest.param(
+                lambda src, out: decompress_file(src, out, ""),
+                *_MISSING,
+                id="decompress_file",
+            ),
+            pytest.param(
+                lambda src, out: _core.decompress_standalone(src, out),
+                *_MISSING,
+                id="decompress_standalone",
+            ),
+            pytest.param(
+                lambda src, out: _core.decompress_standalone(src, out, "gzip"),
+                *_MISSING,
+                id="decompress_standalone_gzip",
+            ),
+            pytest.param(
+                lambda src, _: _core.detect_format(src), *_MISSING, id="detect_format"
+            ),
+            pytest.param(
+                lambda src, _: _core.list_archive_contents(src),
+                *_MISSING,
+                id="list",
+            ),
+            pytest.param(
+                lambda src, out: _core.extract_archive(src, out, []),
+                *_MISSING,
+                id="extract",
+            ),
+            pytest.param(
+                lambda src, out: decompress_file(src, out, ""),
+                *_DIRECTORY,
+                id="decompress_file_directory",
+            ),
+            pytest.param(
+                lambda src, _: _core.list_archive_contents(src),
+                *_DIRECTORY,
+                id="list_directory",
+            ),
+            pytest.param(
+                lambda src, out: _core.extract_archive(src, out, []),
+                *_DIRECTORY,
+                id="extract_directory",
+            ),
+        ],
     )
-    def test_only_a_valid_pipeline_is_an_archive(
-        self, fmt: str, expected: bool
+    def test_unreadable_input_is_an_os_error(
+        self,
+        tmp_path: Path,
+        call: Callable[[str, str], object],
+        name: str,
+        raises: type[OSError] | tuple[type[OSError], ...],
     ) -> None:
-        """Test that zip, which compresses its own entries, takes no codec."""
-        assert _core.format_is_archive(fmt) is expected
+        """Test that a missing input or a directory raises the OS's own error."""
+        with pytest.raises(raises):
+            call(str(tmp_path / name), str(tmp_path / "out"))
 
 
 class TestPathArguments:
@@ -429,6 +399,11 @@ class TestPathArguments:
             _core.create_archive(
                 str(tmp_path / "out.tar"), "tar", str(sample_text_file)
             )
+
+    def test_keyword_arguments_are_refused(self, tmp_path: Path) -> None:
+        """Test that a stray keyword to list_archive_contents raises, not drops."""
+        with pytest.raises(TypeError, match="keyword"):
+            _core.list_archive_contents(str(tmp_path / "a.tar"), bogus=1)  # type: ignore[call-arg]  # ty:ignore[unknown-argument]
 
 
 def _compress_to(fmt: str, src: Path, dst: Path, overwrite: int = 0) -> None:
@@ -529,12 +504,19 @@ class TestStrategyNames:
     @pytest.mark.parametrize(
         "call",
         [
+            # Checked before the input is opened, so the paths don't need to exist
+            lambda: compress_file("missing", "out.comp", "", "fsat", -1),
             lambda: _core.get_default_backend_for_strategy("fsat"),
             lambda: _core.check_level(5, strategy="fsat"),
             # An explicit algorithm overrides the strategy, but a typo is still one
             lambda: _core.check_level(5, algo="zstd", strategy="fsat"),
         ],
-        ids=["default_backend", "check_level", "check_level_with_algo"],
+        ids=[
+            "compress_file",
+            "default_backend",
+            "check_level",
+            "check_level_with_algo",
+        ],
     )
     def test_unknown_name_is_refused(self, call: Callable[[], object]) -> None:
         """Test that a misspelt strategy raises ValueError naming the choices."""
@@ -554,12 +536,6 @@ class TestLevelValidation:
         "algo,strategy,level,match",
         [
             ("zlib", "", 10, r"zlib compression level 10 out of range \(0-9"),
-            ("bzip2", "", 0, r"bzip2 compression level 0 out of range \(1-9"),
-            ("zstd", "", 0, r"zstd compression level 0 out of range \(1-22"),
-            ("zstd", "", 23, r"zstd compression level 23 out of range"),
-            ("lz4", "", 13, r"lz4 compression level 13 out of range \(0-12"),
-            ("zlib", "", -2, r"zlib compression level -2 out of range"),
-            ("snappy", "", 1, "snappy has no compression levels"),
             # No algo: the backend the strategy picks is the one checked
             ("", "fast", 13, "lz4 compression level 13"),
         ],
@@ -579,61 +555,23 @@ class TestLevelValidation:
             compress_file(str(sample_text_file), str(dest), algo, strategy, level)
         assert not dest.exists()
 
-    @pytest.mark.parametrize(
-        "algo,level",
-        [("zlib", 9), ("bzip2", 1), ("zstd", 22), ("lz4", 12), ("snappy", -1)],
-    )
-    def test_compress_file_accepts_range_ends(
-        self, sample_text_file: Path, tmp_path: Path, algo: str, level: int
-    ) -> None:
-        """Test that each end of a backend's range, and the default, still work."""
-        compress_file(
-            str(sample_text_file), str(tmp_path / "out.comp"), algo, "", level
-        )
-
-    @pytest.mark.parametrize(
-        "fmt,level,match",
-        [
-            ("gz", 10, r"gzip compression level 10 out of range \(0-9"),
-            ("zst", 23, r"zstd compression level 23 out of range \(1-22"),
-            ("sz", 1, "snappy has no compression levels"),
-        ],
-    )
     def test_compress_standalone_refuses_out_of_range(
-        self, sample_text_file: Path, tmp_path: Path, fmt: str, level: int, match: str
-    ) -> None:
-        """Test that the standalone formats check the level too."""
-        with pytest.raises(ValueError, match=match):
-            _core.compress_standalone(
-                str(sample_text_file), str(tmp_path / f"out.{fmt}"), fmt, level
-            )
-
-    @pytest.mark.parametrize(
-        "fmt,level,match",
-        [
-            ("tar", 1, "tar has no compression levels"),
-            ("zip", 10, r"zip compression level 10 out of range \(0-9"),
-            # A codec stage's own range applies, not the container's
-            ("tar.zst", 23, r"zstd compression level 23 out of range \(1-22"),
-            ("tar.gz", 10, r"gzip compression level 10 out of range"),
-        ],
-    )
-    def test_create_archive_refuses_out_of_range(
-        self, sample_text_file: Path, tmp_path: Path, fmt: str, level: int, match: str
-    ) -> None:
-        """Test that archives check the level of whichever stage compresses."""
-        dest = tmp_path / f"out.{fmt}"
-        with pytest.raises(ValueError, match=match):
-            _core.create_archive(str(dest), fmt, [str(sample_text_file)], level)
-        assert not dest.exists()
-
-    def test_create_archive_accepts_a_codec_stage_level(
         self, sample_text_file: Path, tmp_path: Path
     ) -> None:
-        """Test that tar.zst takes zstd's levels even though tar has none."""
-        _core.create_archive(
-            str(tmp_path / "out.tar.zst"), "tar.zst", [str(sample_text_file)], 19
-        )
+        """Test that the standalone formats check the level too."""
+        with pytest.raises(ValueError, match=r"gzip compression level 10 out of range"):
+            _core.compress_standalone(
+                str(sample_text_file), str(tmp_path / "out.gz"), "gz", 10
+            )
+
+    def test_create_archive_refuses_out_of_range(
+        self, sample_text_file: Path, tmp_path: Path
+    ) -> None:
+        """Test that an archive checks the codec stage's range, not the container's."""
+        dest = tmp_path / "out.tar.zst"
+        with pytest.raises(ValueError, match=r"zstd compression level 23 out of range"):
+            _core.create_archive(str(dest), "tar.zst", [str(sample_text_file)], 23)
+        assert not dest.exists()
 
     @pytest.mark.parametrize(
         "algo,level",

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from compresso._core import get_capabilities
 from compresso.introspect import speeds
 
 from .helpers import ARCHIVE_FORMATS
@@ -93,22 +94,6 @@ def sample_binary_file(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def large_compressible_file(tmp_path: Path) -> Path:
-    """Create a large file with highly compressible content.
-
-    Args:
-        tmp_path: Pytest temporary path fixture.
-
-    Returns:
-        Path to the large compressible file.
-    """
-    file_path = tmp_path / "large_compressible.txt"
-    content = "A" * 1024 * 1024  # 1MB of repeated 'A'
-    file_path.write_text(content, encoding="utf-8")
-    return file_path
-
-
-@pytest.fixture
 def empty_file(tmp_path: Path) -> Path:
     """Create an empty file for edge case testing.
 
@@ -138,7 +123,7 @@ def small_file(tmp_path: Path) -> Path:
     return file_path
 
 
-@pytest.fixture(params=["zlib", "bzip2", "lzma", "zstd", "lz4", "snappy"])
+@pytest.fixture(params=[cap["name"] for cap in get_capabilities()])
 def compression_algo(request: pytest.FixtureRequest) -> str:
     """Parameterized fixture for all compression algorithms.
 

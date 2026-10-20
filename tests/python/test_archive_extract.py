@@ -33,15 +33,6 @@ from .helpers import (
 )
 
 
-class TestListArchiveContentsArgs:
-    """Test the argument handling of list_archive_contents."""
-
-    def test_keyword_arguments_are_refused(self, tmp_path: Path) -> None:
-        """Test that a stray keyword raises rather than being silently dropped."""
-        with pytest.raises(TypeError, match="keyword"):
-            _core.list_archive_contents(str(tmp_path / "a.tar"), bogus=1)  # type: ignore[call-arg]  # ty:ignore[unknown-argument]
-
-
 class TestExtractArchiveFilesArg:
     """Test the validation of extract_archive's `files` selection."""
 
@@ -403,27 +394,6 @@ class TestArchiveErrorTypes:
 
         with pytest.raises(CorruptDataError):
             _core.list_archive_contents(str(archive))
-
-    @pytest.mark.parametrize("call", ["extract", "list"])
-    def test_missing_archive_is_file_not_found(self, tmp_path: Path, call: str) -> None:
-        """Test that a missing archive is an OS error, not an unknown format."""
-        missing = str(tmp_path / "missing.tar")
-
-        with pytest.raises(FileNotFoundError):
-            if call == "extract":
-                _core.extract_archive(missing, str(tmp_path / "out"), [])
-            else:
-                _core.list_archive_contents(missing)
-
-    @pytest.mark.parametrize("call", ["extract", "list"])
-    def test_directory_archive_is_unreadable(self, tmp_path: Path, call: str) -> None:
-        """Test that a directory is refused as unreadable, not as unrecognised."""
-        # Windows refuses to open a directory at all, so it reports EACCES
-        with pytest.raises((IsADirectoryError, PermissionError)):
-            if call == "extract":
-                _core.extract_archive(str(tmp_path), str(tmp_path / "out"), [])
-            else:
-                _core.list_archive_contents(str(tmp_path))
 
     def test_missing_output_dir_parents_are_created(self, tmp_path: Path) -> None:
         """Test that every missing parent is made, whichever separator the path uses.
