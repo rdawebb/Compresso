@@ -55,7 +55,7 @@ fsutil_platform = host_machine.system() == 'windows' ? 'fsutil_win32.c' : 'fsuti
 
 unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 
-# _core.c and archives/ are left out: they reach libarchive/libzip;
+# _core.c and the rest of archives/ are left out: they reach libarchive/libzip;
 # support/test_stubs.c supplies the exception objects and archive backends instead
 under_test = static_library('under_test',
   'support/test_stubs.c',
@@ -79,6 +79,7 @@ under_test = static_library('under_test',
   csrc / 'codec/snappy.c',
   csrc / 'codec/crc32c.c',
   csrc / 'backends.c',
+  csrc / 'archives/paths.c',
   include_directories: inc,
   dependencies: deps,
 )
@@ -120,6 +121,7 @@ suites = {
   'test_context.c': 'core',
   'test_format_detection.c': 'core',
   'test_fsutil.c': 'core',
+  'test_paths.c': 'core',
   'test_pipeline.c': 'core',
   'test_registry.c': 'core',
   'test_validate.c': 'core',
