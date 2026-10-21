@@ -1,14 +1,15 @@
 """Pytest configuration and shared fixtures for Compresso tests."""
 
 import importlib
+import os
 from pathlib import Path
 
 import pytest
 
-from compresso._core import get_capabilities
+from compresso._core import compress_file, create_archive, get_capabilities
 from compresso.introspect import speeds
 
-from .helpers import ARCHIVE_FORMATS
+from .helpers import ARCHIVE_FORMATS, ENTRY_COUNT, ENTRY_SIZE, PROGRESS_FILE_SIZE
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -147,3 +148,98 @@ def archive_format(request: pytest.FixtureRequest) -> tuple[str, str]:
         The archive format and extension as a tuple.
     """
     return request.param
+
+
+@pytest.fixture(scope="module")
+def big_compressible_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A file large enough to produce several progress reports when compressed.
+
+    Shared by the whole module, so tests must only read it.
+
+    Args:
+        tmp_path_factory: Pytest temporary path factory fixture.
+
+    Returns:
+        Path: The path to the big compressible file.
+    """
+    file_path = tmp_path_factory.mktemp("progress") / "big_compressible.bin"
+    chunk = b"compresso progress test payload " * 1024  # 32 KB
+    file_path.write_bytes(chunk * (PROGRESS_FILE_SIZE // len(chunk)))
+
+    return file_path
+
+
+@pytest.fixture(scope="module")
+def big_incompressible_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A file that stays large once compressed.
+
+    Progress counts input bytes, so decompression's total is the compressed
+    size; random data keeps that above the report-interval floor; shared by
+    the whole module, so tests must only read it.
+
+    Args:
+        tmp_path_factory: Pytest temporary path factory fixture.
+
+    Returns:
+        Path: The path to the big incompressible file.
+    """
+    file_path = tmp_path_factory.mktemp("progress") / "big_incompressible.bin"
+    file_path.write_bytes(os.urandom(PROGRESS_FILE_SIZE))
+
+    return file_path
+
+
+@pytest.fixture(scope="module")
+def compressed_file(
+    tmp_path_factory: pytest.TempPathFactory, big_incompressible_file: Path
+) -> Path:
+    """`big_incompressible_file` compressed, shared by the whole module.
+
+    Args:
+        tmp_path_factory: Pytest temporary path factory fixture.
+        big_incompressible_file: The file to compress.
+
+    Returns:
+        The path to the .comp file.
+    """
+    path = tmp_path_factory.mktemp("progress") / "big.comp"
+    compress_file(big_incompressible_file, path, "zstd", "balanced", 1)
+
+    return path
+
+
+@pytest.fixture(scope="module")
+def source_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A directory of files large enough to produce several progress reports.
+
+    Shared by the whole module, so tests must only read it.
+
+    Args:
+        tmp_path_factory: Pytest temporary path factory fixture.
+
+    Returns:
+        The path to the source tree directory.
+    """
+    root = tmp_path_factory.mktemp("progress") / "src"
+    root.mkdir()
+    for i in range(ENTRY_COUNT):
+        (root / f"f{i}.bin").write_bytes(os.urandom(ENTRY_SIZE))
+
+    return root
+
+
+@pytest.fixture(scope="module")
+def source_tar(tmp_path_factory: pytest.TempPathFactory, source_tree: Path) -> Path:
+    """`source_tree` as a plain tar, shared by the whole module.
+
+    Args:
+        tmp_path_factory: Pytest temporary path factory fixture.
+        source_tree: The tree to archive.
+
+    Returns:
+        The path to the tar.
+    """
+    path = tmp_path_factory.mktemp("progress") / "src.tar"
+    create_archive(path, "tar", [source_tree])
+
+    return path

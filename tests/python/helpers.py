@@ -9,8 +9,20 @@ import sys
 import tarfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any, NamedTuple
+
+from compresso.frontend._job import ThreadedJob
+from compresso.frontend.api import CompressionJob, DecompressionJob
+from compresso.frontend.archive_api import ArchiveJob, ExtractJob
 
 ARCHIVE_FORMATS = [("tar", ".tar"), ("tar.zst", ".tar.zst"), ("zip", ".zip")]
+
+# Crosses the 1 MiB report floor (`CTX_MIN_INTERVAL`) several times over
+PROGRESS_FILE_SIZE = 4 * 1024 * 1024
+
+# Incompressible, so the compressed archive stays above the report floor too
+ENTRY_COUNT = 4
+ENTRY_SIZE = 2 * 1024 * 1024
 
 # The numbered-sibling suffix `RENAME` inserts: "name 2.ext" on macOS, "name
 # (2).ext" elsewhere
@@ -85,6 +97,45 @@ class Recorder:
         assert self.calls, "no progress was reported"
         done, total = self.calls[-1]
         assert done == total, f"final report was {done}/{total}, not 100%"
+
+
+class JobFactory(NamedTuple):
+    """Builds a frontend job that reads the `source` fixture.
+
+    `make(source, out)` returns the job, writing into the empty directory `out`.
+    """
+
+    source: str
+    make: Callable[[Path, Path], ThreadedJob[Any]]
+
+
+def compression_job(src: Path, out: Path) -> CompressionJob:
+    """Compress `src` through a `CompressionJob`."""
+    return CompressionJob.from_file(src=src, dest=out / "job.comp")
+
+
+def decompression_job(src: Path, out: Path) -> DecompressionJob:
+    """Decompress `src` through a `DecompressionJob`."""
+    return DecompressionJob.from_file(src=src, dest=out / "job.out")
+
+
+def archive_job(src: Path, out: Path) -> ArchiveJob:
+    """Archive `src` as a tar.zst through an `ArchiveJob`."""
+    return ArchiveJob.from_paths(sources=[src], output=out / "job.tar.zst")
+
+
+def extract_job(src: Path, out: Path) -> ExtractJob:
+    """Extract the archive at `src` through an `ExtractJob`."""
+    return ExtractJob.from_archive(archive=src, output_dir=out)
+
+
+# The sources are fixtures in conftest.py
+JOBS = {
+    "compress": JobFactory("big_compressible_file", compression_job),
+    "decompress": JobFactory("compressed_file", decompression_job),
+    "archive": JobFactory("source_tree", archive_job),
+    "extract": JobFactory("source_tar", extract_job),
+}
 
 
 def make_tar(

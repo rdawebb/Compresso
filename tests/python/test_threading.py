@@ -29,7 +29,7 @@ from compresso.frontend.archive_api import (
     ExtractOptions,
 )
 
-from .helpers import Recorder
+from .helpers import JOBS, JobFactory, Recorder
 
 # Past the 1 MiB report floor, so the first progress report lands mid-job
 # rather than being the final one
@@ -105,6 +105,7 @@ def payload(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     path = tmp_path_factory.mktemp("threading") / "payload.bin"
     path.write_bytes(os.urandom(JOB_FILE_SIZE))
+
     return path
 
 
@@ -128,15 +129,21 @@ def quick_job(src: Path, dest: Path) -> CompressionJob:
 class TestStart:
     """Tests `start()` and the handle it returns."""
 
-    def test_result_waits_and_returns_the_outcome(
-        self, payload: Path, tmp_path: Path
-    ) -> None:
-        """Test that `result()` blocks until the job finishes, then reports success."""
+    def test_a_completed_job(self, payload: Path, tmp_path: Path) -> None:
+        """Test that a finished job's result is final.
+
+        `result()` waits for it and then returns the same object every time,
+        a later `cancel()` changes nothing, and the output outlives the block.
+        """
         output = tmp_path / "out.comp"
 
         with quick_job(payload, output).start() as handle:
             assert isinstance(handle, JobHandle)
             result = handle.result(timeout=30)
+            assert handle.result(timeout=1) is result
+
+            handle.cancel()
+            assert handle.result(timeout=1) is result
 
         assert isinstance(result, JobResult)
         assert result.ok is True
@@ -156,14 +163,6 @@ class TestStart:
             gate.release()
             handle.result(timeout=30)
             assert handle.done() is True
-
-    def test_result_is_repeatable(self, payload: Path, tmp_path: Path) -> None:
-        """Test that asking twice gives the same answer rather than blocking again."""
-        with quick_job(payload, tmp_path / "out.comp").start() as handle:
-            first = handle.result(timeout=30)
-            second = handle.result(timeout=1)
-
-        assert first is second
 
     def test_result_times_out_while_running(
         self, payload: Path, tmp_path: Path, gate: Gate
@@ -193,40 +192,13 @@ class TestStart:
         assert all(ident != caller for ident in seen)
         assert len(set(seen)) == 1, "expected a single job thread"
 
-    def test_start_works_for_archive_jobs(self, payload: Path, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("job", JOBS.values(), ids=list(JOBS))
+    def test_start_works_for_every_job_type(
+        self, job: JobFactory, request: pytest.FixtureRequest, tmp_path: Path
+    ) -> None:
         """Test that threading is shared by every job type, not only compression."""
-        output = tmp_path / "out.tar.zst"
-
-        with ArchiveJob.from_paths(sources=[payload], output=output).start() as handle:
-            result = handle.result(timeout=30)
-
-        assert result.ok is True
-        assert output.stat().st_size > 0
-
-    def test_start_works_for_extract_jobs(self, payload: Path, tmp_path: Path) -> None:
-        """Test that extraction can be backgrounded too."""
-        # Archived as a directory so extraction has a nested path to recreate
-        tree = tmp_path / "tree"
-        tree.mkdir()
-        (tree / payload.name).write_bytes(payload.read_bytes())
-
-        archive = tmp_path / "in.tar"
-        assert (
-            ArchiveJob.from_paths(
-                sources=[tree], output=archive, options=ArchiveOptions(format="tar")
-            )
-            .run()
-            .ok
-        )
-
-        dest = tmp_path / "out"
-        with ExtractJob.from_archive(
-            archive=archive, output_dir=dest
-        ).start() as handle:
-            result = handle.result(timeout=30)
-
-        assert result.ok is True
-        assert (dest / "tree" / payload.name).read_bytes() == payload.read_bytes()
+        with job.make(request.getfixturevalue(job.source), tmp_path).start() as handle:
+            assert handle.result(timeout=30).ok is True
 
 
 class TestHandleCancellation:
@@ -243,39 +215,13 @@ class TestHandleCancellation:
         ) as handle:
             gate.wait_until_held()
             handle.cancel()
+            handle.cancel()
             result = handle.result(timeout=30)
 
         assert result.cancelled is True
         assert result.ok is False
         assert result.error is None
         assert not output.exists()
-
-    def test_cancel_after_completion_is_harmless(
-        self, payload: Path, tmp_path: Path
-    ) -> None:
-        """Test that cancelling a finished job leaves its result alone."""
-        with quick_job(payload, tmp_path / "out.comp").start() as handle:
-            result = handle.result(timeout=30)
-
-            handle.cancel()
-
-            assert result.ok is True
-            assert handle.result(timeout=1) is result
-
-    def test_cancel_is_idempotent(
-        self, payload: Path, tmp_path: Path, gate: Gate
-    ) -> None:
-        """Test that cancelling twice behaves like cancelling once."""
-        with quick_job(payload, tmp_path / "out.comp").start(
-            progress=gate, cancel=gate.token
-        ) as handle:
-            gate.wait_until_held()
-            handle.cancel()
-            handle.cancel()
-
-            result = handle.result(timeout=30)
-
-        assert result.cancelled is True
 
     def test_supplied_token_cancels_several_jobs_at_once(
         self, payload: Path, tmp_path: Path, gate: Gate
@@ -318,18 +264,6 @@ class TestHandleContextManager:
         assert handle.done() is True
         assert handle.result(timeout=1).cancelled is True
         assert not output.exists()
-
-    def test_a_completed_job_survives_the_block(
-        self, payload: Path, tmp_path: Path
-    ) -> None:
-        """Test that cancelling after the work is done does not undo it."""
-        output = tmp_path / "ctx.comp"
-
-        with quick_job(payload, output).start() as handle:
-            result = handle.result(timeout=30)
-
-        assert result.ok is True
-        assert output.stat().st_size > 0
 
     def test_exception_in_the_block_still_cancels(
         self, payload: Path, tmp_path: Path, gate: Gate

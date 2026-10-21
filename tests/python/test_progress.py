@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import signal
 import threading
 from collections.abc import Callable
@@ -20,18 +19,16 @@ from compresso._core import (
     decompress_file,
     extract_archive,
 )
-from compresso.frontend._job import JobResult, to_core_progress
-from compresso.frontend.api import CompressionJob, DecompressionJob
-from compresso.frontend.archive_api import ArchiveJob, ExtractJob
+from compresso.frontend._job import to_core_progress
 
-from .helpers import Recorder
-
-# Crosses the 1 MiB report floor (`CTX_MIN_INTERVAL`) several times over
-PROGRESS_FILE_SIZE = 4 * 1024 * 1024
-
-# Incompressible, so the compressed archive stays above the report floor too
-ENTRY_COUNT = 4
-ENTRY_SIZE = 2 * 1024 * 1024
+from .helpers import (
+    ENTRY_COUNT,
+    ENTRY_SIZE,
+    JOBS,
+    PROGRESS_FILE_SIZE,
+    JobFactory,
+    Recorder,
+)
 
 
 class Operation(NamedTuple):
@@ -87,34 +84,6 @@ OPERATIONS = {
 }
 
 
-def compression_job(src: Path, out: Path, **kw: Any) -> JobResult:
-    """Compress `src` through a `CompressionJob`."""
-    return CompressionJob.from_file(src=src, dest=out / "job.comp").run(**kw)
-
-
-def decompression_job(src: Path, out: Path, **kw: Any) -> JobResult:
-    """Decompress `src` through a `DecompressionJob`."""
-    return DecompressionJob.from_file(src=src, dest=out / "job.out").run(**kw)
-
-
-def archive_job(src: Path, out: Path, **kw: Any) -> JobResult:
-    """Archive `src` as a tar.zst through an `ArchiveJob`."""
-    return ArchiveJob.from_paths(sources=[src], output=out / "job.tar.zst").run(**kw)
-
-
-def extract_job(src: Path, out: Path, **kw: Any) -> JobResult:
-    """Extract the archive at `src` through an `ExtractJob`."""
-    return ExtractJob.from_archive(archive=src, output_dir=out).run(**kw)
-
-
-JOBS = {
-    "compress": Operation("big_compressible_file", compression_job),
-    "decompress": Operation("compressed_file", decompression_job),
-    "archive": Operation("source_tree", archive_job),
-    "extract": Operation("source_tar", extract_job),
-}
-
-
 def leftovers(out: Path) -> list[Path]:
     """The files a job left in `out`, temporaries included.
 
@@ -125,101 +94,6 @@ def leftovers(out: Path) -> list[Path]:
         Every file under `out`.
     """
     return [p for p in out.rglob("*") if p.is_file()]
-
-
-@pytest.fixture(scope="module")
-def big_compressible_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A file large enough to produce several progress reports when compressed.
-
-    Shared by the whole module, so tests must only read it.
-
-    Args:
-        tmp_path_factory: Pytest temporary path factory fixture.
-
-    Returns:
-        Path: The path to the big compressible file.
-    """
-    file_path = tmp_path_factory.mktemp("progress") / "big_compressible.bin"
-    chunk = b"compresso progress test payload " * 1024  # 32 KB
-    file_path.write_bytes(chunk * (PROGRESS_FILE_SIZE // len(chunk)))
-
-    return file_path
-
-
-@pytest.fixture(scope="module")
-def big_incompressible_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A file that stays large once compressed.
-
-    Progress counts input bytes, so decompression's total is the compressed
-    size; random data keeps that above the report-interval floor; shared by
-    the whole module, so tests must only read it.
-
-    Args:
-        tmp_path_factory: Pytest temporary path factory fixture.
-
-    Returns:
-        Path: The path to the big incompressible file.
-    """
-    file_path = tmp_path_factory.mktemp("progress") / "big_incompressible.bin"
-    file_path.write_bytes(os.urandom(PROGRESS_FILE_SIZE))
-
-    return file_path
-
-
-@pytest.fixture(scope="module")
-def compressed_file(
-    tmp_path_factory: pytest.TempPathFactory, big_incompressible_file: Path
-) -> Path:
-    """`big_incompressible_file` compressed, shared by the whole module.
-
-    Args:
-        tmp_path_factory: Pytest temporary path factory fixture.
-        big_incompressible_file: The file to compress.
-
-    Returns:
-        The path to the .comp file.
-    """
-    path = tmp_path_factory.mktemp("progress") / "big.comp"
-    compress_file(big_incompressible_file, path, "zstd", "balanced", 1)
-
-    return path
-
-
-@pytest.fixture(scope="module")
-def source_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A directory of files large enough to produce several progress reports.
-
-    Shared by the whole module, so tests must only read it.
-
-    Args:
-        tmp_path_factory: Pytest temporary path factory fixture.
-
-    Returns:
-        The path to the source tree directory.
-    """
-    root = tmp_path_factory.mktemp("progress") / "src"
-    root.mkdir()
-    for i in range(ENTRY_COUNT):
-        (root / f"f{i}.bin").write_bytes(os.urandom(ENTRY_SIZE))
-
-    return root
-
-
-@pytest.fixture(scope="module")
-def source_tar(tmp_path_factory: pytest.TempPathFactory, source_tree: Path) -> Path:
-    """`source_tree` as a plain tar, shared by the whole module.
-
-    Args:
-        tmp_path_factory: Pytest temporary path factory fixture.
-        source_tree: The tree to archive.
-
-    Returns:
-        The path to the tar.
-    """
-    path = tmp_path_factory.mktemp("progress") / "src.tar"
-    create_archive(path, "tar", [source_tree])
-
-    return path
 
 
 @pytest.fixture(scope="module")
@@ -612,12 +486,12 @@ class TestJobIntegration:
     """Test that the frontend jobs surface progress and cancellation without raising."""
 
     def test_reports_progress(
-        self, job: Operation, request: pytest.FixtureRequest, tmp_path: Path
+        self, job: JobFactory, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
         """Test that the job drives the callback with real byte counts."""
         recorder = Recorder()
-        result = job.run(
-            request.getfixturevalue(job.source), tmp_path, progress=recorder
+        result = job.make(request.getfixturevalue(job.source), tmp_path).run(
+            progress=recorder
         )
 
         assert result.ok is True
@@ -627,15 +501,12 @@ class TestJobIntegration:
         recorder.assert_finished()
 
     def test_reports_cancellation(
-        self, job: Operation, request: pytest.FixtureRequest, tmp_path: Path
+        self, job: JobFactory, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
         """Test that a cancelled job comes back flagged, not raising and not an error."""
         token = CancelToken()
-        result = job.run(
-            request.getfixturevalue(job.source),
-            tmp_path,
-            progress=lambda f, done, total: token.cancel(),
-            cancel=token,
+        result = job.make(request.getfixturevalue(job.source), tmp_path).run(
+            progress=lambda f, done, total: token.cancel(), cancel=token
         )
 
         assert result.cancelled is True
