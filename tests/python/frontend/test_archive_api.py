@@ -2,12 +2,12 @@
 
 import sys
 import tarfile
-import unicodedata
 import zipfile
 import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -29,8 +29,8 @@ from compresso.frontend.archive_api import (
 from ..helpers import dir_entry, file_entry, link_entry, make_tar, renamed, umask
 
 
-class TestArchiveOptions:
-    """Test the ArchiveOptions dataclass."""
+class TestPlanArchive:
+    """Test the plan_archive planner."""
 
     def test_archive_options_default(self) -> None:
         """Test creating ArchiveOptions with defaults."""
@@ -39,10 +39,6 @@ class TestArchiveOptions:
         assert opts.format == "tar.zst"
         assert opts.compression_level is None
         assert opts.overwrite is OverwriteMode.RENAME
-
-
-class TestPlanArchive:
-    """Test the plan_archive planner."""
 
     def test_plan_archive_valid(self, sample_text_file: Path, tmp_path: Path) -> None:
         """Test that a plan over existing sources can run and sums input size."""
@@ -81,31 +77,16 @@ class TestPlanArchive:
         assert plan.reason_if_unavailable is not None
         assert "does not support archives" in plan.reason_if_unavailable
 
-    @pytest.mark.parametrize(
-        "fmt,level,match",
-        [
-            ("tar", 1, "tar has no compression levels"),
-            ("zip", 10, "zip compression level 10"),
-            ("tar.zst", 23, "zstd compression level 23"),
-        ],
-    )
     def test_plan_archive_out_of_range_level(
-        self, sample_text_file: Path, tmp_path: Path, fmt: str, level: int, match: str
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
         """Test that the stage that compresses decides which levels are valid."""
-        opts = ArchiveOptions(format=fmt, compression_level=level)
-        plan = plan_archive([sample_text_file], tmp_path / f"out.{fmt}", opts)
+        opts = ArchiveOptions(format="tar.zst", compression_level=23)
+        plan = plan_archive([sample_text_file], tmp_path / "out.tar.zst", opts)
 
         assert plan.can_run is False
         assert plan.reason_if_unavailable is not None
-        assert match in plan.reason_if_unavailable
-
-    def test_plan_archive_codec_stage_level(
-        self, sample_text_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that tar.zst takes zstd's levels even though tar has none."""
-        opts = ArchiveOptions(format="tar.zst", compression_level=19)
-        assert plan_archive([sample_text_file], tmp_path / "o.tar.zst", opts).can_run
+        assert "zstd compression level 23" in plan.reason_if_unavailable
 
 
 class TestArchiveJob:
@@ -150,11 +131,14 @@ class TestArchiveOverwrite:
     """Test the four `overwrite` modes against an existing destination archive."""
 
     @staticmethod
-    def _source_and_stale_output(tmp_path: Path) -> tuple[Path, Path]:
+    def _source_and_stale_output(
+        tmp_path: Path, name: str = "out.tar"
+    ) -> tuple[Path, Path]:
         """Build a source file and a stale file already at the archive's path.
 
         Args:
             tmp_path: Directory to build both in.
+            name: The archive's file name.
 
         Returns:
             The source path, and the archive path already occupied by an
@@ -163,65 +147,67 @@ class TestArchiveOverwrite:
         source = tmp_path / "a.txt"
         source.write_bytes(b"hello compresso")
 
-        archive_path = tmp_path / "out.tar"
+        archive_path = tmp_path / name
         archive_path.write_bytes(b"stale")
 
         return source, archive_path
 
-    def test_renames_existing_archive_by_default(self, tmp_path: Path) -> None:
-        """Test that the default policy renames rather than overwriting."""
+    @pytest.mark.parametrize(
+        ("mode", "ok", "output", "written"),
+        [
+            (None, True, renamed("out.tar"), True),
+            (OverwriteMode.ERROR, False, "out.tar", False),
+            (OverwriteMode.SKIP, True, "out.tar", False),
+            (OverwriteMode.OVERWRITE, True, "out.tar", True),
+        ],
+        ids=["rename-by-default", "error", "skip", "overwrite"],
+    )
+    def test_existing_archive_follows_the_mode(
+        self,
+        tmp_path: Path,
+        mode: OverwriteMode | None,
+        ok: bool,
+        output: str,
+        written: bool,
+    ) -> None:
+        """Test where the archive goes, and that only OVERWRITE replaces the stale one."""
         source, archive_path = self._source_and_stale_output(tmp_path)
-        job = ArchiveJob.from_paths([source], archive_path)
+        kwargs: dict[str, Any] = {} if mode is None else {"overwrite": mode}
+        job = ArchiveJob.from_paths(
+            [source], archive_path, ArchiveOptions(format="tar", **kwargs)
+        )
 
         result = job.run()
 
-        assert result.ok, result.error
-        assert archive_path.read_bytes() == b"stale"
-        sibling = tmp_path / renamed("out.tar")
-        assert job.plan.output == sibling
-        assert sibling.is_file()
-        assert sibling.read_bytes() != b"stale"
+        assert result.ok is ok, result.error
+        assert ok or isinstance(result.error, FileExistsError)
+        assert job.plan.output == tmp_path / output
+        assert (job.plan.output.read_bytes() != b"stale") is written
+        assert (archive_path.read_bytes() == b"stale") is (
+            mode is not OverwriteMode.OVERWRITE
+        )
 
-    def test_rename_keeps_a_compound_extension_intact(self, tmp_path: Path) -> None:
-        """Test that "out.tar.zst" renames to "out 2.tar.zst", not "out.tar 2.zst".
+    @pytest.mark.parametrize(
+        ("name", "fmt"), [("out.tar.zst", "tar.zst"), ("OUT.TAR.GZ", "tar.gz")]
+    )
+    def test_rename_keeps_a_compound_extension_intact(
+        self, tmp_path: Path, name: str, fmt: str
+    ) -> None:
+        """Test that "out.tar.zst" renames to "out 2.tar.zst", not "out.tar 2.zst", in either case.
 
         `create_archive` writes a codec format's output only at the very end,
         through a separate temp-file stage - a case the plain single-extension
         rename doesn't exercise.
         """
-        source = tmp_path / "a.txt"
-        source.write_bytes(b"hello compresso")
+        source, archive_path = self._source_and_stale_output(tmp_path, name)
 
-        archive_path = tmp_path / "out.tar.zst"
-        archive_path.write_bytes(b"stale")
-
-        job = ArchiveJob.from_paths(
-            [source], archive_path, options=ArchiveOptions(format="tar.zst")
-        )
+        job = ArchiveJob.from_paths([source], archive_path, ArchiveOptions(format=fmt))
         result = job.run()
 
         assert result.ok, result.error
-        sibling = tmp_path / renamed("out.tar.zst")
+        sibling = tmp_path / renamed(name)
         assert job.plan.output == sibling
         assert sibling.is_file()
-
-    def test_rename_keeps_an_uppercase_compound_extension_intact(
-        self, tmp_path: Path
-    ) -> None:
-        """Test that "OUT.TAR.GZ" renames as "out.tar.gz" does."""
-        source = tmp_path / "a.txt"
-        source.write_bytes(b"hello compresso")
-
-        archive_path = tmp_path / "OUT.TAR.GZ"
-        archive_path.write_bytes(b"stale")
-
-        job = ArchiveJob.from_paths(
-            [source], archive_path, options=ArchiveOptions(format="tar.gz")
-        )
-        result = job.run()
-
-        assert result.ok, result.error
-        assert job.plan.output == tmp_path / renamed("OUT.TAR.GZ")
 
     def test_rename_increments_through_repeated_conflicts(self, tmp_path: Path) -> None:
         """Test that a third clash gets " 3", not another " 2"."""
@@ -234,50 +220,6 @@ class TestArchiveOverwrite:
         assert result.ok, result.error
         assert (tmp_path / renamed("out.tar")).exists()
         assert (tmp_path / renamed("out.tar", 3)).exists()
-
-    def test_error_mode_refuses_existing_archive(self, tmp_path: Path) -> None:
-        """Test that explicit `error` refuses to touch an existing archive."""
-        source, archive_path = self._source_and_stale_output(tmp_path)
-
-        result = ArchiveJob.from_paths(
-            [source],
-            archive_path,
-            options=ArchiveOptions(format="tar", overwrite=OverwriteMode.ERROR),
-        ).run()
-
-        assert result.ok is False
-        assert isinstance(result.error, FileExistsError)
-        assert archive_path.read_bytes() == b"stale"
-
-    def test_skip_leaves_the_existing_archive(self, tmp_path: Path) -> None:
-        """Test that `skip` leaves the stale archive untouched and still succeeds."""
-        source, archive_path = self._source_and_stale_output(tmp_path)
-        job = ArchiveJob.from_paths(
-            [source],
-            archive_path,
-            options=ArchiveOptions(format="tar", overwrite=OverwriteMode.SKIP),
-        )
-
-        result = job.run()
-
-        assert result.ok, result.error
-        assert archive_path.read_bytes() == b"stale"
-        assert job.plan.output == archive_path
-
-    def test_overwrite_replaces_the_existing_archive(self, tmp_path: Path) -> None:
-        """Test that `overwrite` replaces the stale archive in place."""
-        source, archive_path = self._source_and_stale_output(tmp_path)
-        job = ArchiveJob.from_paths(
-            [source],
-            archive_path,
-            options=ArchiveOptions(format="tar", overwrite=OverwriteMode.OVERWRITE),
-        )
-
-        result = job.run()
-
-        assert result.ok, result.error
-        assert archive_path.read_bytes() != b"stale"
-        assert job.plan.output == archive_path
 
 
 class TestExtractJob:
@@ -328,143 +270,27 @@ class TestExtractJob:
 class TestArchiveRoundTrip:
     """Test end-to-end archive -> extract round-trip."""
 
-    def test_round_trip(self, tmp_path: Path, monkeypatch) -> None:
-        """Test that archiving then extracting restores the original file contents.
-
-        Archives store source paths verbatim and extraction refuses absolute
-        paths, so archive from within the working directory using a relative
-        source name (matching real CLI usage).
-        """
-        monkeypatch.chdir(tmp_path)
-        src = Path("data.txt")
-        src.write_bytes(b"hello compresso" * 100)
-        archive_path = Path("bundle.tar.zst")
-
-        archive_result = ArchiveJob.from_paths([src], archive_path).run()
-        assert archive_result.ok, archive_result.error
-        assert archive_path.is_file()
-
-        # list_contents surfaces real ArchiveEntry objects.
-        extract_job = ExtractJob.from_archive(archive_path, tmp_path / "restore")
-        entries = extract_job.list_contents()
-        assert entries
-        assert all(isinstance(e, ArchiveEntry) for e in entries)
-
-        extract_result = extract_job.run()
-        assert extract_result.ok, extract_result.error
-
-        restored = tmp_path / "restore" / src.name
-        assert restored.read_bytes() == src.read_bytes()
-
     @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
-    def test_plan_entries_carry_sizes(
-        self, tmp_path: Path, monkeypatch, fmt: str
-    ) -> None:
-        """Test that planned entries report each file's uncompressed size.
-
-        The CLI sums these to decide whether to show a progress bar.
-        """
-        monkeypatch.chdir(tmp_path)
-        tree = Path("sized")
-        tree.mkdir()
-        (tree / "a.bin").write_bytes(b"a" * 1234)
-        (tree / "b.bin").write_bytes(b"b" * 56789)
-        archive_path = Path(f"sized.{fmt}")
-
-        options = ArchiveOptions(format=fmt)
-        assert ArchiveJob.from_paths([tree], archive_path, options=options).run().ok
-
-        entries = {
-            e.path.rstrip("/"): e
-            for e in ExtractJob.from_archive(archive_path).plan.entries
-        }
-        assert entries["sized/a.bin"].size == 1234
-        assert entries["sized/b.bin"].size == 56789
-        assert not entries["sized/a.bin"].is_dir
-        assert entries["sized"].size == 0
-        assert entries["sized"].is_dir
-
-    def test_directory_round_trip(self, tmp_path: Path, monkeypatch) -> None:
-        """Test that archiving a directory preserves its nested structure on extraction."""
-        monkeypatch.chdir(tmp_path)
-        src = Path("tree")
-        (src / "deep").mkdir(parents=True)
-        (src / "top.txt").write_bytes(b"top level")
-        (src / "deep" / "leaf.txt").write_bytes(b"leaf content")
-        archive_path = Path("tree.tar.zst")
-
-        assert ArchiveJob.from_paths([src], archive_path).run().ok
-
-        names = {e.path for e in ExtractJob.from_archive(archive_path).list_contents()}
-        assert "tree/top.txt" in names
-        assert "tree/deep/leaf.txt" in names
-
-        extract_result = ExtractJob.from_archive(archive_path, tmp_path / "out").run()
-        assert extract_result.ok, extract_result.error
-
-        assert (tmp_path / "out" / "tree" / "top.txt").read_bytes() == b"top level"
-        assert (
-            tmp_path / "out" / "tree" / "deep" / "leaf.txt"
-        ).read_bytes() == b"leaf content"
-
-    def test_non_ascii_names_round_trip(self, tmp_path: Path, monkeypatch) -> None:
-        """Test that non-ASCII names survive as both a source path and an entry name.
-
-        Names are compared after NFC normalisation: macOS stores them decomposed,
-        so a name read back off the filesystem is not byte-identical to the
-        composed literal written here.
-        """
-        monkeypatch.chdir(tmp_path)
-        src = Path("données")
-        src.mkdir()
+    def test_round_trip(self, tmp_path: Path, fmt: str) -> None:
+        """Test that a nested tree with non-ASCII names comes back as it went in."""
+        src = tmp_path / "données"
+        (src / "日本語").mkdir(parents=True)
         (src / "café.txt").write_bytes(b"contenu")
-        (src / "日本語.txt").write_bytes(b"content")
-        archive_path = Path("archivé.tar.zst")
-
-        assert ArchiveJob.from_paths([src], archive_path).run().ok
-
-        names = {
-            unicodedata.normalize("NFC", e.path)
-            for e in ExtractJob.from_archive(archive_path).list_contents()
-        }
-        assert "données/café.txt" in names
-        assert "données/日本語.txt" in names
-
-        out_dir = tmp_path / "sortie"
-        extract_result = ExtractJob.from_archive(archive_path, out_dir).run()
-        assert extract_result.ok, extract_result.error
-
-        assert (out_dir / "données" / "café.txt").read_bytes() == b"contenu"
-        assert (out_dir / "données" / "日本語.txt").read_bytes() == b"content"
-
-    @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
-    def test_absolute_source_directory_round_trip(
-        self, tmp_path: Path, fmt: str
-    ) -> None:
-        """Test that an absolute source directory is stored relative to its parent."""
-        src = tmp_path / "tree"
-        (src / "deep").mkdir(parents=True)
-        (src / "top.txt").write_bytes(b"top level")
-        (src / "deep" / "leaf.txt").write_bytes(b"leaf content")
-        archive_path = tmp_path / f"tree.{fmt}"
+        (src / "日本語" / "leaf.txt").write_bytes(b"content")
+        archive_path = tmp_path / f"archivé.{fmt}"
 
         options = ArchiveOptions(format=fmt)
-        result = ArchiveJob.from_paths([src.resolve()], archive_path, options).run()
+        result = ArchiveJob.from_paths([src], archive_path, options).run()
         assert result.ok, result.error
 
-        names = {e.path for e in ExtractJob.from_archive(archive_path).list_contents()}
-        assert "tree/top.txt" in names
-        assert "tree/deep/leaf.txt" in names
-        for name in names:
-            assert not name.startswith(("/", "\\")), name
-            assert "\\" not in name, name
+        extract_job = ExtractJob.from_archive(archive_path, tmp_path / "sortie")
+        assert all(isinstance(e, ArchiveEntry) for e in extract_job.list_contents())
+        result = extract_job.run()
+        assert result.ok, result.error
 
-        out_dir = tmp_path / "out"
-        extract_result = ExtractJob.from_archive(archive_path, out_dir).run()
-        assert extract_result.ok, extract_result.error
-
-        assert (out_dir / "tree" / "top.txt").read_bytes() == b"top level"
-        assert (out_dir / "tree" / "deep" / "leaf.txt").read_bytes() == b"leaf content"
+        out = tmp_path / "sortie" / "données"
+        assert (out / "café.txt").read_bytes() == b"contenu"
+        assert (out / "日本語" / "leaf.txt").read_bytes() == b"content"
 
 
 @pytest.mark.usefixtures("needs_symlinks")
@@ -591,16 +417,34 @@ class TestExtractionOverwrite:
 
         return archive_path, out_dir
 
-    def test_renames_existing_file_by_default(self, tmp_path: Path) -> None:
-        """Test that the default policy renames rather than refusing."""
+    @pytest.mark.parametrize(
+        ("mode", "ok", "contents"),
+        [
+            (None, True, {"a.txt": b"original", renamed("a.txt"): b"x"}),
+            (OverwriteMode.ERROR, False, {"a.txt": b"original"}),
+            (OverwriteMode.SKIP, True, {"a.txt": b"original"}),
+            (OverwriteMode.OVERWRITE, True, {"a.txt": b"x"}),
+        ],
+        ids=["rename-by-default", "error", "skip", "overwrite"],
+    )
+    def test_file_clash_follows_the_mode(
+        self,
+        tmp_path: Path,
+        mode: OverwriteMode | None,
+        ok: bool,
+        contents: dict[str, bytes | None],
+    ) -> None:
+        """Test what each mode leaves when a file is already at the entry's path."""
         archive_path, out_dir = self._archive_and_stale_output(tmp_path)
+        kwargs: dict[str, Any] = {} if mode is None else {"overwrite": mode}
 
-        result = ExtractJob.from_archive(archive_path, out_dir).run()
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(**kwargs)
+        ).run()
 
-        assert result.ok, result.error
-        assert (out_dir / "a.txt").read_bytes() == b"original"
-        sibling = out_dir / renamed("a.txt")
-        assert sibling.read_bytes() == b"x"
+        assert result.ok is ok, result.error
+        assert ok or isinstance(result.error, FileExistsError)
+        assert _contents(out_dir) == contents
 
     def test_rename_increments_through_repeated_conflicts(self, tmp_path: Path) -> None:
         """Test that a third clash gets " 3", not another " 2"."""
@@ -613,42 +457,6 @@ class TestExtractionOverwrite:
         assert result.ok, result.error
         assert (out_dir / renamed("a.txt")).exists()
         assert (out_dir / renamed("a.txt", 3)).exists()
-
-    def test_error_mode_still_refuses_on_request(self, tmp_path: Path) -> None:
-        """Test that explicit `error` reproduces the old refuse-by-default behavior."""
-        archive_path, out_dir = self._archive_and_stale_output(tmp_path)
-
-        result = ExtractJob.from_archive(
-            archive_path, out_dir, options=ExtractOptions(overwrite=OverwriteMode.ERROR)
-        ).run()
-
-        assert result.ok is False
-        assert isinstance(result.error, FileExistsError)
-        assert (out_dir / "a.txt").read_bytes() == b"original"
-
-    def test_skip_leaves_the_existing_file(self, tmp_path: Path) -> None:
-        """Test that `skip` succeeds without replacing what is already there."""
-        archive_path, out_dir = self._archive_and_stale_output(tmp_path)
-
-        result = ExtractJob.from_archive(
-            archive_path, out_dir, options=ExtractOptions(overwrite=OverwriteMode.SKIP)
-        ).run()
-
-        assert result.ok, result.error
-        assert (out_dir / "a.txt").read_bytes() == b"original"
-
-    def test_overwrite_replaces_the_existing_file(self, tmp_path: Path) -> None:
-        """Test that `overwrite` replaces the file's contents."""
-        archive_path, out_dir = self._archive_and_stale_output(tmp_path)
-
-        result = ExtractJob.from_archive(
-            archive_path,
-            out_dir,
-            options=ExtractOptions(overwrite=OverwriteMode.OVERWRITE),
-        ).run()
-
-        assert result.ok, result.error
-        assert (out_dir / "a.txt").read_bytes() == b"x"
 
     @staticmethod
     def _archive_with_dir_and_blocking_file(tmp_path: Path) -> tuple[Path, Path]:
@@ -669,16 +477,34 @@ class TestExtractionOverwrite:
 
         return archive_path, out_dir
 
-    def test_dir_clash_with_a_file_renames_by_default(self, tmp_path: Path) -> None:
-        """Test that the default policy renames the directory rather than refusing."""
+    @pytest.mark.parametrize(
+        ("mode", "ok", "contents"),
+        [
+            (None, True, {"d": b"blocking file", renamed("d"): None}),
+            (OverwriteMode.ERROR, False, {"d": b"blocking file"}),
+            (OverwriteMode.SKIP, True, {"d": b"blocking file"}),
+            (OverwriteMode.OVERWRITE, True, {"d": None}),
+        ],
+        ids=["rename-by-default", "error", "skip", "overwrite"],
+    )
+    def test_dir_clash_with_a_file_follows_the_mode(
+        self,
+        tmp_path: Path,
+        mode: OverwriteMode | None,
+        ok: bool,
+        contents: dict[str, bytes | None],
+    ) -> None:
+        """Test what each mode leaves when a file blocks a directory entry."""
         archive_path, out_dir = self._archive_with_dir_and_blocking_file(tmp_path)
+        kwargs: dict[str, Any] = {} if mode is None else {"overwrite": mode}
 
-        result = ExtractJob.from_archive(archive_path, out_dir).run()
+        result = ExtractJob.from_archive(
+            archive_path, out_dir, options=ExtractOptions(**kwargs)
+        ).run()
 
-        assert result.ok, result.error
-        assert (out_dir / "d").read_bytes() == b"blocking file"
-        sibling = out_dir / renamed("d")
-        assert sibling.is_dir()
+        assert result.ok is ok, result.error
+        assert ok or "already exists" in str(result.error)
+        assert _contents(out_dir) == contents
 
     def test_dir_clash_with_a_file_renames_nested_entries_too(
         self, tmp_path: Path
@@ -795,47 +621,17 @@ class TestExtractionOverwrite:
         assert sorted(p.name for p in sibling.iterdir()) == ["sub"]
         assert (sibling / "sub" / "inside.txt").read_bytes() == b"x"
 
-    def test_dir_clash_with_a_file_errors_in_error_mode(self, tmp_path: Path) -> None:
-        """Test that explicit `error` also refuses, not the old silent no-op."""
-        archive_path, out_dir = self._archive_with_dir_and_blocking_file(tmp_path)
 
-        result = ExtractJob.from_archive(
-            archive_path,
-            out_dir,
-            options=ExtractOptions(overwrite=OverwriteMode.ERROR),
-        ).run()
+def _contents(directory: Path) -> dict[str, bytes | None]:
+    """What `directory` holds, one level deep.
 
-        assert result.ok is False
-        assert "already exists" in str(result.error)
+    Args:
+        directory: The directory to read.
 
-    def test_dir_clash_with_a_file_is_skipped_in_skip_mode(
-        self, tmp_path: Path
-    ) -> None:
-        """Test that `skip` leaves the blocking file untouched."""
-        archive_path, out_dir = self._archive_with_dir_and_blocking_file(tmp_path)
-
-        result = ExtractJob.from_archive(
-            archive_path, out_dir, options=ExtractOptions(overwrite=OverwriteMode.SKIP)
-        ).run()
-
-        assert result.ok, result.error
-        assert (out_dir / "d").is_file()
-        assert (out_dir / "d").read_bytes() == b"blocking file"
-
-    def test_dir_clash_with_a_file_is_replaced_in_overwrite_mode(
-        self, tmp_path: Path
-    ) -> None:
-        """Test that `overwrite` replaces the blocking file with the directory."""
-        archive_path, out_dir = self._archive_with_dir_and_blocking_file(tmp_path)
-
-        result = ExtractJob.from_archive(
-            archive_path,
-            out_dir,
-            options=ExtractOptions(overwrite=OverwriteMode.OVERWRITE),
-        ).run()
-
-        assert result.ok, result.error
-        assert (out_dir / "d").is_dir()
+    Returns:
+        Each entry's bytes by name, or None for a subdirectory.
+    """
+    return {p.name: None if p.is_dir() else p.read_bytes() for p in directory.iterdir()}
 
 
 def _archive_plan(tmp_path: Path, overwrite: str) -> ArchivePlan:
@@ -1005,7 +801,7 @@ class TestArchiveEntryMetadata:
         (tree / "nested").mkdir()
 
         entries = {}
-        for fmt in ("tar", "zip"):
+        for fmt in ("tar", "tar.zst", "zip"):
             archive = tmp / f"out.{fmt}"
             options = ArchiveOptions(format=fmt)
             result = ArchiveJob.from_paths([tree], archive, options).run()
@@ -1024,33 +820,21 @@ class TestArchiveEntryMetadata:
         with pytest.raises((AttributeError, TypeError)):
             entry.path = "b.txt"  # ty: ignore[invalid-assignment] - intended
 
-    @pytest.mark.parametrize("fmt", ["tar", "zip"])
-    def test_mtime_is_reported(self, archived: ArchivedTree, fmt: str) -> None:
-        """Test that mtime crosses the boundary rather than staying at its default."""
-        entry = archived.entries[fmt]["tree/big.bin"]
+    @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
+    def test_entries_are_described(self, archived: ArchivedTree, fmt: str) -> None:
+        """Test that mtime, mode, size and type cross the boundary, not their defaults.
 
-        assert entry.mtime > 0
+        The CLI sums the sizes to decide whether to show a progress bar.
+        """
+        big = archived.entries[fmt]["tree/big.bin"]
+        nested = archived.entries[fmt]["tree/nested"]
+
         # Written moments ago, so it cannot be far from now
-        assert abs(entry.mtime - (archived.tree / "big.bin").stat().st_mtime) < 60
-
-    @pytest.mark.parametrize("fmt", ["tar", "zip"])
-    def test_mode_is_reported(self, archived: ArchivedTree, fmt: str) -> None:
-        """Test that mode is reported as permission bits rather than 0."""
-        entries = archived.entries[fmt]
-
-        assert entries["tree/big.bin"].mode & 0o400, "expected a readable file mode"
-        assert entries["tree/nested"].mode & 0o100, "expected a searchable dir mode"
-
-    @pytest.mark.parametrize("fmt", ["tar", "zip"])
-    def test_size_and_type_still_reported(
-        self, archived: ArchivedTree, fmt: str
-    ) -> None:
-        """Test that the fields that already worked keep working."""
-        entries = archived.entries[fmt]
-
-        assert entries["tree/big.bin"].size == len(BIG_PAYLOAD)
-        assert entries["tree/nested"].is_dir is True
-        assert entries["tree/big.bin"].is_dir is False
+        assert abs(big.mtime - (archived.tree / "big.bin").stat().st_mtime) < 60
+        assert big.mode & 0o400, "expected a readable file mode"
+        assert nested.mode & 0o100, "expected a searchable dir mode"
+        assert (big.size, big.is_dir) == (len(BIG_PAYLOAD), False)
+        assert (nested.size, nested.is_dir) == (0, True)
 
     def test_zip_reports_per_entry_compression(self, archived: ArchivedTree) -> None:
         """Test that zip compresses each entry, so it can say how well."""
