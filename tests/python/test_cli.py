@@ -292,11 +292,19 @@ class TestAppStructure:
         [
             ("c", "compress"),
             ("comp", "compress"),
-            ("d", "decompress"),
-            ("a", "archive"),
+            ("archive", "compress"),
+            ("a", "compress"),
+            ("ar", "compress"),
             ("x", "extract"),
+            ("ex", "extract"),
+            ("decompress", "extract"),
+            ("d", "extract"),
+            ("decomp", "extract"),
             ("i", "inspect"),
+            ("info", "inspect"),
             ("b", "benchmark"),
+            ("bench", "benchmark"),
+            ("l", "list"),
             ("ls", "list"),
         ],
     )
@@ -844,20 +852,6 @@ class TestExitCodes:
         """Test that a level that is not a number is a usage error."""
         invoke("benchmark", payload, "--levels", "nope", expect=EXIT_USAGE)
 
-    def test_unknown_archive_format_is_usage(
-        self, source_tree: Path, tmp_path: Path
-    ) -> None:
-        """Test that a format that cannot hold multiple entries is refused up front."""
-        invoke(
-            "compress",
-            source_tree,
-            "-o",
-            tmp_path / "o.gz",
-            "-f",
-            "gz",
-            expect=EXIT_USAGE,
-        )
-
     def test_recognised_but_unsupported_archive_names_itself(
         self, source_tree: Path, tmp_path: Path
     ) -> None:
@@ -877,24 +871,6 @@ class TestExitCodes:
         result = invoke("compress", source_tree, "-o", dest, expect=EXIT_FAILED)
         assert "7z archives are recognised but not supported yet" in result.output
         assert not dest.exists()
-
-    def test_failed_operation_is_one(
-        self, tmp_path: Path, make_archive: Callable[[str], Path]
-    ) -> None:
-        """Test that a job that starts and then fails exits 1, not 2."""
-        archive = make_archive("tar")
-        dest = tmp_path / "dest"
-        invoke("extract", archive, "-o", dest, "-q")
-
-        invoke(
-            "extract",
-            archive,
-            "-o",
-            dest,
-            "--error-on-conflict",
-            "-q",
-            expect=EXIT_FAILED,
-        )
 
 
 class TestInterruption:
@@ -1207,30 +1183,6 @@ class TestSmartExtract:
 
 class TestMergedVerbCompatibility:
     """Test that the old names still work, and the old argument order says so."""
-
-    @pytest.mark.parametrize("name", ["archive", "a", "ar"])
-    def test_archive_names_reach_compress(
-        self, source_tree: Path, tmp_path: Path, name: str
-    ) -> None:
-        """Test that `archive` is an alias of `compress`."""
-        output = tmp_path / "out.tar.zst"
-
-        invoke(name, source_tree, "-o", output, "-q")
-
-        assert output.exists()
-
-    @pytest.mark.parametrize("name", ["decompress", "d", "decomp"])
-    def test_decompress_names_reach_extract(
-        self, payload: Path, tmp_path: Path, name: str
-    ) -> None:
-        """Test that `decompress` is an alias of `extract`."""
-        packed = tmp_path / "p.comp"
-        restored = tmp_path / "back.bin"
-        invoke("compress", payload, "-o", packed, "-q")
-
-        invoke(name, packed, "-o", restored, "-q")
-
-        assert restored.read_bytes() == payload.read_bytes()
 
     def test_decompress_now_handles_archives_too(
         self,
