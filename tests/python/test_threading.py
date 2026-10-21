@@ -29,6 +29,8 @@ from compresso.frontend.archive_api import (
     ExtractOptions,
 )
 
+from .helpers import Recorder
+
 # Past the 1 MiB report floor, so the first progress report lands mid-job
 # rather than being the final one
 JOB_FILE_SIZE = 3 * 1024 * 1024
@@ -410,16 +412,16 @@ class TestRunAsync:
 
     def test_reports_progress(self, payload: Path, tmp_path: Path) -> None:
         """Test that progress reporting works the same way through the async path."""
-        calls: list[tuple[float, int, int]] = []
+        recorder = Recorder()
 
         async def main() -> JobResult:
             return await quick_job(payload, tmp_path / "async.comp").run_async(
-                progress=lambda f, done, total: calls.append((f, done, total))
+                progress=recorder
             )
 
         assert asyncio.run(main()).ok is True
-        assert len(calls) > 1
-        assert [done for _, done, _ in calls] == sorted(done for _, done, _ in calls)
+        recorder.assert_progressed()
+        recorder.assert_monotonic()
 
 
 class TestParallelism:

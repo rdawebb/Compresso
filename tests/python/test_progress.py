@@ -11,6 +11,7 @@ import pytest
 
 from compresso import _core
 from compresso._core import Cancelled, CancelToken, compress_file, decompress_file
+from compresso.frontend._job import to_core_progress
 from compresso.frontend.api import CompressionJob, DecompressionJob
 
 from .helpers import Recorder
@@ -100,9 +101,8 @@ class TestCompressionProgress:
             progress=recorder,
         )
 
-        assert len(recorder.calls) > 1
-        expected = big_compressible_file.stat().st_size
-        assert all(total == expected for _, total in recorder.calls)
+        recorder.assert_progressed()
+        recorder.assert_total(big_compressible_file.stat().st_size)
 
     @pytest.mark.parametrize("algo", BACKENDS)
     def test_progress_is_monotonic_and_completes(
@@ -153,9 +153,9 @@ class TestDecompressionProgress:
         recorder = Recorder()
         decompress_file(str(compressed), str(restored), algo, progress=recorder)
 
+        recorder.assert_progressed()
         recorder.assert_monotonic()
         recorder.assert_finished()
-        assert len(recorder.calls) > 1
         assert restored.read_bytes() == big_incompressible_file.read_bytes()
 
 
@@ -513,24 +513,37 @@ class TestConcurrency:
 class TestJobIntegration:
     """Test that the frontend jobs surface progress and cancellation without raising."""
 
+    def test_core_progress_computes_fraction(self) -> None:
+        """Test that the job adapter derives the fraction, falling back to the job total."""
+        calls: list[tuple[float, int, int]] = []
+        on_progress = to_core_progress(lambda *args: calls.append(args), total=8)
+        assert on_progress is not None
+        on_progress(4, 0)
+        on_progress(10, 10)
+        assert calls == [(0.5, 4, 8), (1.0, 10, 10)]
+
+        calls.clear()
+        on_progress = to_core_progress(lambda *args: calls.append(args), total=0)
+        assert on_progress is not None
+        on_progress(0, 0)
+        assert calls == [(0.0, 0, 0)]
+
     def test_compression_job_reports_progress(
         self, big_compressible_file: Path, tmp_path: Path
     ) -> None:
         """Test that CompressionJob.run drives the callback with real byte counts."""
-        calls: list[tuple[float, int, int]] = []
+        recorder = Recorder()
         job = CompressionJob.from_file(
             src=big_compressible_file, dest=tmp_path / "job.comp"
         )
 
-        result = job.run(progress=lambda f, done, total: calls.append((f, done, total)))
+        result = job.run(progress=recorder)
 
         assert result.ok is True
         assert result.cancelled is False
-        assert len(calls) > 1
-        assert [done for _, done, _ in calls] == sorted(done for _, done, _ in calls)
-        fraction, done, total = calls[-1]
-        assert done == total
-        assert fraction == pytest.approx(1.0)
+        recorder.assert_progressed()
+        recorder.assert_monotonic()
+        recorder.assert_finished()
 
     def test_compression_job_reports_cancellation(
         self, big_compressible_file: Path, tmp_path: Path
@@ -554,14 +567,13 @@ class TestJobIntegration:
         compressed = tmp_path / "job.comp"
         CompressionJob.from_file(src=big_incompressible_file, dest=compressed).run()
 
-        calls: list[tuple[float, int, int]] = []
+        recorder = Recorder()
         job = DecompressionJob.from_file(src=compressed, dest=tmp_path / "job.out")
-        result = job.run(progress=lambda f, done, total: calls.append((f, done, total)))
+        result = job.run(progress=recorder)
 
         assert result.ok is True
-        assert len(calls) > 1
-        _, done, total = calls[-1]
-        assert done == total
+        recorder.assert_progressed()
+        recorder.assert_finished()
 
     def test_job_result_defaults_to_not_cancelled(
         self, sample_text_file: Path, tmp_path: Path

@@ -64,7 +64,7 @@ class TestArchiveCreationProgress:
             progress=recorder,
         )
 
-        assert len(recorder.calls) > 1
+        recorder.assert_progressed()
         recorder.assert_monotonic()
         recorder.assert_finished()
 
@@ -100,7 +100,7 @@ class TestArchiveCreationProgress:
             progress=recorder,
         )
 
-        assert recorder.calls[-1][1] == ENTRY_COUNT * ENTRY_SIZE
+        recorder.assert_total(ENTRY_COUNT * ENTRY_SIZE)
 
 
 class TestArchiveExtractionProgress:
@@ -122,7 +122,7 @@ class TestArchiveExtractionProgress:
         recorder = Recorder()
         extract_archive(str(archive), str(dest), [], progress=recorder)
 
-        assert len(recorder.calls) > 1
+        recorder.assert_progressed()
         recorder.assert_monotonic()
         recorder.assert_finished()
         for original in sorted(source_tree.iterdir()):
@@ -142,7 +142,7 @@ class TestArchiveExtractionProgress:
         recorder = Recorder()
         extract_archive(str(archive), str(tmp_path / "out"), [], progress=recorder)
 
-        assert recorder.calls[-1][1] == ENTRY_COUNT * ENTRY_SIZE
+        recorder.assert_total(ENTRY_COUNT * ENTRY_SIZE)
 
 
 class TestArchiveCancellation:
@@ -356,20 +356,18 @@ class TestArchiveJobIntegration:
         self, source_tree: Path, tmp_path: Path
     ) -> None:
         """Test that ArchiveJob.run drives the callback with real byte counts."""
-        calls: list[tuple[float, int, int]] = []
+        recorder = Recorder()
         job = ArchiveJob.from_paths(
             sources=[source_tree], output=tmp_path / "job.tar.zst"
         )
 
-        result = job.run(progress=lambda f, done, total: calls.append((f, done, total)))
+        result = job.run(progress=recorder)
 
         assert result.ok is True
         assert result.cancelled is False
-        assert len(calls) > 1
-        assert [done for _, done, _ in calls] == sorted(done for _, done, _ in calls)
-        fraction, done, total = calls[-1]
-        assert done == total
-        assert fraction == pytest.approx(1.0)
+        recorder.assert_progressed()
+        recorder.assert_monotonic()
+        recorder.assert_finished()
 
     def test_archive_job_reports_cancellation(
         self, source_tree: Path, tmp_path: Path
@@ -397,14 +395,13 @@ class TestArchiveJobIntegration:
             options=ArchiveOptions(format="tar"),
         ).run()
 
-        calls: list[tuple[float, int, int]] = []
+        recorder = Recorder()
         job = ExtractJob.from_archive(archive=archive, output_dir=tmp_path / "out")
-        result = job.run(progress=lambda f, done, total: calls.append((f, done, total)))
+        result = job.run(progress=recorder)
 
         assert result.ok is True
-        assert len(calls) > 1
-        _, done, total = calls[-1]
-        assert done == total
+        recorder.assert_progressed()
+        recorder.assert_finished()
 
     def test_extract_job_reports_cancellation(
         self, source_tree: Path, tmp_path: Path

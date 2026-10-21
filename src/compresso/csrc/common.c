@@ -84,7 +84,9 @@ static int ctx_check(CoreContext *ctx) {
     return COMP_CANCELLED;
   }
 
-  if (!ctx->on_progress ||
+  // report_interval stays 0 until ctx_begin_stage, so a pre-stage call is a
+  // cancellation check only
+  if (!ctx->on_progress || !ctx->report_interval ||
       ctx->done_bytes - ctx->last_reported < ctx->report_interval) {
     return 0;
   }

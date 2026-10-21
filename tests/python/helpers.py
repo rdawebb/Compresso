@@ -42,14 +42,17 @@ class Recorder:
         """Start with no calls recorded."""
         self.calls: list[tuple[int, int]] = []
 
-    def __call__(self, done: int, total: int) -> None:
+    def __call__(self, *args: float) -> None:
         """Record one progress report.
 
+        Takes both the `_core` `(done, total)` and the job `(fraction, done,
+        total)` shapes; only `done` and `total` are kept.
+
         Args:
-            done: The number of bytes processed so far.
-            total: The total number of bytes to process.
+            args: The callback's arguments, ending in `done` and `total`.
         """
-        self.calls.append((done, total))
+        done, total = args[-2:]
+        self.calls.append((int(done), int(total)))
 
     @property
     def dones(self) -> list[int]:
@@ -63,6 +66,19 @@ class Recorder:
     def assert_monotonic(self) -> None:
         """Assert that progress never went backwards."""
         assert self.dones == sorted(self.dones), "progress went backwards"
+
+    def assert_progressed(self) -> None:
+        """Assert that progress arrived during the job, not only at the end."""
+        assert len(self.calls) > 1, f"only {len(self.calls)} progress report(s)"
+
+    def assert_total(self, expected: int) -> None:
+        """Assert that every report was out of `expected` bytes.
+
+        Args:
+            expected: The total each report should carry.
+        """
+        assert self.calls, "no progress was reported"
+        assert {total for _, total in self.calls} == {expected}
 
     def assert_finished(self) -> None:
         """Assert that the last report was at 100%."""
