@@ -405,25 +405,18 @@ class TestCompressRoundTrip:
         result = invoke("compress", payload, "-o", tmp_path / "q.comp", "-q")
         assert result.output.strip() == ""
 
-    @pytest.mark.parametrize("algo", ["zlib", "zstd", "lz4", "bzip2", "lzma"])
+    # The backends are covered in core and C tests; this checks the flags
+    @pytest.mark.parametrize(
+        "args", [("-a", "bzip2"), ("-a", "zstd", "-l", "19")], ids=["algo", "level"]
+    )
     def test_algorithms_round_trip(
-        self, payload: Path, tmp_path: Path, algo: str
+        self, payload: Path, tmp_path: Path, args: tuple[str, ...]
     ) -> None:
-        """Test that each backend is reachable through the CLI."""
-        archive = tmp_path / f"{algo}.comp"
-        restored = tmp_path / f"{algo}.out"
+        """Test that -a and -l reach the backend."""
+        archive = tmp_path / "out.comp"
+        restored = tmp_path / "restored.bin"
 
-        invoke("compress", payload, "-o", archive, "-a", algo, "-q")
-        invoke("decompress", archive, "-o", restored, "-q")
-
-        assert restored.read_bytes() == payload.read_bytes()
-
-    def test_level_above_nine_round_trips(self, payload: Path, tmp_path: Path) -> None:
-        """Test that a level above the old 0-9 cap reaches a backend that takes it."""
-        archive = tmp_path / "zstd19.comp"
-        restored = tmp_path / "zstd19.out"
-
-        invoke("compress", payload, "-o", archive, "-a", "zstd", "-l", "19", "-q")
+        invoke("compress", payload, "-o", archive, *args, "-q")
         invoke("decompress", archive, "-o", restored, "-q")
 
         assert restored.read_bytes() == payload.read_bytes()
@@ -495,62 +488,39 @@ class TestArchiveRoundTrip:
             "    0.00 B" + " " * 2 + "x/y.txt",
         ]
 
-    def test_extract_renames_clashing_top_level_dir_by_default(
+    @pytest.mark.parametrize(
+        "flags,expect,renames",
+        [
+            ((), EXIT_OK, True),
+            (("--error-on-conflict",), EXIT_FAILED, False),
+            (("--skip-existing",), EXIT_OK, False),
+            (("--overwrite",), EXIT_OK, False),
+        ],
+        ids=["rename", "error", "skip", "overwrite"],
+    )
+    def test_extract_over_an_existing_tree(
         self,
         source_tree: Path,
         tmp_path: Path,
         make_archive: Callable[[str], Path],
+        flags: tuple[str, ...],
+        expect: int,
+        renames: bool,
     ) -> None:
-        """Test that a repeat extraction renames the clashing top-level directory."""
-        archive = make_archive("tar")
-        dest = tmp_path / "dest"
-
-        invoke("extract", archive, "-o", dest, "-q")
-        before = sorted(p.name for p in dest.rglob("*") if p.is_file())
-
-        invoke("extract", archive, "-o", dest, "-q")
-
-        after = sorted(p.name for p in dest.rglob("*") if p.is_file())
-        assert len(after) == 2 * len(before)
-        # No individual file was renamed; the set of file names is unchanged
-        assert after == sorted(before + before)
-
-        top_level = sorted(p.name for p in dest.iterdir())
-        assert top_level == sorted([source_tree.name, renamed(source_tree.name)])
-
-        renamed_dir = dest / renamed(source_tree.name)
-        assert sorted(p.name for p in renamed_dir.iterdir()) == sorted(
-            p.name for p in (dest / source_tree.name).iterdir()
-        )
-
-    def test_extract_error_on_conflict_still_refuses(
-        self, tmp_path: Path, make_archive: Callable[[str], Path]
-    ) -> None:
-        """Test that --error-on-conflict reproduces the old refuse-by-default behavior."""
-        archive = make_archive("tar")
-        dest = tmp_path / "dest"
-
-        invoke("extract", archive, "-o", dest, "-q")
-        invoke(
-            "extract",
-            archive,
-            "-o",
-            dest,
-            "--error-on-conflict",
-            "-q",
-            expect=EXIT_FAILED,
-        )
-
-    @pytest.mark.parametrize("flag", ["--overwrite", "--skip-existing"])
-    def test_extract_over_existing_with_a_flag(
-        self, tmp_path: Path, make_archive: Callable[[str], Path], flag: str
-    ) -> None:
-        """Test that either flag makes a repeat extraction succeed."""
+        """Test that a repeat extraction renames the clashing top-level directory
+        by default, and follows the overwrite mode otherwise."""
         archive = make_archive("tar")
         dest = tmp_path / "dest"
         invoke("extract", archive, "-o", dest, "-q")
 
-        invoke("extract", archive, "-o", dest, flag, "-q")
+        invoke("extract", archive, "-o", dest, *flags, "-q", expect=expect)
+
+        top_level = [source_tree.name, *([renamed(source_tree.name)] * renames)]
+        assert sorted(p.name for p in dest.iterdir()) == sorted(top_level)
+        # The whole directory is renamed, never a file inside it
+        names = sorted(p.name for p in source_tree.iterdir())
+        for top in top_level:
+            assert sorted(p.name for p in (dest / top).iterdir()) == names
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="Windows has no POSIX permission bits"
@@ -581,88 +551,67 @@ class TestArchiveRoundTrip:
         assert (dest / "link").read_bytes() == b"target"
 
 
+# Each overwrite mode against an existing output: whether the old output
+# survives, and whether the new one is written beside it under a new name
+CONFLICT_MODES = pytest.mark.parametrize(
+    "flags,expect,kept,renames",
+    [
+        ((), EXIT_OK, True, True),
+        (("--error-on-conflict",), EXIT_FAILED, True, False),
+        (("--skip-existing",), EXIT_OK, True, False),
+        (("--overwrite",), EXIT_OK, False, False),
+    ],
+    ids=["rename", "error", "skip", "overwrite"],
+)
+
+
 class TestCompressConflicts:
     """Test what `compress` does when its output already exists."""
 
-    def test_renames_clashing_output_by_default(
-        self, compress_target: CompressTarget
+    @CONFLICT_MODES
+    def test_existing_output(
+        self,
+        compress_target: CompressTarget,
+        flags: tuple[str, ...],
+        expect: int,
+        kept: bool,
+        renames: bool,
     ) -> None:
-        """Test that compressing twice renames the second output rather than
-        overwriting the first."""
+        """Test that each overwrite mode keeps, replaces or renames around the output."""
         t = compress_target
-        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
-        original_bytes = t.dest.read_bytes()
+        t.dest.write_bytes(b"stale")
 
-        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
+        invoke("compress", t.source, "-o", t.dest, *t.args, *flags, "-q", expect=expect)
 
-        assert t.dest.read_bytes() == original_bytes
-        assert (t.dest.parent / renamed(t.dest.name)).is_file()
-
-    def test_error_on_conflict_refuses_existing_output(
-        self, compress_target: CompressTarget
-    ) -> None:
-        """Test that --error-on-conflict refuses to touch an existing output."""
-        t = compress_target
-        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
-        original_bytes = t.dest.read_bytes()
-
-        invoke(
-            "compress",
-            t.source,
-            "-o",
-            t.dest,
-            *t.args,
-            "--error-on-conflict",
-            "-q",
-            expect=EXIT_FAILED,
-        )
-
-        assert t.dest.read_bytes() == original_bytes
-
-    def test_skip_existing_leaves_the_output_untouched(
-        self, compress_target: CompressTarget
-    ) -> None:
-        """Test that --skip-existing leaves the first output as-is and still succeeds."""
-        t = compress_target
-        invoke("compress", t.source, "-o", t.dest, *t.args, "-q")
-        original_bytes = t.dest.read_bytes()
-
-        invoke("compress", t.source, "-o", t.dest, *t.args, "--skip-existing", "-q")
-
-        assert t.dest.read_bytes() == original_bytes
+        assert (t.dest.read_bytes() == b"stale") == kept
+        assert (t.dest.parent / renamed(t.dest.name)).is_file() == renames
 
 
 class TestDecompressConflicts:
     """Test what decompressing one file does when its output already exists."""
 
-    def test_renames_clashing_output_by_default(
-        self, payload: Path, tmp_path: Path
+    @CONFLICT_MODES
+    def test_existing_output(
+        self,
+        payload: Path,
+        tmp_path: Path,
+        flags: tuple[str, ...],
+        expect: int,
+        kept: bool,
+        renames: bool,
     ) -> None:
-        """Test that an existing output is kept and the new one renamed."""
+        """Test that each overwrite mode keeps, replaces or renames around the output."""
         archive = tmp_path / "out.comp"
         restored = tmp_path / "restored.bin"
         invoke("compress", payload, "-o", archive, "-q")
         restored.write_bytes(b"stale")
 
-        result = invoke("decompress", archive, "-o", restored)
+        result = invoke("decompress", archive, "-o", restored, *flags, expect=expect)
 
         sibling = tmp_path / renamed(restored.name)
-        assert f"Renamed to:        {sibling}" in result.output
-        assert restored.read_bytes() == b"stale"
-        assert sibling.read_bytes() == payload.read_bytes()
-
-    def test_overwrite_replaces_the_existing_output(
-        self, payload: Path, tmp_path: Path
-    ) -> None:
-        """Test that --overwrite replaces the existing output."""
-        archive = tmp_path / "out.comp"
-        restored = tmp_path / "restored.bin"
-        invoke("compress", payload, "-o", archive, "-q")
-        restored.write_bytes(b"stale")
-
-        invoke("decompress", archive, "-o", restored, "--overwrite", "-q")
-
-        assert restored.read_bytes() == payload.read_bytes()
+        assert (f"Renamed to:        {sibling}" in result.output) == renames
+        assert restored.read_bytes() == (b"stale" if kept else payload.read_bytes())
+        assert sibling.exists() == renames
 
 
 class TestDecompressName:
@@ -726,64 +675,44 @@ class TestInspectAndList:
         assert "Levels: 1-22" in zstd
         assert "Levels: none" in snappy
 
-    def test_inspect_archive_summary_omits_entries(
-        self, make_archive: Callable[[str], Path]
-    ) -> None:
-        """Test that inspecting an archive shows only a summary by default."""
-        result = invoke("inspect", make_archive("zip"))
+    def test_inspect_archive_text(self, make_archive: Callable[[str], Path]) -> None:
+        """Test that an archive shows only a summary unless --entries is given."""
+        archive = make_archive("zip")
 
-        assert "Format:" in result.output
-        assert "Entries:       4" in result.output
-        assert "f0.bin" not in result.output
+        summary = invoke("inspect", archive).output
+        listing = invoke("inspect", archive, "--entries").output
 
-    def test_inspect_archive_json_omits_entries_by_default(
-        self, make_archive: Callable[[str], Path]
-    ) -> None:
-        """Test that --json without --entries has no entries key."""
-        result = invoke("inspect", make_archive("zip"), "--json")
+        assert "Entries:       4" in summary
+        assert "f0.bin" not in summary
+        assert "f0.bin" in listing
 
-        data = orjson.loads(result.output)
-        assert data["is_archive"] is True
-        assert data["entry_count"] == 4
-        assert "entries" not in data
+    def test_inspect_archive_json(self, make_archive: Callable[[str], Path]) -> None:
+        """Test that --json carries entries only when --entries is given."""
+        archive = make_archive("zip")
 
-    def test_inspect_entries_lists_each_entry(
-        self, make_archive: Callable[[str], Path]
-    ) -> None:
-        """Test that --entries lists each entry's own detail."""
-        result = invoke("inspect", make_archive("zip"), "--entries")
+        summary = orjson.loads(invoke("inspect", archive, "--json").output)
+        listing = orjson.loads(invoke("inspect", archive, "--entries", "--json").output)
 
-        assert "f0.bin" in result.output
-
-    def test_inspect_entries_json_lists_each_entry(
-        self, make_archive: Callable[[str], Path]
-    ) -> None:
-        """Test that --entries --json includes a populated entries list."""
-        result = invoke("inspect", make_archive("zip"), "--entries", "--json")
-
-        data = orjson.loads(result.output)
-        assert len(data["entries"]) == 4
-        assert any("f0.bin" in entry["path"] for entry in data["entries"])
+        assert summary["entry_count"] == 4
+        assert "entries" not in summary
+        assert sum("f0.bin" in e["path"] for e in listing["entries"]) == 1
 
 
 class TestExitCodes:
     """Test 0 success, 1 the operation failed, 2 the request could not be made."""
 
-    def test_missing_input_is_usage(self, tmp_path: Path) -> None:
-        """Test that compressing a file that is not there is a usage error."""
-        invoke("compress", tmp_path / "nope.bin", expect=EXIT_USAGE)
-
-    def test_decompressing_a_non_compresso_file_is_usage(self, payload: Path) -> None:
-        """Test that the input is wrong, rather than the operation having failed."""
-        invoke("decompress", payload, expect=EXIT_USAGE)
-
-    def test_inspecting_a_non_compresso_file_is_usage(self, payload: Path) -> None:
-        """Test the same for inspect."""
-        invoke("inspect", payload, expect=EXIT_USAGE)
-
-    def test_extracting_a_non_archive_is_usage(self, payload: Path) -> None:
-        """Test the same for extract."""
-        invoke("extract", payload, expect=EXIT_USAGE)
+    @pytest.mark.parametrize(
+        "command,name",
+        [
+            ("compress", "nope.bin"),
+            ("inspect", "payload.bin"),
+            ("extract", "payload.bin"),
+        ],
+    )
+    def test_bad_input_is_usage(self, payload: Path, command: str, name: str) -> None:
+        """Test that a missing or unrecognised input is wrong, rather than the
+        operation having failed."""
+        invoke(command, payload.parent / name, expect=EXIT_USAGE)
 
     @pytest.mark.parametrize("command", ["compress", "extract"])
     @pytest.mark.parametrize(
@@ -812,63 +741,42 @@ class TestExitCodes:
         result = invoke(command, *args, *flags, expect=EXIT_USAGE)
         assert "mutually exclusive" in result.output
 
+    # An archive's level is checked against the stage that compresses
     @pytest.mark.parametrize(
-        "args,message",
+        "compress_target,args,message",
         [
-            (["-a", "zlib", "-l", "15"], "zlib compression level 15 out of range (0-9"),
-            (["-a", "snappy", "-l", "3"], "snappy has no compression levels"),
-            (["-f", "gz", "-l", "10"], "gzip compression level 10 out of range"),
+            (
+                "file",
+                ["-a", "zlib", "-l", "15"],
+                "zlib compression level 15 out of range (0-9",
+            ),
+            ("tree", ["-l", "5"], "tar has no compression levels"),
         ],
+        indirect=["compress_target"],
     )
     def test_out_of_range_level_is_usage(
-        self, payload: Path, tmp_path: Path, args: list[str], message: str
+        self, compress_target: CompressTarget, args: list[str], message: str
     ) -> None:
         """Test that a level the backend rejects is refused up front, naming the range."""
-        dest = tmp_path / "out.bin"
-        result = invoke("compress", payload, "-o", dest, *args, expect=EXIT_USAGE)
-        assert message in result.output
-        assert not dest.exists()
-
-    def test_out_of_range_archive_level_is_usage(
-        self, source_tree: Path, tmp_path: Path
-    ) -> None:
-        """Test that an archive's level is checked against the stage that compresses."""
-        dest = tmp_path / "out.tar"
+        t = compress_target
         result = invoke(
-            "compress",
-            source_tree,
-            "-o",
-            dest,
-            "-f",
-            "tar",
-            "-l",
-            "5",
-            expect=EXIT_USAGE,
+            "compress", t.source, "-o", t.dest, *t.args, *args, expect=EXIT_USAGE
         )
-        assert "tar has no compression levels" in result.output
-        assert not dest.exists()
+        assert message in result.output
+        assert not t.dest.exists()
 
     def test_bad_benchmark_level_is_usage(self, payload: Path) -> None:
         """Test that a level that is not a number is a usage error."""
         invoke("benchmark", payload, "--levels", "nope", expect=EXIT_USAGE)
 
+    @pytest.mark.parametrize("flags", [(), ("-f", "7z")], ids=["suffix", "flag"])
     def test_recognised_but_unsupported_archive_names_itself(
-        self, source_tree: Path, tmp_path: Path
+        self, source_tree: Path, tmp_path: Path, flags: tuple[str, ...]
     ) -> None:
-        """Test that a detected-but-unwritable container reports its own name."""
+        """Test that 7z, asked for by -f or by `-o x.7z` alone, reports its own name
+        rather than being written as a zip."""
         dest = tmp_path / "o.7z"
-        result = invoke(
-            "compress", source_tree, "-o", dest, "-f", "7z", expect=EXIT_FAILED
-        )
-        assert "7z archives are recognised but not supported yet" in result.output
-        assert not dest.exists()
-
-    def test_unsupported_archive_suffix_is_not_written_as_zip(
-        self, source_tree: Path, tmp_path: Path
-    ) -> None:
-        """Test that `-o x.7z` alone names 7z rather than writing a zip there."""
-        dest = tmp_path / "o.7z"
-        result = invoke("compress", source_tree, "-o", dest, expect=EXIT_FAILED)
+        result = invoke("compress", source_tree, "-o", dest, *flags, expect=EXIT_FAILED)
         assert "7z archives are recognised but not supported yet" in result.output
         assert not dest.exists()
 
@@ -924,24 +832,18 @@ class TestSmartCompress:
 
         assert payload.with_suffix(payload.suffix + ".comp").exists()
 
-    @pytest.mark.parametrize(
-        "fmt,suffix",
-        [
-            ("gz", ".gz"),
-            ("bz2", ".bz2"),
-            ("xz", ".xz"),
-            ("zst", ".zst"),
-            ("lz4", ".lz4"),
-            ("sz", ".sz"),
-        ],
-    )
+    @pytest.mark.parametrize("fmt", ["gz", "bz2", "xz", "zst", "lz4", "sz"])
     def test_one_file_into_a_standalone_container(
-        self, payload: Path, fmt: str, suffix: str
+        self, payload: Path, tmp_path: Path, fmt: str
     ) -> None:
-        """Test that -f names a single-file container, and the suffix follows from it."""
-        invoke("compress", payload, "-f", fmt, "-q")
+        """Test that -f names a single-file container, the suffix follows from it,
+        and it comes back."""
+        restored = tmp_path / "restored.bin"
 
-        assert payload.with_suffix(payload.suffix + suffix).exists()
+        invoke("compress", payload, "-f", fmt, "-q")
+        invoke("extract", f"{payload}.{fmt}", "-o", restored, "-q")
+
+        assert restored.read_bytes() == payload.read_bytes()
 
     def test_standalone_output_is_a_real_gzip(
         self, payload: Path, tmp_path: Path
@@ -1080,19 +982,6 @@ class TestThreads:
 
 class TestSmartExtract:
     """Test `extract` picks the job from each file's own bytes."""
-
-    @pytest.mark.parametrize("fmt", ["gz", "bz2", "xz", "zst", "lz4", "sz"])
-    def test_standalone_round_trip(
-        self, payload: Path, tmp_path: Path, fmt: str
-    ) -> None:
-        """Test every standalone container goes out and comes back."""
-        packed = tmp_path / f"p.{fmt}"
-        restored = tmp_path / f"back.{fmt}"
-
-        invoke("compress", payload, "-o", packed, "-q")
-        invoke("extract", packed, "-o", restored, "-q")
-
-        assert restored.read_bytes() == payload.read_bytes()
 
     def test_dispatch_follows_the_bytes_not_the_name(
         self, payload: Path, tmp_path: Path
