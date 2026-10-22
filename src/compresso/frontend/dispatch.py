@@ -7,13 +7,12 @@ from functools import partial
 from pathlib import Path
 
 from .._core import detect_format, format_is_archive
-from .api import (
-    STANDALONE_FORMATS,
-    CompressionJob,
-    CompressionOptions,
-    DecompressionJob,
+from ._formats import (
+    DEFAULT_ARCHIVE_FORMAT,
     canonical_standalone_format,
+    infer_format,
 )
+from .api import CompressionJob, CompressionOptions, DecompressionJob
 from .archive_api import (
     ArchiveJob,
     ArchiveOptions,
@@ -21,36 +20,6 @@ from .archive_api import (
     ExtractOptions,
     OverwriteMode,
 )
-
-# What `compress` reaches for when given several inputs and no format
-DEFAULT_ARCHIVE_FORMAT = "zip"
-
-
-def infer_format(output: Path | None) -> str | None:
-    """Infer a format from an output filename.
-
-    Args:
-        output: The path the user asked to write, or None.
-
-    Returns:
-        The format named by the suffix, or None if it names none — which
-        includes `.comp`, whose container is the default anyway.
-    """
-    if output is None:
-        return None
-
-    # Mirrors the core (`x.tar.lz4` is tar in lz4); unwritable formats
-    # still match, so the default is never written under their suffix
-    suffix: str = output.suffix.lower().lstrip(".")
-    if Path(output.stem).suffix.lower() == ".tar" and format_is_archive(
-        f"tar.{suffix}"
-    ):
-        return f"tar.{suffix}"
-
-    if suffix in STANDALONE_FORMATS or format_is_archive(suffix):
-        return suffix
-
-    return None
 
 
 def looks_like_archive(path: Path) -> bool:

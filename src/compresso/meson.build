@@ -63,6 +63,7 @@ py.install_sources(
 
 py.install_sources(
   'frontend/__init__.py',
+  'frontend/_formats.py',
   'frontend/_job.py',
   'frontend/api.py',
   'frontend/archive_api.py',

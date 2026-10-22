@@ -36,9 +36,32 @@ class TestPlanArchive:
         """Test creating ArchiveOptions with defaults."""
         opts = ArchiveOptions()
 
-        assert opts.format == "tar.zst"
+        assert opts.format is None
         assert opts.compression_level is None
         assert opts.overwrite is OverwriteMode.RENAME
+
+    @pytest.mark.parametrize(
+        ("name", "fmt", "expected"),
+        [
+            ("out.tar.zst", None, "tar.zst"),
+            ("out.bin", None, "zip"),
+            ("out.tar.zst", "tar", "tar"),
+        ],
+        ids=["suffix", "unrecognised-suffix", "explicit-wins"],
+    )
+    def test_format_comes_from_the_output_name(
+        self,
+        small_file: Path,
+        tmp_path: Path,
+        name: str,
+        fmt: str | None,
+        expected: str,
+    ) -> None:
+        """Test that an unset format is read from the output's suffix, else zip."""
+        plan = plan_archive([small_file], tmp_path / name, ArchiveOptions(format=fmt))
+
+        assert plan.can_run, plan.reason_if_unavailable
+        assert plan.options.format == expected
 
     def test_plan_archive_valid(self, sample_text_file: Path, tmp_path: Path) -> None:
         """Test that a plan over existing sources can run and sums input size."""

@@ -18,6 +18,7 @@ from .._core import (
     list_archive_contents,
 )
 from .._levels import to_core_level
+from ._formats import DEFAULT_ARCHIVE_FORMAT, infer_format
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 
 
@@ -109,7 +110,8 @@ class ArchiveOptions:
     """Represents the options for an archive operation.
 
     Attributes:
-        format: The archive/compression format to write.
+        format: The archive/compression format to write, or None to take it
+            from the output's suffix, falling back to zip.
         compression_level: The compression level to use, or None for the
             format's default.
         overwrite: What to do when the destination archive already exists.
@@ -117,7 +119,7 @@ class ArchiveOptions:
             the output is the same for any count.
     """
 
-    format: str = "tar.zst"  # Default to tar with zstd
+    format: str | None = None
     compression_level: int | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
     threads: int = 0
@@ -224,6 +226,9 @@ def plan_archive(
     source_paths: list[Path] = [Path(s) for s in sources]
     output_path = Path(output)
 
+    fmt: str = options.format or infer_format(output_path) or DEFAULT_ARCHIVE_FORMAT
+    options = replace(options, format=fmt)
+
     try:
         # Plain strings still work at runtime
         options = replace(options, overwrite=OverwriteMode(options.overwrite))
@@ -265,7 +270,7 @@ def plan_archive(
             reason_if_unavailable=f"Source path does not exist: {missing[0]}",
         )
 
-    if not format_is_archive(options.format):
+    if not format_is_archive(fmt):
         return ArchivePlan(
             sources=source_paths,
             output=output_path,
@@ -273,13 +278,13 @@ def plan_archive(
             total_input_size=0,
             entry_count=len(source_paths),
             can_run=False,
-            reason_if_unavailable=f"Format does not support archives: {options.format}",
+            reason_if_unavailable=f"Format does not support archives: {fmt}",
         )
 
     if options.compression_level is not None:
         try:
             # The level belongs to the codec stage, or to the container itself
-            check_level(options.compression_level, format=options.format)
+            check_level(options.compression_level, format=fmt)
 
         except ValueError as e:
             return ArchivePlan(
@@ -480,6 +485,9 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
                 ),
                 plan=self.plan,
             )
+
+        # plan_archive resolves an unset format before a plan can run
+        assert self.plan.options.format is not None
 
         total: int = self.plan.total_input_size
         try:

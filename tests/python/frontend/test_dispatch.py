@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from compresso.frontend._formats import infer_format
 from compresso.frontend.api import CompressionJob, DecompressionJob
 from compresso.frontend.archive_api import ArchiveJob, ExtractJob
 from compresso.frontend.dispatch import (
@@ -14,7 +15,6 @@ from compresso.frontend.dispatch import (
     ExtractRequest,
     default_archive_output,
     format_is_single_file,
-    infer_format,
     is_archive_format,
     looks_like_archive,
     plan_compress,

@@ -18,46 +18,21 @@ from .._core import (
     detect_format,
     format_is_archive,
     gzip_stored_name,
-    standalone_formats,
 )
 from .._core import get_default_backend_for_strategy as default_backend
 from .._levels import to_core_level
 from ..introspect.file_inspect import InspectResult
 from ..introspect.file_inspect import inspect as inspect_file
 from ..introspect.speeds import get_estimated_speeds
+from ._formats import (
+    STANDALONE_FORMATS,
+    STANDALONE_SUFFIXES,
+    canonical_standalone_format,
+)
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 from .archive_api import _OVERWRITE_CODES, OverwriteMode
 
 MB = 1024 * 1024
-
-_STANDALONE = standalone_formats()
-
-# Single-file container formats, as opposed to the Compresso container or an
-# archive, including aliases
-STANDALONE_FORMATS: dict[str, str] = {
-    alias: f["name"] for f in _STANDALONE for alias in (f["name"], *f["aliases"])
-}
-
-# Suffix each standalone format conventionally uses, for naming an output the
-# caller did not name themselves
-STANDALONE_SUFFIXES: dict[str, str] = {
-    f["name"]: "." + f["exts"][0] for f in _STANDALONE
-}
-
-
-def canonical_standalone_format(name: str | None) -> str | None:
-    """Return the canonical name for a single-file format, or None.
-
-    Args:
-        name: A format as the user wrote it, e.g. "gz".
-
-    Returns:
-        The canonical name (e.g. "gzip"), or None if it is not a single-file
-        format — which includes None, archive formats and unknown names.
-    """
-    if not name:
-        return None
-    return STANDALONE_FORMATS.get(name.lower())
 
 
 @dataclass(frozen=True)
