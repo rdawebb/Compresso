@@ -34,7 +34,7 @@ jobs:
             libsnappy-dev
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
       - name: Sync dependencies
         run: uv sync --all-extras
@@ -143,7 +143,7 @@ jobs:
           echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: ${{ matrix.python }}
 
@@ -193,7 +193,7 @@ jobs:
           "PKG_CONFIG=$env:GITHUB_WORKSPACE\.venv\Scripts\pkgconf.exe" >> $env:GITHUB_ENV
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: "3.14"
 
