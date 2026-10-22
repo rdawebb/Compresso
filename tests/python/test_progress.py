@@ -41,46 +41,37 @@ class Operation(NamedTuple):
     run: Callable[..., Any]
 
 
-def compress_comp(src: Path, out: Path, **kw: Any) -> None:
-    """Compress `src` to a .comp with zstd."""
-    compress_file(src, out / "out.comp", "zstd", "balanced", 3, **kw)
-
-
-def compress_gz(src: Path, out: Path, **kw: Any) -> None:
-    """Compress `src` to a standalone .gz."""
-    _core.compress_standalone(src, out / "out.gz", "gzip", 1, **kw)
-
-
-def archive_tar(src: Path, out: Path, **kw: Any) -> None:
-    """Archive `src` as a plain tar."""
-    create_archive(out / "out.tar", "tar", [src], **kw)
-
-
-def archive_tar_zst(src: Path, out: Path, **kw: Any) -> None:
-    """Archive `src` as a zstd-compressed tar."""
-    create_archive(out / "out.tar.zst", "tar.zst", [src], **kw)
-
-
-def archive_zip(src: Path, out: Path, **kw: Any) -> None:
-    """Archive `src` as a zip.
-
-    The only progress comes from libzip's own callback during zip_close.
-    """
-    create_archive(out / "out.zip", "zip", [src], **kw)
-
-
-def extract_tar(src: Path, out: Path, **kw: Any) -> None:
-    """Extract the tar at `src` into `out`."""
-    extract_archive(src, out, [], **kw)
-
-
 OPERATIONS = {
-    "comp": Operation("big_compressible_file", compress_comp),
-    "gz": Operation("big_compressible_file", compress_gz),
-    "tar": Operation("source_tree", archive_tar),
-    "tar.zst": Operation("source_tree", archive_tar_zst),
-    "zip": Operation("source_tree", archive_zip),
-    "extract-tar": Operation("source_tar", extract_tar),
+    "comp": Operation(
+        "big_compressible_file",
+        lambda src, out, **kw: compress_file(
+            src, out / "out.comp", "zstd", "balanced", 3, **kw
+        ),
+    ),
+    "gz": Operation(
+        "big_compressible_file",
+        lambda src, out, **kw: _core.compress_standalone(
+            src, out / "out.gz", "gzip", 1, **kw
+        ),
+    ),
+    "tar": Operation(
+        "source_tree",
+        lambda src, out, **kw: create_archive(out / "out.tar", "tar", [src], **kw),
+    ),
+    "tar.zst": Operation(
+        "source_tree",
+        lambda src, out, **kw: create_archive(
+            out / "out.tar.zst", "tar.zst", [src], **kw
+        ),
+    ),
+    # The only progress comes from libzip's own callback during zip_close
+    "zip": Operation(
+        "source_tree",
+        lambda src, out, **kw: create_archive(out / "out.zip", "zip", [src], **kw),
+    ),
+    "extract-tar": Operation(
+        "source_tar", lambda src, out, **kw: extract_archive(src, out, [], **kw)
+    ),
 }
 
 
@@ -98,14 +89,7 @@ def leftovers(out: Path) -> list[Path]:
 
 @pytest.fixture(scope="module")
 def dirs_only_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A tree with no file data, so archiving it never enters a data loop.
-
-    Args:
-        tmp_path_factory: Pytest temporary path factory fixture.
-
-    Returns:
-        The path to the tree's root.
-    """
+    """A tree with no file data, so archiving it never enters a data loop."""
     root = tmp_path_factory.mktemp("progress") / "dirs"
     (root / "a" / "b").mkdir(parents=True)
 
@@ -114,14 +98,7 @@ def dirs_only_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(params=list(OPERATIONS.values()), ids=list(OPERATIONS))
 def op(request: pytest.FixtureRequest) -> Operation:
-    """Each row of `OPERATIONS`.
-
-    Args:
-        request: Pytest request fixture.
-
-    Returns:
-        The operation.
-    """
+    """Each row of `OPERATIONS`."""
     return request.param
 
 

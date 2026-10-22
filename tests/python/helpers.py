@@ -15,8 +15,6 @@ from compresso.frontend._job import ThreadedJob
 from compresso.frontend.api import CompressionJob, DecompressionJob
 from compresso.frontend.archive_api import ArchiveJob, ExtractJob
 
-ARCHIVE_FORMATS = [("tar", ".tar"), ("tar.zst", ".tar.zst"), ("zip", ".zip")]
-
 # Crosses the 1 MiB report floor (`CTX_MIN_INTERVAL`) several times over
 PROGRESS_FILE_SIZE = 4 * 1024 * 1024
 
@@ -66,18 +64,10 @@ class Recorder:
         done, total = args[-2:]
         self.calls.append((int(done), int(total)))
 
-    @property
-    def dones(self) -> list[int]:
-        """The done count of each report, in order.
-
-        Returns:
-            A list of done counts, one per report.
-        """
-        return [done for done, _ in self.calls]
-
     def assert_monotonic(self) -> None:
         """Assert that progress never went backwards."""
-        assert self.dones == sorted(self.dones), "progress went backwards"
+        dones = [done for done, _ in self.calls]
+        assert dones == sorted(dones), "progress went backwards"
 
     def assert_progressed(self) -> None:
         """Assert that progress arrived during the job, not only at the end."""
@@ -109,32 +99,26 @@ class JobFactory(NamedTuple):
     make: Callable[[Path, Path], ThreadedJob[Any]]
 
 
-def compression_job(src: Path, out: Path) -> CompressionJob:
-    """Compress `src` through a `CompressionJob`."""
-    return CompressionJob.from_file(src=src, dest=out / "job.comp")
-
-
-def decompression_job(src: Path, out: Path) -> DecompressionJob:
-    """Decompress `src` through a `DecompressionJob`."""
-    return DecompressionJob.from_file(src=src, dest=out / "job.out")
-
-
-def archive_job(src: Path, out: Path) -> ArchiveJob:
-    """Archive `src` as a tar.zst through an `ArchiveJob`."""
-    return ArchiveJob.from_paths(sources=[src], output=out / "job.tar.zst")
-
-
-def extract_job(src: Path, out: Path) -> ExtractJob:
-    """Extract the archive at `src` through an `ExtractJob`."""
-    return ExtractJob.from_archive(archive=src, output_dir=out)
-
-
 # The sources are fixtures in conftest.py
 JOBS = {
-    "compress": JobFactory("big_compressible_file", compression_job),
-    "decompress": JobFactory("compressed_file", decompression_job),
-    "archive": JobFactory("source_tree", archive_job),
-    "extract": JobFactory("source_tar", extract_job),
+    "compress": JobFactory(
+        "big_compressible_file",
+        lambda src, out: CompressionJob.from_file(src=src, dest=out / "job.comp"),
+    ),
+    "decompress": JobFactory(
+        "compressed_file",
+        lambda src, out: DecompressionJob.from_file(src=src, dest=out / "job.out"),
+    ),
+    "archive": JobFactory(
+        "source_tree",
+        lambda src, out: ArchiveJob.from_paths(
+            sources=[src], output=out / "job.tar.zst"
+        ),
+    ),
+    "extract": JobFactory(
+        "source_tar",
+        lambda src, out: ExtractJob.from_archive(archive=src, output_dir=out),
+    ),
 }
 
 

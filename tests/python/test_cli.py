@@ -73,14 +73,7 @@ def invoke(*args: str | Path, expect: int | None = EXIT_OK) -> Result:
 
 @pytest.fixture
 def payload(tmp_path: Path) -> Path:
-    """A small incompressible file, below the progress bar threshold.
-
-    Args:
-        tmp_path: The temporary directory to use for the payload.
-
-    Returns:
-        The path to the payload file.
-    """
+    """A small incompressible file, below the progress bar threshold."""
     path = tmp_path / "payload.bin"
     path.write_bytes(os.urandom(PAYLOAD_SIZE))
 
@@ -89,16 +82,7 @@ def payload(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def source_tree(tmp_path: Path) -> Path:
-    """A small directory tree to archive.
-
-    Function-scoped because some tests delete it.
-
-    Args:
-        tmp_path: The temporary directory to use for the source tree.
-
-    Returns:
-        The path to the source tree root.
-    """
+    """A small directory tree to archive, function-scoped because some tests delete it."""
     root = tmp_path / "tree"
     root.mkdir()
     for i in range(3):
@@ -113,13 +97,6 @@ def make_archive(source_tree: Path, tmp_path: Path) -> Callable[[str], Path]:
 
     Built through the API rather than the CLI, and checked, so a broken setup
     cannot surface as a confusing failure later in the test.
-
-    Args:
-        source_tree: The tree to archive.
-        tmp_path: The directory to write the archive in.
-
-    Returns:
-        A function taking the format and returning the archive's path.
     """
 
     def make(fmt: str) -> Path:
@@ -149,15 +126,6 @@ def compress_target(
 
     The two take different paths through `compress`, but share its
     overwrite-mode handling.
-
-    Args:
-        request: Pytest request object.
-        payload: The single-file input.
-        source_tree: The directory input.
-        tmp_path: The directory to write the output in.
-
-    Returns:
-        The input, output and any extra arguments for the call.
     """
     if request.param == "file":
         return CompressTarget(payload, tmp_path / "out.comp", ())
@@ -175,14 +143,7 @@ class Bar:
 
 @pytest.fixture
 def bars(monkeypatch: pytest.MonkeyPatch) -> list[Bar]:
-    """Record each progress bar a command opens, still drawing the real one.
-
-    Args:
-        monkeypatch: Pytest monkeypatch fixture.
-
-    Returns:
-        The bars opened so far, in order.
-    """
+    """Record each progress bar a command opens, in order, still drawing the real one."""
     opened: list[Bar] = []
 
     @contextmanager
@@ -249,22 +210,6 @@ class TestFormatters:
 
 class TestAppStructure:
     """Test the package assembles into one app with every command registered."""
-
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "compress",
-            "decompress",
-            "archive",
-            "extract",
-            "inspect",
-            "benchmark",
-            "list",
-        ],
-    )
-    def test_command_is_registered(self, name: str) -> None:
-        """Test that each command appears in the top-level help."""
-        assert name in invoke("--help").output
 
     def test_commands_are_listed_in_workflow_order(self) -> None:
         """Test that the order is chosen in `__init__`, not inherited from import sorting.

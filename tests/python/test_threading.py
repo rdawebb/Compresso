@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from compresso._core import CancelToken
-from compresso.frontend._job import JobHandle, JobResult, ProgressCallback
+from compresso.frontend._job import JobHandle, JobResult
 from compresso.frontend.api import (
     CompressionJob,
     CompressionOptions,
@@ -80,11 +80,7 @@ class Gate:
 
 @pytest.fixture
 def gate() -> Iterator[Gate]:
-    """A gate that fails the test if it ever had to time out.
-
-    Yields:
-        The gate.
-    """
+    """A gate that fails the test if it ever had to time out."""
     g = Gate()
     yield g
     g.release()
@@ -93,16 +89,7 @@ def gate() -> Iterator[Gate]:
 
 @pytest.fixture(scope="module")
 def payload(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """An incompressible file past the report floor.
-
-    Shared by the whole module, so tests must only read it.
-
-    Args:
-        tmp_path_factory: Pytest temporary path factory fixture.
-
-    Returns:
-        The path to the created file.
-    """
+    """An incompressible file past the report floor, shared by the whole module."""
     path = tmp_path_factory.mktemp("threading") / "payload.bin"
     path.write_bytes(os.urandom(JOB_FILE_SIZE))
 
@@ -290,16 +277,19 @@ class TestRunAsync:
     """Test `run_async`, the asyncio veneer over the same threading path."""
 
     def test_awaits_to_a_result(self, payload: Path, tmp_path: Path) -> None:
-        """Test that awaiting returns the same JobResult a sync run would."""
+        """Test that awaiting returns the same JobResult a sync run would, with progress."""
         output = tmp_path / "async.comp"
+        recorder = Recorder()
 
         async def main() -> JobResult:
-            return await quick_job(payload, output).run_async()
+            return await quick_job(payload, output).run_async(progress=recorder)
 
         result = asyncio.run(main())
 
         assert result.ok is True
         assert output.stat().st_size > 0
+        recorder.assert_progressed()
+        recorder.assert_monotonic()
 
     def test_does_not_block_the_event_loop(
         self, payload: Path, tmp_path: Path, gate: Gate
@@ -344,50 +334,9 @@ class TestRunAsync:
         assert gate.token.cancelled is True
         assert not output.exists()
 
-    def test_reports_progress(self, payload: Path, tmp_path: Path) -> None:
-        """Test that progress reporting works the same way through the async path."""
-        recorder = Recorder()
-
-        async def main() -> JobResult:
-            return await quick_job(payload, tmp_path / "async.comp").run_async(
-                progress=recorder
-            )
-
-        assert asyncio.run(main()).ok is True
-        recorder.assert_progressed()
-        recorder.assert_monotonic()
-
 
 class TestParallelism:
     """Tests started jobs run at the same time."""
-
-    def test_two_jobs_overlap_in_time(self, payload: Path, tmp_path: Path) -> None:
-        """Test that both jobs are mid-flight at the same moment."""
-        barrier = threading.Barrier(2, timeout=HOLD_TIMEOUT)
-
-        def meet_once() -> ProgressCallback:
-            met = False
-
-            def on_progress(fraction: float, done: int, total: int) -> None:
-                nonlocal met
-                if not met:
-                    met = True
-                    barrier.wait()
-
-            return on_progress
-
-        with ExitStack() as stack:
-            handles = [
-                stack.enter_context(
-                    quick_job(payload, tmp_path / f"p{i}.comp").start(
-                        progress=meet_once()
-                    )
-                )
-                for i in range(2)
-            ]
-            results = [h.result(timeout=30) for h in handles]
-
-        assert all(r.ok for r in results), [r.error for r in results]
 
     def test_parallel_jobs_produce_correct_output(self, tmp_path: Path) -> None:
         """Test that concurrency must not corrupt anything.
@@ -426,7 +375,11 @@ class TestParallelism:
     def test_cancelling_one_job_leaves_the_others_alone(
         self, payload: Path, tmp_path: Path
     ) -> None:
-        """Test that each job's token is its own."""
+        """Test that each job's token is its own.
+
+        All three are held at their gates at once, so this also shows started
+        jobs run at the same time.
+        """
         gates = [Gate() for _ in range(3)]
 
         with ExitStack() as stack:
@@ -463,14 +416,19 @@ class TestParallelism:
             options=ArchiveOptions(format="zip"),
         )
 
-        ticks = 0
+        # Holding the GIL through zip_close would show as one gap spanning most
+        # of the job; a gap ratio survives slow runners and coarse sleep timers
+        start = last = time.perf_counter()
+        max_gap = 0.0
         with job.start() as handle:
             while not handle.done():
                 time.sleep(0.001)
-                ticks += 1
+                now = time.perf_counter()
+                max_gap = max(max_gap, now - last)
+                last = now
             assert handle.result(timeout=30).ok is True
 
-        assert ticks >= 10, ticks
+        assert max_gap < (last - start) / 2, (max_gap, last - start)
 
 
 class TestThreadsOption:

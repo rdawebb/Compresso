@@ -146,12 +146,21 @@ class TestStandaloneDecoding:
         assert not caplog.records
 
     @pytest.mark.parametrize(
-        "trailing", [b"junk", bytes(3)], ids=["garbage", "unaligned-padding"]
+        ("fixture", "trailing"),
+        [
+            ("xz_single.xz", b"junk"),
+            ("xz_single.xz", bytes(3)),
+            ("lz4_single.lz4", b"junk"),
+            ("lz4_single.lz4", bytes(8)),
+        ],
+        ids=["xz-garbage", "xz-unaligned-padding", "lz4-garbage", "lz4-zero-padding"],
     )
-    def test_xz_rejects_trailing_data(self, tmp_path: Path, trailing: bytes) -> None:
-        """Test that xz, as the xz tool does, fails on anything but padding."""
-        source = tmp_path / "trailing.xz"
-        source.write_bytes((INTEROP / "xz_single.xz").read_bytes() + trailing)
+    def test_rejects_trailing_data(
+        self, tmp_path: Path, fixture: str, trailing: bytes
+    ) -> None:
+        """Test that xz and lz4, as their tools do, fail on anything but padding or a frame."""
+        source = tmp_path / f"trailing-{fixture}"
+        source.write_bytes((INTEROP / fixture).read_bytes() + trailing)
         restored = tmp_path / "restored"
 
         with pytest.raises(CorruptDataError):
@@ -168,20 +177,6 @@ class TestStandaloneDecoding:
         _core.decompress_standalone(str(source), str(restored))
 
         assert restored.read_bytes() == PART1
-
-    @pytest.mark.parametrize(
-        "trailing", [b"junk", bytes(8)], ids=["garbage", "zero-padding"]
-    )
-    def test_lz4_rejects_trailing_data(self, tmp_path: Path, trailing: bytes) -> None:
-        """Test that lz4, as the lz4 tool does, fails on anything but a frame."""
-        source = tmp_path / "trailing.lz4"
-        source.write_bytes((INTEROP / "lz4_single.lz4").read_bytes() + trailing)
-        restored = tmp_path / "restored"
-
-        with pytest.raises(CorruptDataError):
-            _core.decompress_standalone(str(source), str(restored))
-
-        assert not restored.exists()
 
     @pytest.mark.parametrize("algo", ["zlib", "bzip2", "lzma", "lz4"])
     def test_comp_rejects_data_after_its_payload(

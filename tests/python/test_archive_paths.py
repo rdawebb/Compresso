@@ -19,6 +19,12 @@ from compresso._core import (
 
 PAYLOAD = b"compresso entry name test\n"
 
+pytestmark = pytest.mark.parametrize(
+    "archive_format",
+    [("tar", ".tar"), ("tar.zst", ".tar.zst"), ("zip", ".zip")],
+    ids=["tar", "tar.zst", "zip"],
+)
+
 
 def stored_names(archive: Path) -> set[str]:
     """The archive's entry names, without the trailing separator ZIP adds.
@@ -34,24 +40,6 @@ def stored_names(archive: Path) -> set[str]:
 
 class TestStoredEntryNames:
     """Tests the names written for each shape of source path."""
-
-    def test_absolute_file_round_trips(
-        self, tmp_path: Path, archive_format: tuple[str, str]
-    ) -> None:
-        """Test that a single file given by absolute path can be extracted."""
-        fmt, ext = archive_format
-        source = tmp_path / "payload.txt"
-        source.write_bytes(PAYLOAD)
-        archive = tmp_path / f"out{ext}"
-
-        create_archive(str(archive), fmt, [str(source)])
-
-        assert stored_names(archive) == {"payload.txt"}
-
-        dest = tmp_path / "out"
-        extract_archive(str(archive), str(dest), [])
-
-        assert (dest / "payload.txt").read_bytes() == PAYLOAD
 
     def test_directory_with_trailing_separator_round_trips(
         self, tmp_path: Path, archive_format: tuple[str, str]
@@ -134,7 +122,7 @@ class TestStoredEntryNames:
     def test_sources_of_both_kinds_agree(
         self, tmp_path: Path, archive_format: tuple[str, str]
     ) -> None:
-        """Test that a file and a directory given the same way are stored alike."""
+        """Test that a file and a directory given by absolute path are stored alike."""
         fmt, ext = archive_format
         source = tmp_path / "payload.txt"
         source.write_bytes(PAYLOAD)

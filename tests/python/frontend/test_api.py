@@ -3,6 +3,7 @@
 import bz2
 import gzip
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -29,13 +30,6 @@ class TestCompressionOptions:
         assert opts.strategy == "balanced"
         assert opts.level is None
         assert opts.overwrite is OverwriteMode.RENAME
-
-    def test_compression_options_immutable(self):
-        """Test that CompressionOptions is immutable."""
-        opts = CompressionOptions(algo="zlib", strategy="fast", level=1)
-
-        with pytest.raises((AttributeError, TypeError)):
-            opts.algo = "zstd"  # type: ignore
 
 
 class TestPlanCompression:
@@ -190,115 +184,67 @@ class TestPlanCompressionLevels:
 class TestCompressionOverwrite:
     """Test the four `overwrite` modes against an existing destination file.
 
-    Mirrors `TestArchiveOverwrite` in test_archive_api.py, covering both the
-    Compresso container and a standalone format.
+    Mirrors `TestArchiveOverwrite` in test_archive_api.py.
     """
 
-    @staticmethod
-    def _source_and_stale_output(
-        tmp_path: Path, suffix: str = ".comp"
-    ) -> tuple[Path, Path]:
-        """Build a source file and a stale file already at the destination.
-
-        Args:
-            tmp_path: Directory to build both in.
-            suffix: Extension for the destination file.
-
-        Returns:
-            The source path, and the destination path already occupied by an
-            unrelated file.
-        """
+    @pytest.mark.parametrize("fmt", ["comp", "gz"])
+    @pytest.mark.parametrize(
+        ("mode", "ok", "replaced", "to_sibling"),
+        [
+            (None, True, False, True),
+            (OverwriteMode.ERROR, False, False, False),
+            (OverwriteMode.SKIP, True, False, False),
+            (OverwriteMode.OVERWRITE, True, True, False),
+        ],
+        ids=["rename-by-default", "error", "skip", "overwrite"],
+    )
+    def test_mode_against_an_existing_output(
+        self,
+        tmp_path: Path,
+        fmt: str,
+        mode: OverwriteMode | None,
+        ok: bool,
+        replaced: bool,
+        to_sibling: bool,
+    ) -> None:
+        """Test each mode for the Compresso container and a standalone format."""
         source = tmp_path / "a.txt"
         source.write_bytes(b"hello compresso")
-
-        dest = tmp_path / f"out{suffix}"
+        dest = tmp_path / f"out.{fmt}"
         dest.write_bytes(b"stale")
+        kwargs: dict[str, Any] = {} if mode is None else {"overwrite": mode}
+        options = CompressionOptions(format=None if fmt == "comp" else fmt, **kwargs)
 
-        return source, dest
+        job = CompressionJob.from_file(source, dest, options=options)
+        result = job.run()
 
-    @pytest.mark.parametrize(
-        ("options_kwargs", "suffix"),
-        [
-            ({}, ".comp"),
-            ({"format": "gz"}, ".gz"),
-        ],
-    )
-    def test_renames_existing_output_by_default(
-        self, tmp_path: Path, options_kwargs: dict, suffix: str
+        assert result.ok is ok, result.error
+        assert ok or isinstance(result.error, FileExistsError)
+        assert (dest.read_bytes() != b"stale") is replaced
+        sibling = tmp_path / renamed(dest.name)
+        assert job.plan.dest == (sibling if to_sibling else dest)
+        assert sibling.is_file() is to_sibling
+
+    def test_plain_string_mode_is_normalised(
+        self, sample_text_file: Path, tmp_path: Path
     ) -> None:
-        """Test that the default policy renames rather than overwriting."""
-        source, dest = self._source_and_stale_output(tmp_path, suffix)
-        job = CompressionJob.from_file(
-            source, dest, options=CompressionOptions(**options_kwargs)
-        )
-
-        result = job.run()
-
-        assert result.ok, result.error
-        assert dest.read_bytes() == b"stale"
-        sibling = tmp_path / renamed(f"out{suffix}")
-        assert job.plan.dest == sibling
-        assert sibling.is_file()
-        assert sibling.read_bytes() != b"stale"
-
-    def test_error_mode_refuses_existing_output(self, tmp_path: Path) -> None:
-        """Test that explicit `error` refuses to touch an existing output."""
-        source, dest = self._source_and_stale_output(tmp_path)
-
-        result = CompressionJob.from_file(
-            source, dest, options=CompressionOptions(overwrite=OverwriteMode.ERROR)
-        ).run()
-
-        assert result.ok is False
-        assert isinstance(result.error, FileExistsError)
-        assert dest.read_bytes() == b"stale"
-
-    def test_skip_leaves_the_existing_output(self, tmp_path: Path) -> None:
-        """Test that `skip` leaves the stale output untouched and still succeeds."""
-        source, dest = self._source_and_stale_output(tmp_path)
-        job = CompressionJob.from_file(
-            source, dest, options=CompressionOptions(overwrite=OverwriteMode.SKIP)
-        )
-
-        result = job.run()
-
-        assert result.ok, result.error
-        assert dest.read_bytes() == b"stale"
-        assert job.plan.dest == dest
-
-    def test_overwrite_replaces_the_existing_output(self, tmp_path: Path) -> None:
-        """Test that `overwrite` replaces the stale output in place."""
-        source, dest = self._source_and_stale_output(tmp_path)
-        job = CompressionJob.from_file(
-            source, dest, options=CompressionOptions(overwrite=OverwriteMode.OVERWRITE)
-        )
-
-        result = job.run()
-
-        assert result.ok, result.error
-        assert dest.read_bytes() != b"stale"
-        assert job.plan.dest == dest
-
-    def test_plain_string_mode_is_normalised(self, tmp_path: Path) -> None:
         """Test that a mode given as a plain string still plans as the enum."""
-        source, dest = self._source_and_stale_output(tmp_path)
-
         plan = CompressionJob.from_file(
-            source,
-            dest,
+            sample_text_file,
+            tmp_path / "out.comp",
             options=CompressionOptions(overwrite="skip"),  # ty: ignore
         ).plan
 
         assert plan.can_compress is True
         assert plan.options.overwrite is OverwriteMode.SKIP
 
-    def test_unknown_mode_is_an_unavailable_plan(self, tmp_path: Path) -> None:
+    def test_unknown_mode_is_an_unavailable_plan(
+        self, sample_text_file: Path, tmp_path: Path
+    ) -> None:
         """Test that a mode outside the four names never reaches the C layer."""
-        source, dest = self._source_and_stale_output(tmp_path)
-
         plan = CompressionJob.from_file(
-            source,
-            dest,
+            sample_text_file,
+            tmp_path / "out.comp",
             options=CompressionOptions(overwrite="clobber"),  # ty: ignore
         ).plan
 

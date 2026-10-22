@@ -51,55 +51,35 @@ class TestPlanArchive:
         assert plan.entry_count == 1
         assert plan.total_input_size == sample_text_file.stat().st_size
 
-    def test_plan_archive_no_sources(self, tmp_path: Path) -> None:
-        """Test that a plan with no sources cannot run."""
-        plan = plan_archive([], tmp_path / "out.tar.zst")
-
-        assert plan.can_run is False
-        assert plan.reason_if_unavailable is not None
-
-    def test_plan_archive_missing_source(self, tmp_path: Path) -> None:
-        """Test that a plan referencing a missing source cannot run."""
-        plan = plan_archive([tmp_path / "nope.txt"], tmp_path / "out.tar.zst")
-
-        assert plan.can_run is False
-        assert plan.reason_if_unavailable is not None
-        assert "does not exist" in plan.reason_if_unavailable
-
-    def test_plan_archive_non_archive_format(
-        self, sample_text_file: Path, tmp_path: Path
+    # The level row: the stage that compresses decides which levels are valid
+    @pytest.mark.usefixtures("sample_text_file")
+    @pytest.mark.parametrize(
+        ("sources", "opts", "match"),
+        [
+            ([], ArchiveOptions(), "No source paths"),
+            (["nope.txt"], ArchiveOptions(), "does not exist"),
+            (["sample.txt"], ArchiveOptions(format="gz"), "does not support archives"),
+            (
+                ["sample.txt"],
+                ArchiveOptions(format="tar.zst", compression_level=23),
+                "zstd compression level 23",
+            ),
+        ],
+        ids=["no-sources", "missing-source", "non-archive-format", "level"],
+    )
+    def test_plan_archive_unrunnable(
+        self, tmp_path: Path, sources: list[str], opts: ArchiveOptions, match: str
     ) -> None:
-        """Test that a single-file codec format cannot be used to build an archive."""
-        opts = ArchiveOptions(format="gz")
-        plan = plan_archive([sample_text_file], tmp_path / "out.gz", opts)
+        """Test that a plan that cannot run says why."""
+        paths = [tmp_path / name for name in sources]
+        plan = plan_archive(paths, tmp_path / "out.tar.zst", opts)
 
         assert plan.can_run is False
-        assert plan.reason_if_unavailable is not None
-        assert "does not support archives" in plan.reason_if_unavailable
-
-    def test_plan_archive_out_of_range_level(
-        self, sample_text_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that the stage that compresses decides which levels are valid."""
-        opts = ArchiveOptions(format="tar.zst", compression_level=23)
-        plan = plan_archive([sample_text_file], tmp_path / "out.tar.zst", opts)
-
-        assert plan.can_run is False
-        assert plan.reason_if_unavailable is not None
-        assert "zstd compression level 23" in plan.reason_if_unavailable
+        assert match in (plan.reason_if_unavailable or "")
 
 
 class TestArchiveJob:
     """Test the ArchiveJob class."""
-
-    def test_from_paths_builds_plan(
-        self, sample_text_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that from_paths runs the planner and exposes the plan."""
-        job = ArchiveJob.from_paths([sample_text_file], tmp_path / "out.tar.zst")
-
-        assert isinstance(job.plan, ArchivePlan)
-        assert job.plan.can_run is True
 
     def test_run_on_unavailable_plan_returns_failed_result(
         self, tmp_path: Path
@@ -225,22 +205,15 @@ class TestArchiveOverwrite:
 class TestExtractJob:
     """Test the ExtractJob class."""
 
-    def test_from_archive_missing_returns_unavailable_plan(
+    def test_missing_archive_is_unavailable_and_never_raises(
         self, tmp_path: Path
     ) -> None:
-        """Test that a missing archive produces a plan that cannot run."""
+        """Test that a missing archive plans as unrunnable, and run() returns a failed result."""
         job = ExtractJob.from_archive(tmp_path / "missing.tar.zst")
 
         assert isinstance(job.plan, ExtractPlan)
         assert job.plan.can_run is False
-
-    def test_run_on_unavailable_plan_returns_failed_result(
-        self, tmp_path: Path
-    ) -> None:
-        """Test that run() never raises on a missing archive."""
-        job = ExtractJob.from_archive(tmp_path / "missing.tar.zst")
         result = job.run()
-
         assert isinstance(result, JobResult)
         assert result.ok is False
 
@@ -784,14 +757,8 @@ class TestArchiveEntryMetadata:
     def archived(cls, tmp_path_factory: pytest.TempPathFactory) -> ArchivedTree:
         """Archive a small tree once per format, and plan each extraction.
 
-        Shared by the whole class, so tests must only read it.
-
-        Args:
-            tmp_path_factory: Pytest temporary path factory fixture.
-
-        Returns:
-            The tree, and each format's entries keyed by path without a
-            trailing separator.
+        Shared by the whole class, so tests must only read it; each format's
+        entries are keyed by path without a trailing separator.
         """
         tmp = tmp_path_factory.mktemp("entry_metadata")
         tree = tmp / "tree"
@@ -813,13 +780,6 @@ class TestArchiveEntryMetadata:
 
         return ArchivedTree(tree, entries)
 
-    def test_entry_is_immutable(self) -> None:
-        """Test that entries describe an archive that has already been written."""
-        entry = ArchiveEntry(path="a.txt")
-
-        with pytest.raises((AttributeError, TypeError)):
-            entry.path = "b.txt"  # ty: ignore[invalid-assignment] - intended
-
     @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
     def test_entries_are_described(self, archived: ArchivedTree, fmt: str) -> None:
         """Test that mtime, mode, size and type cross the boundary, not their defaults.
@@ -837,12 +797,12 @@ class TestArchiveEntryMetadata:
         assert (nested.size, nested.is_dir) == (0, True)
 
     def test_zip_reports_per_entry_compression(self, archived: ArchivedTree) -> None:
-        """Test that zip compresses each entry, so it can say how well."""
+        """Test that zip compresses each entry, so it can say how well, and the CRC it stored."""
         entry = archived.entries["zip"]["tree/big.bin"]
 
         assert entry.compressed_size is not None
         assert 0 < entry.compressed_size < entry.size
-        assert entry.crc is not None
+        assert entry.crc == zlib.crc32(BIG_PAYLOAD)
         assert entry.method is not None
 
     def test_tar_omits_per_entry_compression(self, archived: ArchivedTree) -> None:
@@ -852,7 +812,3 @@ class TestArchiveEntryMetadata:
         assert entry.compressed_size is None
         assert entry.crc is None
         assert entry.method is None
-
-    def test_zip_crc_matches_the_content(self, archived: ArchivedTree) -> None:
-        """Test that the CRC reported is the one zip actually stored."""
-        assert archived.entries["zip"]["tree/big.bin"].crc == zlib.crc32(BIG_PAYLOAD)

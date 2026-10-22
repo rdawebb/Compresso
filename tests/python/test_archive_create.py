@@ -47,17 +47,21 @@ class TestArchiveErrorTypes:
     def test_failed_walk_reports_its_own_error(
         self, sample_text_file: Path, tmp_path: Path, fmt: str
     ) -> None:
-        """Test that abandoning the half-built archive doesn't replace the error."""
+        """Test that the walk's error wins, and the archive already there is kept."""
         missing = tmp_path / "missing"
         output = tmp_path / f"out.{fmt}"
+        output.write_bytes(b"keep me")
 
         with pytest.raises(FileNotFoundError) as info:
             _core.create_archive(
-                str(output), fmt, [str(sample_text_file), str(missing)]
+                str(output), fmt, [str(sample_text_file), str(missing)], overwrite=2
             )
 
         assert info.value.filename == str(missing)
-        assert sorted(p.name for p in tmp_path.iterdir()) == [sample_text_file.name]
+        assert output.read_bytes() == b"keep me"
+        assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+            [output.name, sample_text_file.name]
+        )
 
     @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_unwritable_destination_is_an_os_error(
@@ -467,26 +471,3 @@ class TestZipModesAndSymlinks:
             info = zf.getinfo("src/link")
             assert stat.S_ISLNK(info.external_attr >> 16)
             assert zf.read(info) == b"target"
-
-
-class TestOutputsCommitOnlyOnSuccess:
-    """Test that outputs go through a temp file, so a failure leaves no trace."""
-
-    @pytest.mark.parametrize("fmt", ["tar", "tar.gz", "zip"])
-    def test_failed_archive_creation_keeps_the_existing_file(
-        self, sample_text_file: Path, tmp_path: Path, fmt: str
-    ) -> None:
-        """Test that an archive that fails part way never replaces the one there."""
-        existing = tmp_path / f"existing.{fmt}"
-        existing.write_bytes(b"keep me")
-
-        with pytest.raises(FileNotFoundError):
-            _core.create_archive(
-                str(existing),
-                fmt,
-                [str(sample_text_file), str(tmp_path / "missing")],
-                overwrite=2,
-            )
-
-        assert existing.read_bytes() == b"keep me"
-        assert not list(tmp_path.glob(".compresso-*"))

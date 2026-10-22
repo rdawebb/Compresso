@@ -615,14 +615,7 @@ class TestLevelValidation:
 
 @pytest.fixture(scope="module")
 def several_blocks(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Compressible input that spans several zstd jobs and xz blocks at level 1.
-
-    Args:
-        tmp_path_factory: Pytest temporary path factory fixture.
-
-    Returns:
-        The path to the created file.
-    """
+    """Compressible input that spans several zstd jobs and xz blocks at level 1."""
     rnd = random.Random(0)
     path = tmp_path_factory.mktemp("threads") / "input.bin"
     path.write_bytes(b"".join(rnd.randbytes(4096) * 4 for _ in range(512)))

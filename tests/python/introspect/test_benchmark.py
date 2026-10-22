@@ -79,24 +79,6 @@ class TestPrintResults:
 
         assert capsys.readouterr().out == "No results to display.\n"
 
-    def test_print_results_with_single_result(self, capsys) -> None:
-        """Test printing results with a single result."""
-        result = BenchmarkResult(
-            algo="zlib",
-            strategy="balanced",
-            level=6,
-            compress_time=1.0,
-            decompress_time=0.5,
-            input_size=1000000,
-            compressed_size=500000,
-        )
-
-        print_results([result])
-        captured = capsys.readouterr()
-
-        # Should contain algo name
-        assert "zlib" in captured.out.lower()
-
     def test_print_results_with_multiple_results(self, capsys) -> None:
         """Test printing results with multiple results."""
         results = [
