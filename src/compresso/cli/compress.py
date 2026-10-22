@@ -7,16 +7,9 @@ from pathlib import Path
 from typing import Annotated
 
 from .._core import BackendError, Error, HeaderError
-from ..frontend.api import CompressionJob, CompressionOptions
-from ..frontend.archive_api import ArchiveJob, ArchiveOptions, OverwriteMode
-from ..frontend.dispatch import (
-    DEFAULT_ARCHIVE_FORMAT,
-    default_archive_output,
-    format_is_single_file,
-    infer_format,
-    is_archive_format,
-    resolve_single_output,
-)
+from ..frontend.api import CompressionJob
+from ..frontend.archive_api import ArchiveJob, OverwriteMode
+from ..frontend.dispatch import CompressRequest, plan_compress
 from ._app import app
 from ._render import (
     BAR_THRESHOLD,
@@ -31,47 +24,17 @@ from ._render import (
 )
 
 
-def _compress_one_file(
-    source: Path,
-    output: Path | None,
-    fmt: str | None,
-    algo: str | None,
-    strategy: str,
-    level: int | None,
-    overwrite: OverwriteMode,
-    threads: int,
-    quiet: bool,
-) -> None:
+def _compress_one_file(job: CompressionJob, quiet: bool) -> None:
     """Compress a single file into a one-file container.
 
     Args:
-        source: The path to the file to compress.
-        output: The path to the output file or directory.
-        fmt: The format to use for compression.
-        algo: The algorithm to use for compression.
-        strategy: The strategy to use for compression.
-        level: The compression level to use.
-        overwrite: What to do when the destination file already exists.
-        threads: Worker threads, or 0 for one per core.
+        job: The planned job.
         quiet: Whether to suppress progress output.
     """
-    algo_lower: str | None = algo.lower() if algo else None
-    options = CompressionOptions(
-        algo=None if algo_lower == "auto" else algo_lower,
-        strategy=strategy.lower(),
-        level=level,
-        format=fmt,
-        overwrite=overwrite,
-        threads=threads,
-    )
-
-    job = CompressionJob.from_file(src=source, dest=None, options=options)
-    # Planned once to learn the default name, then repointed if `-o` moves it
-    dest: Path = resolve_single_output(output, job.plan.dest)
-    if dest != job.plan.dest:
-        job = CompressionJob.from_file(src=source, dest=dest, options=options)
-
     plan = job.plan
+    dest: Path = plan.dest
+    fmt: str | None = plan.options.format
+    level: int | None = plan.options.level
 
     if not plan.can_compress:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
@@ -83,7 +46,7 @@ def _compress_one_file(
             f"Algorithm:   {plan.backend_name}",
         ]
         if not fmt:
-            lines.append(f"Strategy:    {strategy}")
+            lines.append(f"Strategy:    {plan.options.strategy}")
         if level is not None:
             lines.append(f"Level:       {level}")
         print("\n".join(lines) + "\n")
@@ -127,38 +90,15 @@ def _compress_one_file(
         )
 
 
-def _archive_many(
-    sources: list[Path],
-    output: Path | None,
-    fmt: str,
-    level: int | None,
-    overwrite: OverwriteMode,
-    threads: int,
-    quiet: bool,
-) -> None:
+def _archive_many(job: ArchiveJob, quiet: bool) -> None:
     """Pack several paths, or a directory, into one archive.
 
     Args:
-        sources: The paths to the files or directories to archive.
-        output: The path to the output file or directory.
-        fmt: The format to use for compression.
-        level: The compression level to use.
-        overwrite: What to do when the destination archive already exists.
-        threads: Worker threads, or 0 for one per core.
+        job: The planned job.
         quiet: Whether to suppress progress output.
     """
-    destination: Path = (
-        output if output is not None else default_archive_output(sources[0], fmt)
-    )
-
-    options = ArchiveOptions(
-        format=fmt.lower(),
-        compression_level=level,
-        overwrite=overwrite,
-        threads=threads,
-    )
-    job = ArchiveJob.from_paths(sources=sources, output=destination, options=options)
     plan = job.plan
+    destination: Path = plan.output
 
     if not plan.can_run:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
@@ -324,39 +264,28 @@ def compress(
         if not inputs:
             fail("Error: No input paths given", EXIT_USAGE)
 
-        chosen: str | None = format or infer_format(output)
-        many: bool = len(inputs) > 1 or any(p.is_dir() for p in inputs)
+        algo_lower: str | None = algo.lower() if algo else None
+        request = CompressRequest(
+            inputs=inputs,
+            output=output,
+            format=format,
+            algo=None if algo_lower == "auto" else algo_lower,
+            strategy=strategy.lower(),
+            level=level,
+            overwrite=overwrite_mode,
+            threads=threads,
+        )
 
-        if format_is_single_file(chosen) and many:
-            fail(
-                f"Error: {chosen} holds a single file; "
-                f"use an archive format such as tar.{chosen} for several",
-                EXIT_USAGE,
-            )
+        try:
+            job = plan_compress(request)
 
-        if is_archive_format(chosen) or (many and chosen is None):
-            _archive_many(
-                sources=inputs,
-                output=output,
-                fmt=chosen or DEFAULT_ARCHIVE_FORMAT,
-                level=level,
-                overwrite=overwrite_mode,
-                threads=threads,
-                quiet=quiet,
-            )
+        except ValueError as e:
+            fail(f"Error: {e}", EXIT_USAGE)
 
+        if isinstance(job, ArchiveJob):
+            _archive_many(job, quiet)
         else:
-            _compress_one_file(
-                source=inputs[0],
-                output=output,
-                fmt=chosen,
-                algo=algo,
-                strategy=strategy,
-                level=level,
-                overwrite=overwrite_mode,
-                threads=threads,
-                quiet=quiet,
-            )
+            _compress_one_file(job, quiet)
 
     except KeyboardInterrupt:
         cancelled("Compression")

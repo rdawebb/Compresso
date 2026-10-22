@@ -15,7 +15,7 @@ from ..frontend.archive_api import (
     OverwriteMode,
     SymlinkMode,
 )
-from ..frontend.dispatch import looks_like_archive, resolve_single_output
+from ..frontend.dispatch import ExtractRequest, plan_extract
 from ._app import app
 from ._render import (
     BAR_THRESHOLD,
@@ -61,25 +61,14 @@ def list_entries(entries: list[ArchiveEntry]) -> None:
         print(f"{size:>10}  {'  ' * depth}{entry.path}{target}")
 
 
-def _extract_archive(
-    source: Path,
-    output_dir: Path | None,
-    list_only: bool,
-    options: ExtractOptions,
-    quiet: bool,
-) -> None:
+def _extract_archive(job: ExtractJob, list_only: bool, quiet: bool) -> None:
     """Unpack one archive.
 
     Args:
-        source: The path to the archive to extract.
-        output_dir: The directory to extract to.
+        job: The planned job.
         list_only: Whether to list entries only.
-        options: The extract options.
         quiet: Whether to suppress output.
     """
-    job = ExtractJob.from_archive(
-        archive=source, output_dir=output_dir, options=options
-    )
     plan = job.plan
 
     if not plan.can_run:
@@ -122,51 +111,22 @@ def _extract_archive(
         )
 
 
-def _decompress_one_file(
-    source: Path,
-    output: Path | None,
-    list_only: bool,
-    overwrite: OverwriteMode,
-    threads: int,
-    restore_name: bool,
-    quiet: bool,
-) -> None:
+def _decompress_one_file(job: DecompressionJob, list_only: bool, quiet: bool) -> None:
     """Unpack one single-file container: a `.comp` or a standalone codec.
 
     Args:
-        source: The path to the single-file container.
-        output: The output path.
+        job: The planned job.
         list_only: Whether to list entries only.
-        overwrite: What to do when the destination file already exists.
-        threads: Worker threads for xz, or 0 for one per core.
-        restore_name: Whether to name and date a gzip file's output as its
-            header does.
         quiet: Whether to suppress output.
     """
+    plan = job.plan
+    dest: Path = plan.dest
+
     if list_only:
         fail(
-            f"Error: {source.name} holds a single file, so there is nothing to list",
+            f"Error: {plan.src.name} holds a single file, so there is nothing to list",
             EXIT_USAGE,
         )
-
-    job = DecompressionJob.from_file(
-        src=source,
-        dest=None,
-        overwrite=overwrite,
-        threads=threads,
-        restore_name=restore_name,
-    )
-    dest: Path = resolve_single_output(output, job.plan.dest)
-    if dest != job.plan.dest:
-        job = DecompressionJob.from_file(
-            src=source,
-            dest=dest,
-            overwrite=overwrite,
-            threads=threads,
-            restore_name=restore_name,
-        )
-
-    plan = job.plan
 
     if not plan.can_run:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
@@ -352,15 +312,17 @@ def extract(
         threads=threads,
     )
 
+    request = ExtractRequest(
+        inputs=inputs, output=output, options=options, restore_name=name
+    )
+
     try:
-        for source in inputs:
-            if looks_like_archive(source):
-                _extract_archive(source, output, list_only, options, quiet)
+        for job in plan_extract(request):
+            if isinstance(job, ExtractJob):
+                _extract_archive(job, list_only, quiet)
 
             else:
-                _decompress_one_file(
-                    source, output, list_only, mode, threads, name, quiet
-                )
+                _decompress_one_file(job, list_only, quiet)
 
     except KeyboardInterrupt:
         cancelled("Extraction")

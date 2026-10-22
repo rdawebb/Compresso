@@ -7,14 +7,30 @@ from pathlib import Path
 
 import pytest
 
+from compresso.frontend.api import CompressionJob, DecompressionJob
+from compresso.frontend.archive_api import ArchiveJob, ExtractJob
 from compresso.frontend.dispatch import (
+    CompressRequest,
+    ExtractRequest,
     default_archive_output,
     format_is_single_file,
     infer_format,
     is_archive_format,
     looks_like_archive,
+    plan_compress,
+    plan_extract,
     resolve_single_output,
 )
+
+
+@pytest.fixture
+def tree(tmp_path: Path) -> Path:
+    """A directory holding one file."""
+    root = tmp_path / "tree"
+    root.mkdir()
+    (root / "a.txt").write_text("a")
+
+    return root
 
 
 class TestInferFormat:
@@ -135,3 +151,184 @@ class TestResolveSingleOutput:
         out = tmp_path / "out" / "y.gz"
 
         assert resolve_single_output(out, tmp_path / "x.gz") == out
+
+
+class TestPlanCompress:
+    """Test `compress` picks the job from its inputs and the format asked for."""
+
+    def test_one_file_becomes_a_compresso_container(self, small_file: Path) -> None:
+        """Test that one file with no format defaults to a `.comp` beside it."""
+        job = plan_compress(CompressRequest([small_file]))
+
+        assert isinstance(job, CompressionJob)
+        assert job.plan.options.format is None
+        assert job.plan.dest == small_file.with_name("small.txt.comp")
+
+    @pytest.mark.parametrize("fmt", ["gz", "bz2", "xz", "zst", "lz4", "sz"])
+    def test_one_file_into_a_standalone_container(
+        self, small_file: Path, fmt: str
+    ) -> None:
+        """Test that each single-file format compresses one file beside it."""
+        job = plan_compress(CompressRequest([small_file], format=fmt))
+
+        assert isinstance(job, CompressionJob)
+        assert job.plan.can_compress
+        assert job.plan.dest == small_file.with_name(f"small.txt.{fmt}")
+
+    def test_a_directory_becomes_an_archive(self, tree: Path) -> None:
+        """Test that a directory with no format defaults to a zip beside it."""
+        job = plan_compress(CompressRequest([tree]))
+
+        assert isinstance(job, ArchiveJob)
+        assert job.plan.options.format == "zip"
+        assert job.plan.output == tree.with_name("tree.zip")
+
+    def test_several_files_become_an_archive(
+        self, small_file: Path, tmp_path: Path
+    ) -> None:
+        """Test that several files are archived in the output's format."""
+        second = tmp_path / "second.txt"
+        second.write_text("b")
+        output = tmp_path / "both.tar"
+
+        job = plan_compress(CompressRequest([small_file, second], output=output))
+
+        assert isinstance(job, ArchiveJob)
+        assert job.plan.options.format == "tar"
+        assert job.plan.output == output
+
+    @pytest.mark.parametrize(
+        ("name", "kind", "fmt"),
+        [
+            ("out.gz", CompressionJob, "gz"),
+            ("out.zst", CompressionJob, "zst"),
+            ("out.zip", ArchiveJob, "zip"),
+        ],
+    )
+    def test_format_inferred_from_the_output_name(
+        self, small_file: Path, tmp_path: Path, name: str, kind: type, fmt: str
+    ) -> None:
+        """Test that the output's suffix picks both the format and the job kind."""
+        output = tmp_path / name
+
+        job = plan_compress(CompressRequest([small_file], output=output))
+
+        assert isinstance(job, kind)
+        assert job.plan.options.format == fmt
+
+    def test_explicit_format_beats_the_output_name(
+        self, small_file: Path, tmp_path: Path
+    ) -> None:
+        """Test that `--format` wins over the output's suffix, keeping its name."""
+        output = tmp_path / "misleading.gz"
+
+        job = plan_compress(CompressRequest([small_file], output=output, format="zst"))
+
+        assert isinstance(job, CompressionJob)
+        assert job.plan.options.format == "zst"
+        assert job.plan.dest == output
+
+    @pytest.mark.parametrize(
+        "name", ["out.tar.zst", "out.tar.lz4", "out.tlz4", "out.tar.sz"]
+    )
+    def test_tar_inside_a_codec_is_an_archive(
+        self, tree: Path, tmp_path: Path, name: str
+    ) -> None:
+        """Test that compressed tar suffixes, short forms included, archive."""
+        job = plan_compress(CompressRequest([tree], output=tmp_path / name))
+
+        assert isinstance(job, ArchiveJob)
+        assert job.plan.can_run
+        assert job.plan.options.format == name.removeprefix("out.")
+
+    def test_existing_directory_receives_the_file(
+        self, small_file: Path, tmp_path: Path
+    ) -> None:
+        """Test that an existing `-o` directory gets the default filename."""
+        into = tmp_path / "into"
+        into.mkdir()
+
+        job = plan_compress(CompressRequest([small_file], output=into, format="gz"))
+
+        assert isinstance(job, CompressionJob)
+        assert job.plan.dest == into / "small.txt.gz"
+
+    def test_single_file_format_refuses_several_inputs(self, tree: Path) -> None:
+        """Test that a single-file format on a directory errors, suggesting tar."""
+        with pytest.raises(ValueError, match="tar.gz"):
+            plan_compress(CompressRequest([tree], format="gz"))
+
+    def test_unknown_format_cannot_run(self, small_file: Path) -> None:
+        """Test that an unknown format plans a job that refuses to run."""
+        job = plan_compress(CompressRequest([small_file], format="bogus"))
+
+        assert isinstance(job, CompressionJob)
+        assert not job.plan.can_compress
+
+
+class TestPlanExtract:
+    """Test `extract` picks each input's job from its own bytes."""
+
+    def test_dispatch_follows_the_bytes_not_the_name(self, tmp_path: Path) -> None:
+        """Test that a gzip stream with an unknown suffix still decompresses."""
+        disguised = tmp_path / "mystery.dat"
+        disguised.write_bytes(gzip.compress(b"a"))
+        restored = tmp_path / "back.bin"
+
+        [job] = plan_extract(ExtractRequest([disguised], output=restored))
+
+        assert isinstance(job, DecompressionJob)
+        assert job.plan.format == "gzip"
+        assert job.plan.dest == restored
+
+    def test_an_archive_named_like_anything_still_extracts(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that a zip without a `.zip` suffix plans a runnable extraction."""
+        disguised = tmp_path / "riddle.bin"
+        with zipfile.ZipFile(disguised, "w") as zf:
+            zf.writestr("a.txt", "a")
+        dest = tmp_path / "out"
+
+        [job] = plan_extract(ExtractRequest([disguised], output=dest))
+
+        assert isinstance(job, ExtractJob)
+        assert job.plan.can_run
+        assert job.plan.output_dir == dest
+
+    def test_an_archive_unpacks_beside_itself(self, tmp_path: Path) -> None:
+        """Test that without `-o` an archive extracts into its own directory."""
+        archive = tmp_path / "x.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("a.txt", "a")
+
+        [job] = plan_extract(ExtractRequest([archive]))
+
+        assert isinstance(job, ExtractJob)
+        assert job.plan.output_dir == tmp_path
+
+    def test_output_directory_receives_a_single_file(self, tmp_path: Path) -> None:
+        """Test that an existing `-o` directory gets the suffix-stripped name."""
+        packed = tmp_path / "p.gz"
+        packed.write_bytes(gzip.compress(b"a"))
+        into = tmp_path / "into"
+        into.mkdir()
+
+        [job] = plan_extract(ExtractRequest([packed], output=into))
+
+        assert isinstance(job, DecompressionJob)
+        assert job.plan.dest == into / "p"
+
+    def test_each_input_is_dispatched_on_its_own(self, tmp_path: Path) -> None:
+        """Test that a mixed list plans one job per input, in order."""
+        packed = tmp_path / "a.gz"
+        packed.write_bytes(gzip.compress(b"a"))
+        archive = tmp_path / "b.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("b.txt", "b")
+
+        first, second = plan_extract(ExtractRequest([packed, archive]))
+
+        assert isinstance(first, DecompressionJob)
+        assert first.plan.dest == tmp_path / "a"
+        assert isinstance(second, ExtractJob)

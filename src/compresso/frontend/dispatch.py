@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 
 from .._core import detect_format, format_is_archive
-from .api import STANDALONE_FORMATS, canonical_standalone_format
+from .api import (
+    STANDALONE_FORMATS,
+    CompressionJob,
+    CompressionOptions,
+    DecompressionJob,
+    canonical_standalone_format,
+)
+from .archive_api import (
+    ArchiveJob,
+    ArchiveOptions,
+    ExtractJob,
+    ExtractOptions,
+    OverwriteMode,
+)
 
 # What `compress` reaches for when given several inputs and no format
 DEFAULT_ARCHIVE_FORMAT = "zip"
@@ -79,6 +94,7 @@ def default_archive_output(first_input: Path, fmt: str) -> Path:
     """
     # A trailing separator would otherwise make the name empty
     stem: str = first_input.resolve().name
+
     return first_input.resolve().parent / f"{stem}.{fmt}"
 
 
@@ -114,3 +130,141 @@ def format_is_single_file(fmt: str | None) -> bool:
         True if `fmt` names a single-file format, False otherwise.
     """
     return canonical_standalone_format(fmt) is not None
+
+
+@dataclass(frozen=True)
+class CompressRequest:
+    """What `compress` was asked to do, already parsed.
+
+    Attributes:
+        inputs: The files and directories to compress.
+        output: The `-o` value, or None to name the output after the first input.
+        format: The container asked for, or None to infer it.
+        algo: The `.comp` algorithm, or None for the strategy's default.
+        strategy: The `.comp` strategy.
+        level: The compression level, or None for the format's own.
+        overwrite: What to do when the output already exists.
+        threads: Worker threads, or 0 for one per core.
+    """
+
+    inputs: list[Path]
+    output: Path | None = None
+    format: str | None = None
+    algo: str | None = None
+    strategy: str = "balanced"
+    level: int | None = None
+    overwrite: OverwriteMode = OverwriteMode.RENAME
+    threads: int = 0
+
+
+@dataclass(frozen=True)
+class ExtractRequest:
+    """What `extract` was asked to do, already parsed.
+
+    Attributes:
+        inputs: The archives and single-file containers to unpack.
+        output: The `-o` value, or None to write beside each input.
+        options: The extraction policy; single-file inputs use only its
+            `overwrite` and `threads`.
+        restore_name: Whether to name and date a gzip file's output as its
+            header does.
+    """
+
+    inputs: list[Path]
+    output: Path | None = None
+    options: ExtractOptions = field(default_factory=ExtractOptions)
+    restore_name: bool = False
+
+
+def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
+    """Turn a compress request into a planned job.
+
+    One file becomes a single-file container; a directory, several inputs, or
+    an archive format becomes an archive.
+
+    Args:
+        request: The parsed request.
+
+    Returns:
+        The planned job, which may still be unable to run (see its plan).
+
+    Raises:
+        ValueError: If a single-file format was asked for with several inputs
+            or a directory.
+    """
+    fmt: str | None = request.format or infer_format(request.output)
+    many: bool = len(request.inputs) > 1 or any(p.is_dir() for p in request.inputs)
+
+    if format_is_single_file(fmt) and many:
+        raise ValueError(
+            f"{fmt} holds a single file; "
+            f"use an archive format such as tar.{fmt} for several"
+        )
+
+    if is_archive_format(fmt) or (many and fmt is None):
+        fmt = fmt or DEFAULT_ARCHIVE_FORMAT
+        output: Path = request.output or default_archive_output(request.inputs[0], fmt)
+        archive_options = ArchiveOptions(
+            format=fmt.lower(),
+            compression_level=request.level,
+            overwrite=request.overwrite,
+            threads=request.threads,
+        )
+
+        return ArchiveJob.from_paths(
+            sources=request.inputs, output=output, options=archive_options
+        )
+
+    source: Path = request.inputs[0]
+    options = CompressionOptions(
+        algo=request.algo,
+        strategy=request.strategy,
+        level=request.level,
+        format=fmt,
+        overwrite=request.overwrite,
+        threads=request.threads,
+    )
+
+    job = CompressionJob.from_file(src=source, dest=None, options=options)
+    # Planned once to learn the default name, then repointed if `-o` moves it
+    dest: Path = resolve_single_output(request.output, job.plan.dest)
+    if dest != job.plan.dest:
+        job = CompressionJob.from_file(src=source, dest=dest, options=options)
+
+    return job
+
+
+def plan_extract(request: ExtractRequest) -> list[ExtractJob | DecompressionJob]:
+    """Turn an extract request into one planned job per input.
+
+    Each input is dispatched on its own bytes, not its name: an archive is
+    unpacked into a directory, anything else is decompressed to one file.
+
+    Args:
+        request: The parsed request.
+
+    Returns:
+        The planned jobs, in input order; each may still be unable to run.
+    """
+    jobs: list[ExtractJob | DecompressionJob] = []
+    for source in request.inputs:
+        if looks_like_archive(source):
+            jobs.append(
+                ExtractJob.from_archive(
+                    archive=source, output_dir=request.output, options=request.options
+                )
+            )
+            continue
+
+        plan = partial(
+            DecompressionJob.from_file,
+            src=source,
+            overwrite=request.options.overwrite,
+            threads=request.options.threads,
+            restore_name=request.restore_name,
+        )
+        job: DecompressionJob = plan(dest=None)
+        dest: Path = resolve_single_output(request.output, job.plan.dest)
+        jobs.append(job if dest == job.plan.dest else plan(dest=dest))
+
+    return jobs

@@ -201,70 +201,7 @@ class TestDecompressName:
 
 
 class TestSmartExtract:
-    """Test `extract` picks the job from each file's own bytes."""
-
-    def test_dispatch_follows_the_bytes_not_the_name(
-        self, payload: Path, tmp_path: Path
-    ) -> None:
-        """Test that a renamed .gz is still recognised as one."""
-        packed = tmp_path / "p.gz"
-        invoke("compress", payload, "-o", packed, "-q")
-
-        disguised = tmp_path / "mystery.dat"
-        disguised.write_bytes(packed.read_bytes())
-        restored = tmp_path / "back.bin"
-
-        invoke("extract", disguised, "-o", restored, "-q")
-
-        assert restored.read_bytes() == payload.read_bytes()
-
-    def test_an_archive_named_like_anything_still_extracts(
-        self,
-        source_tree: Path,
-        tmp_path: Path,
-        make_archive: Callable[[str], Path],
-    ) -> None:
-        """Test that a renamed archive still extracts."""
-        disguised = tmp_path / "riddle.bin"
-        disguised.write_bytes(make_archive("tar").read_bytes())
-        dest = tmp_path / "out"
-
-        invoke("extract", disguised, "-o", dest, "-q")
-
-        assert (dest / source_tree.name).is_dir()
-
-    def test_an_archive_unpacks_beside_itself(
-        self,
-        source_tree: Path,
-        tmp_path: Path,
-        make_archive: Callable[[str], Path],
-    ) -> None:
-        """Test that with no -o, entries land next to the archive, not in the cwd."""
-        packed = make_archive("tar")
-
-        # The sources are beside the archive, so they would be in the way
-        for f in source_tree.iterdir():
-            f.unlink()
-        source_tree.rmdir()
-
-        invoke("extract", packed, "-q")
-
-        assert (tmp_path / source_tree.name).is_dir()
-        assert not (Path.cwd() / source_tree.name).exists()
-
-    def test_output_directory_receives_a_single_file(
-        self, payload: Path, tmp_path: Path
-    ) -> None:
-        """Test that -o naming an existing directory puts the file inside it."""
-        packed = tmp_path / "p.gz"
-        invoke("compress", payload, "-o", packed, "-q")
-
-        into = tmp_path / "into"
-        into.mkdir()
-
-        invoke("extract", packed, "-o", into, "-q")
-
-        assert (into / "p").read_bytes() == payload.read_bytes()
+    """Test `extract` runs the jobs dispatch plans; the rules are in frontend/test_dispatch.py."""
 
     def test_several_inputs_in_one_go(self, payload: Path, tmp_path: Path) -> None:
         """Test that each input is dispatched on its own."""
