@@ -1,4 +1,8 @@
-"""Shared rendering for the CLI: formatting, progress and exit codes."""
+"""Everything the CLI prints.
+
+The package root holds formatting, progress and exit codes; `jobs` and `info` hold
+each command's reports.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +11,8 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import NoReturn
 
-from ..frontend._job import JobResult, ProgressCallback
-from ._app import app
+from ...frontend._job import JobResult, ProgressCallback
+from .._app import app
 
 # Exit codes
 EXIT_OK = 0

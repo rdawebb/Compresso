@@ -16,7 +16,7 @@ from compresso.cli._render import (
     EXIT_USAGE,
     format_size,
 )
-from compresso.cli.extract import list_entries
+from compresso.cli._render.info import list_entries
 from compresso.frontend.archive_api import (
     ArchiveEntry,
 )

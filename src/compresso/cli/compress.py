@@ -17,11 +17,9 @@ from ._render import (
     cancelled,
     exit_for_result,
     fail,
-    format_size,
-    format_time,
     progress_bar,
-    succeed,
 )
+from ._render.jobs import archive_plan, archive_result, compress_plan, compress_result
 
 
 def _compress_one_file(job: CompressionJob, quiet: bool) -> None:
@@ -32,24 +30,12 @@ def _compress_one_file(job: CompressionJob, quiet: bool) -> None:
         quiet: Whether to suppress progress output.
     """
     plan = job.plan
-    dest: Path = plan.dest
-    fmt: str | None = plan.options.format
-    level: int | None = plan.options.level
 
     if not plan.can_compress:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
     if not quiet:
-        lines: list[str] = [
-            f"Compressing: {plan.src}",
-            f"Output:      {plan.dest}",
-            f"Algorithm:   {plan.backend_name}",
-        ]
-        if not fmt:
-            lines.append(f"Strategy:    {plan.options.strategy}")
-        if level is not None:
-            lines.append(f"Level:       {level}")
-        print("\n".join(lines) + "\n")
+        compress_plan(plan)
 
     start_time: float = time.time()
 
@@ -64,30 +50,10 @@ def _compress_one_file(job: CompressionJob, quiet: bool) -> None:
 
     exit_for_result(result, "Compression")
 
-    # RENAME may have written somewhere other than `dest`; job.plan is updated
-    # in place on success to reflect the path actually written
-    actual_dest: Path = job.plan.dest
-    compressed_size: int = actual_dest.stat().st_size
-    ratio: int | float = (
-        (compressed_size / plan.input_size) * 100 if plan.input_size > 0 else 0
-    )
-    speed_mbs: int | float = (
-        (plan.input_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-    )
-
+    # RENAME may have written somewhere other than `plan.dest`; job.plan is
+    # replaced on success with the path actually written
     if not quiet:
-        print()
-        succeed("Compression successful!\n")
-        if actual_dest != dest:
-            print(f"  Renamed to:      {actual_dest}")
-        print(
-            f"  Original size:   {format_size(size_bytes=plan.input_size)}\n"
-            f"  Compressed size: {format_size(size_bytes=compressed_size)}\n"
-            f"  Ratio:           {ratio:.1f}% of original\n"
-            f"  Time:            {format_time(seconds=elapsed)}\n"
-            f"  Speed:           {speed_mbs:.2f} MB/s\n"
-            f"  Saved:           {format_size(size_bytes=plan.input_size - compressed_size)}\n"
-        )
+        compress_result(plan, job.plan.dest, elapsed)
 
 
 def _archive_many(job: ArchiveJob, quiet: bool) -> None:
@@ -98,18 +64,12 @@ def _archive_many(job: ArchiveJob, quiet: bool) -> None:
         quiet: Whether to suppress progress output.
     """
     plan = job.plan
-    destination: Path = plan.output
 
     if not plan.can_run:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
     if not quiet:
-        print(
-            f"Archiving:   {plan.entry_count} source(s)\n"
-            f"Output:      {plan.output}\n"
-            f"Format:      {plan.options.format}\n"
-            f"Input size:  {format_size(size_bytes=plan.total_input_size)}\n"
-        )
+        archive_plan(plan)
 
     start_time: float = time.time()
 
@@ -126,21 +86,10 @@ def _archive_many(job: ArchiveJob, quiet: bool) -> None:
 
     exit_for_result(result, "Archive")
 
-    # RENAME may have written somewhere other than `destination`; job.plan is
-    # updated in place on success to reflect the path actually written
-    actual_output: Path = job.plan.output
-    archive_size: int = actual_output.stat().st_size
-
+    # RENAME may have written somewhere other than `plan.output`; job.plan is
+    # replaced on success with the path actually written
     if not quiet:
-        print()
-        succeed("Archive created!")
-        if actual_output != destination:
-            print(f"  Renamed to:   {actual_output}")
-        print(
-            f"  Input size:   {format_size(size_bytes=plan.total_input_size)}\n"
-            f"  Archive size: {format_size(size_bytes=archive_size)}\n"
-            f"  Time:         {format_time(seconds=elapsed)}\n"
-        )
+        archive_result(plan, job.plan.output, elapsed)
 
 
 def compress(

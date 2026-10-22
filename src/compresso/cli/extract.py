@@ -9,7 +9,6 @@ from typing import Annotated
 from .._core import BackendError, Error, HeaderError
 from ..frontend.api import DecompressionJob
 from ..frontend.archive_api import (
-    ArchiveEntry,
     ExtractJob,
     ExtractOptions,
     OverwriteMode,
@@ -23,42 +22,15 @@ from ._render import (
     cancelled,
     exit_for_result,
     fail,
-    format_size,
-    format_time,
     progress_bar,
-    succeed,
 )
-
-
-def list_entries(entries: list[ArchiveEntry]) -> None:
-    """Print one line per entry: its size, then its path.
-
-    Directories and symlinks leave the size blank, a symlink is followed by
-    its target, and each entry is indented once for every directory above it
-    that was already listed.
-
-    Args:
-        entries: The archive's entries, in archive order.
-    """
-    listed_dirs: set[str] = set()
-
-    for entry in entries:
-        parts = entry.path.rstrip("/").split("/")
-        depth = sum("/".join(parts[:i]) in listed_dirs for i in range(1, len(parts)))
-
-        if entry.is_dir:
-            listed_dirs.add("/".join(parts))
-
-        # A symlink's stored size is the length of its target; hardlink's have no data
-        size = (
-            ""
-            if entry.is_dir or entry.is_symlink or entry.is_hardlink
-            else format_size(size_bytes=entry.size)
-        )
-        target = f" -> {entry.link_target}" if entry.is_symlink else ""
-
-        # "1023.99 KB" is the widest format_size gives
-        print(f"{size:>10}  {'  ' * depth}{entry.path}{target}")
+from ._render.info import list_entries
+from ._render.jobs import (
+    decompress_plan,
+    decompress_result,
+    extract_plan,
+    extract_result,
+)
 
 
 def _extract_archive(job: ExtractJob, list_only: bool, quiet: bool) -> None:
@@ -79,11 +51,7 @@ def _extract_archive(job: ExtractJob, list_only: bool, quiet: bool) -> None:
         return
 
     if not quiet:
-        print(
-            f"Extracting: {plan.archive}\n"
-            f"Output dir: {plan.output_dir}\n"
-            f"Entries:    {len(plan.entries)}\n"
-        )
+        extract_plan(plan)
 
     start_time: float = time.time()
 
@@ -103,12 +71,7 @@ def _extract_archive(job: ExtractJob, list_only: bool, quiet: bool) -> None:
     exit_for_result(result, "Extraction")
 
     if not quiet:
-        print()
-        succeed("Extraction successful!")
-        print(
-            f"  Entries: {len(plan.entries)}\n"
-            f"  Time:    {format_time(seconds=elapsed)}\n"
-        )
+        extract_result(plan, elapsed)
 
 
 def _decompress_one_file(job: DecompressionJob, list_only: bool, quiet: bool) -> None:
@@ -120,7 +83,6 @@ def _decompress_one_file(job: DecompressionJob, list_only: bool, quiet: bool) ->
         quiet: Whether to suppress output.
     """
     plan = job.plan
-    dest: Path = plan.dest
 
     if list_only:
         fail(
@@ -131,17 +93,8 @@ def _decompress_one_file(job: DecompressionJob, list_only: bool, quiet: bool) ->
     if not plan.can_run:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
-    insp = plan.inspection
-
     if not quiet:
-        lines: list[str] = [
-            f"Decompressing: {plan.src}",
-            f"Output:        {plan.dest}",
-            f"Format:        {plan.format or insp.algo_name}",
-        ]
-        if insp.orig_size:
-            lines.append(f"Original size: {format_size(size_bytes=insp.orig_size)}")
-        print("\n".join(lines) + "\n")
+        decompress_plan(plan)
 
     start_time: float = time.time()
 
@@ -160,24 +113,10 @@ def _decompress_one_file(job: DecompressionJob, list_only: bool, quiet: bool) ->
 
     exit_for_result(result, "Decompression")
 
-    # RENAME may have written somewhere other than `dest`; job.plan is updated
-    # in place on success to reflect the path actually written
-    actual_dest: Path = job.plan.dest
-    decompressed_size: int = actual_dest.stat().st_size
-    speed_mbs: int | float = (
-        (decompressed_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-    )
-
+    # RENAME may have written somewhere other than `plan.dest`; job.plan is
+    # replaced on success with the path actually written
     if not quiet:
-        succeed("Decompression successful!\n")
-        if actual_dest != dest:
-            print(f"  Renamed to:        {actual_dest}")
-        print(
-            f"  Compressed size:   {format_size(size_bytes=compressed_size)}\n"
-            f"  Decompressed size: {format_size(size_bytes=decompressed_size)}\n"
-            f"  Time:              {format_time(seconds=elapsed)}\n"
-            f"  Speed:             {speed_mbs:.2f} MB/s\n"
-        )
+        decompress_result(plan, job.plan.dest, compressed_size, elapsed)
 
 
 def extract(
