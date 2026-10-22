@@ -106,8 +106,18 @@ static void *tar_create_writer(const char *output_path, int compression_level,
   if (!writer) {
     return NULL;
   }
+#ifdef _WIN32
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(output_path, wpath, FS_PATH_MAX) != 0) {
+    archive_set_error(writer->archive, errno, "Invalid path");
+    return tar_writer_opened(writer, ARCHIVE_FATAL);
+  }
+  return tar_writer_opened(writer,
+                           archive_write_open_filename_w(writer->archive, wpath));
+#else
   return tar_writer_opened(
       writer, archive_write_open_filename(writer->archive, output_path));
+#endif
 }
 
 static la_ssize_t tar_codec_write(struct archive *a, void *stream,
@@ -358,8 +368,18 @@ static void *tar_create_reader(const char *input_path, CoreContext *ctx) {
   if (!reader) {
     return NULL;
   }
+#ifdef _WIN32
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(input_path, wpath, FS_PATH_MAX) != 0) {
+    archive_set_error(reader->archive, errno, "Invalid path");
+    return tar_reader_opened(reader, ARCHIVE_FATAL);
+  }
+  return tar_reader_opened(reader, archive_read_open_filename_w(
+                                       reader->archive, wpath, TAR_BLOCK));
+#else
   return tar_reader_opened(reader, archive_read_open_filename(
                                        reader->archive, input_path, TAR_BLOCK));
+#endif
 }
 
 static la_ssize_t tar_codec_read(struct archive *a, void *reader_ptr,

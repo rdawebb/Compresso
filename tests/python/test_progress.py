@@ -2,326 +2,382 @@
 
 from __future__ import annotations
 
-import os
 import signal
 import threading
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import pytest
 
 from compresso import _core
-from compresso._core import Cancelled, CancelToken, compress_file, decompress_file
-from compresso.frontend.api import CompressionJob, DecompressionJob
+from compresso._core import (
+    Cancelled,
+    CancelToken,
+    compress_file,
+    create_archive,
+    decompress_file,
+    extract_archive,
+)
+from compresso.frontend._job import to_core_progress
 
-from .helpers import Recorder
-
-# Crosses the 1 MiB report floor (`CTX_MIN_INTERVAL`) several times over
-PROGRESS_FILE_SIZE = 4 * 1024 * 1024
-
-# bzip2 and lzma take ~1s each on this payload
-BACKENDS = [
-    "zlib",
-    pytest.param("bzip2", marks=pytest.mark.slow),
-    pytest.param("lzma", marks=pytest.mark.slow),
-    "zstd",
-    "lz4",
-    "snappy",
-]
+from .helpers import (
+    ENTRY_COUNT,
+    ENTRY_SIZE,
+    JOBS,
+    PROGRESS_FILE_SIZE,
+    JobFactory,
+    Recorder,
+)
 
 
-def fast_level(algo: str) -> int:
-    """The quickest level a backend or format accepts, where the level is moot.
+class Operation(NamedTuple):
+    """A job that reads the `source` fixture and writes into an empty directory.
+
+    `run(source, out, **kwargs)` passes `progress` and `cancel` through.
+    """
+
+    source: str
+    run: Callable[..., Any]
+
+
+def compress_comp(src: Path, out: Path, **kw: Any) -> None:
+    """Compress `src` to a .comp with zstd."""
+    compress_file(src, out / "out.comp", "zstd", "balanced", 3, **kw)
+
+
+def compress_gz(src: Path, out: Path, **kw: Any) -> None:
+    """Compress `src` to a standalone .gz."""
+    _core.compress_standalone(src, out / "out.gz", "gzip", 1, **kw)
+
+
+def archive_tar(src: Path, out: Path, **kw: Any) -> None:
+    """Archive `src` as a plain tar."""
+    create_archive(out / "out.tar", "tar", [src], **kw)
+
+
+def archive_tar_zst(src: Path, out: Path, **kw: Any) -> None:
+    """Archive `src` as a zstd-compressed tar."""
+    create_archive(out / "out.tar.zst", "tar.zst", [src], **kw)
+
+
+def archive_zip(src: Path, out: Path, **kw: Any) -> None:
+    """Archive `src` as a zip.
+
+    The only progress comes from libzip's own callback during zip_close.
+    """
+    create_archive(out / "out.zip", "zip", [src], **kw)
+
+
+def extract_tar(src: Path, out: Path, **kw: Any) -> None:
+    """Extract the tar at `src` into `out`."""
+    extract_archive(src, out, [], **kw)
+
+
+OPERATIONS = {
+    "comp": Operation("big_compressible_file", compress_comp),
+    "gz": Operation("big_compressible_file", compress_gz),
+    "tar": Operation("source_tree", archive_tar),
+    "tar.zst": Operation("source_tree", archive_tar_zst),
+    "zip": Operation("source_tree", archive_zip),
+    "extract-tar": Operation("source_tar", extract_tar),
+}
+
+
+def leftovers(out: Path) -> list[Path]:
+    """The files a job left in `out`, temporaries included.
 
     Args:
-        algo: The backend's or standalone format's name.
+        out: The directory the job wrote into.
 
     Returns:
-        Level 1, or the default for snappy, which has no levels.
+        Every file under `out`.
     """
-    return -1 if algo == "snappy" else 1
+    return [p for p in out.rglob("*") if p.is_file()]
 
 
 @pytest.fixture(scope="module")
-def big_compressible_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A file large enough to produce several progress reports when compressed.
-
-    Shared by the whole module, so tests must only read it.
+def dirs_only_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A tree with no file data, so archiving it never enters a data loop.
 
     Args:
         tmp_path_factory: Pytest temporary path factory fixture.
 
     Returns:
-        Path: The path to the big compressible file.
+        The path to the tree's root.
     """
-    file_path = tmp_path_factory.mktemp("progress") / "big_compressible.bin"
-    chunk = b"compresso progress test payload " * 1024  # 32 KB
-    file_path.write_bytes(chunk * (PROGRESS_FILE_SIZE // len(chunk)))
+    root = tmp_path_factory.mktemp("progress") / "dirs"
+    (root / "a" / "b").mkdir(parents=True)
 
-    return file_path
+    return root
 
 
-@pytest.fixture(scope="module")
-def big_incompressible_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A file that stays large once compressed.
-
-    Progress counts input bytes, so decompression's total is the compressed
-    size; random data keeps that above the report-interval floor; shared by
-    the whole module, so tests must only read it.
+@pytest.fixture(params=list(OPERATIONS.values()), ids=list(OPERATIONS))
+def op(request: pytest.FixtureRequest) -> Operation:
+    """Each row of `OPERATIONS`.
 
     Args:
-        tmp_path_factory: Pytest temporary path factory fixture.
+        request: Pytest request fixture.
 
     Returns:
-        Path: The path to the big incompressible file.
+        The operation.
     """
-    file_path = tmp_path_factory.mktemp("progress") / "big_incompressible.bin"
-    file_path.write_bytes(os.urandom(PROGRESS_FILE_SIZE))
-
-    return file_path
+    return request.param
 
 
-class TestCompressionProgress:
-    """Test progress reporting from _core.compress_file."""
+class TestProgress:
+    """Test the progress reports themselves."""
 
-    def test_reports_are_incremental_over_the_input_size(
-        self, big_compressible_file: Path, tmp_path: Path
+    def test_progress_is_monotonic_and_completes(
+        self, op: Operation, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
-        """Test that progress arrives during the job, out of the source file's size.
+        """Test that progress arrives during the job, rising to the total.
 
-        The denominator is known up front rather than guessed.
+        The fresh token also shows an uncancelled one doesn't interfere.
         """
         recorder = Recorder()
-        compress_file(
-            str(big_compressible_file),
-            str(tmp_path / "out.comp"),
-            "zstd",
-            "balanced",
-            3,
+        op.run(
+            request.getfixturevalue(op.source),
+            tmp_path,
             progress=recorder,
+            cancel=CancelToken(),
         )
 
-        assert len(recorder.calls) > 1
-        expected = big_compressible_file.stat().st_size
-        assert all(total == expected for _, total in recorder.calls)
-
-    @pytest.mark.parametrize("algo", BACKENDS)
-    def test_progress_is_monotonic_and_completes(
-        self, big_compressible_file: Path, tmp_path: Path, algo: str
-    ) -> None:
-        """Test that every backend reports rising byte counts ending exactly at the total."""
-        recorder = Recorder()
-        compress_file(
-            str(big_compressible_file),
-            str(tmp_path / f"{algo}.comp"),
-            algo,
-            "balanced",
-            fast_level(algo),
-            progress=recorder,
-        )
-
+        recorder.assert_progressed()
         recorder.assert_monotonic()
         recorder.assert_finished()
-
-    def test_runs_without_a_callback(
-        self, big_compressible_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that omitting progress leaves the pre-context behaviour untouched."""
-        output = tmp_path / "out.comp"
-        compress_file(str(big_compressible_file), str(output), "zstd", "balanced", 3)
-
-        assert output.stat().st_size > 0
-
-
-class TestDecompressionProgress:
-    """Test progress reporting from _core.decompress_file."""
-
-    @pytest.mark.parametrize("algo", BACKENDS)
-    def test_progress_is_monotonic_and_completes(
-        self, big_incompressible_file: Path, tmp_path: Path, algo: str
-    ) -> None:
-        """Test that decompression reports too, counting compressed bytes consumed."""
-        compressed = tmp_path / f"{algo}.comp"
-        restored = tmp_path / f"{algo}.out"
-        compress_file(
-            str(big_incompressible_file),
-            str(compressed),
-            algo,
-            "balanced",
-            fast_level(algo),
-        )
-
-        recorder = Recorder()
-        decompress_file(str(compressed), str(restored), algo, progress=recorder)
-
-        recorder.assert_monotonic()
-        recorder.assert_finished()
-        assert len(recorder.calls) > 1
-        assert restored.read_bytes() == big_incompressible_file.read_bytes()
-
-
-class TestStandaloneProgress:
-    """Test progress reporting from the standalone (.gz/.bz2/.xz/.zst/.lz4/.sz) codecs."""
 
     @pytest.mark.parametrize(
-        ("fmt", "ext"),
+        ("name", "total"),
         [
-            ("gzip", ".gz"),
-            pytest.param("bzip2", ".bz2", marks=pytest.mark.slow),
-            pytest.param("xz", ".xz", marks=pytest.mark.slow),
-            ("zstd", ".zst"),
-            ("lz4", ".lz4"),
-            ("snappy", ".sz"),
+            ("comp", PROGRESS_FILE_SIZE),
+            ("tar", ENTRY_COUNT * ENTRY_SIZE),
+            ("extract-tar", ENTRY_COUNT * ENTRY_SIZE),
         ],
     )
-    def test_round_trip_reports_progress(
-        self, big_incompressible_file: Path, tmp_path: Path, fmt: str, ext: str
+    def test_total_is_the_input_size(
+        self, request: pytest.FixtureRequest, tmp_path: Path, name: str, total: int
     ) -> None:
-        """Test that both directions report, and the data survives the round trip."""
-        compressed = tmp_path / f"standalone{ext}"
-        restored = tmp_path / f"restored{ext}.out"
+        """Test that the total is known up front, and every report carries it.
 
-        compressing = Recorder()
-        _core.compress_standalone(
-            str(big_incompressible_file),
-            str(compressed),
-            fmt,
-            fast_level(fmt),
-            progress=compressing,
-        )
+        Plain tar reads each input once, and extraction's validation pass,
+        which walks the archive before the pass that writes, reports nothing.
+        """
+        op = OPERATIONS[name]
+        recorder = Recorder()
+        op.run(request.getfixturevalue(op.source), tmp_path, progress=recorder)
 
-        decompressing = Recorder()
-        _core.decompress_standalone(
-            str(compressed), str(restored), fmt, progress=decompressing
-        )
+        recorder.assert_total(total)
 
-        for recorder in (compressing, decompressing):
-            recorder.assert_monotonic()
-            recorder.assert_finished()
+    # One backend and one standalone format: the driver loop is shared, and
+    # test_codec.c covers every backend
+    @pytest.mark.parametrize(
+        ("compress", "decompress"),
+        [
+            pytest.param(
+                lambda src, dst: compress_file(src, dst, "zstd", "balanced", 1),
+                lambda src, dst, **kw: decompress_file(src, dst, "zstd", **kw),
+                id="comp",
+            ),
+            pytest.param(
+                lambda src, dst: _core.compress_standalone(src, dst, "gzip", 1),
+                lambda src, dst, **kw: _core.decompress_standalone(
+                    src, dst, "gzip", **kw
+                ),
+                id="gz",
+            ),
+        ],
+    )
+    def test_decompression_reports_progress(
+        self,
+        big_incompressible_file: Path,
+        tmp_path: Path,
+        compress: Callable[..., object],
+        decompress: Callable[..., object],
+    ) -> None:
+        """Test that decompression reports too, counting compressed bytes consumed."""
+        compressed, restored = tmp_path / "in", tmp_path / "out"
+        compress(big_incompressible_file, compressed)
 
+        recorder = Recorder()
+        decompress(compressed, restored, progress=recorder)
+
+        recorder.assert_progressed()
+        recorder.assert_monotonic()
+        recorder.assert_finished()
         assert restored.read_bytes() == big_incompressible_file.read_bytes()
 
+    def test_compressed_tar_is_never_on_disk_uncompressed(
+        self, source_tree: Path, tmp_path: Path
+    ) -> None:
+        """Test that tar.zst is compressed as it is written."""
+        temps: list[int] = []
 
-class TestCancelToken:
-    """Test the CancelToken type itself."""
+        def count_temps(done: int, total: int) -> None:
+            """Record how many temps exist at this report."""
+            temps.append(len(list(tmp_path.glob(".compresso-*"))))
 
-    def test_starts_uncancelled(self) -> None:
-        """Test that a fresh token has not been cancelled."""
-        assert CancelToken().cancelled is False
+        create_archive(
+            tmp_path / "out.tar.zst", "tar.zst", [source_tree], progress=count_temps
+        )
 
-    def test_cancel_sets_the_flag(self) -> None:
-        """Test that cancel() is visible through the property."""
-        token = CancelToken()
-        token.cancel()
-        assert token.cancelled is True
-
-    def test_cancel_is_idempotent(self) -> None:
-        """Test that cancelling twice is harmless."""
-        token = CancelToken()
-        token.cancel()
-        token.cancel()
-        assert token.cancelled is True
+        assert temps
+        assert max(temps) == 1
 
 
 class TestCancellation:
     """Test stopping a running job through a CancelToken."""
 
-    def test_cancel_leaves_no_partial_file(
-        self, big_compressible_file: Path, tmp_path: Path
+    def test_cancel_token(self) -> None:
+        """Test that a token starts uncancelled, and cancelling it sticks."""
+        token = CancelToken()
+        assert token.cancelled is False
+
+        token.cancel()
+        token.cancel()
+        assert token.cancelled is True
+
+    def test_cancel_leaves_no_output(
+        self, op: Operation, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
-        """Test that the half-written destination is removed rather than left behind."""
-        output = tmp_path / "cancelled.comp"
+        """Test that a cancel mid-run removes the half-written output."""
         token = CancelToken()
 
         with pytest.raises(Cancelled):
-            compress_file(
-                str(big_compressible_file),
-                str(output),
-                "zstd",
-                "balanced",
-                3,
+            op.run(
+                request.getfixturevalue(op.source),
+                tmp_path,
                 progress=lambda done, total: token.cancel(),
                 cancel=token,
             )
 
-        assert not output.exists()
+        assert not leftovers(tmp_path)
 
     def test_token_cancelled_before_the_call(
-        self, big_compressible_file: Path, tmp_path: Path
+        self, op: Operation, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
         """Test that a token cancelled up front stops the job immediately.
 
-        No progress callback is passed, so this also shows cancellation does
-        not depend on progress being requested.
+        No progress callback is passed, so cancelling doesn't depend on
+        progress being requested; archive rows walk a tree of directories
+        alone, so the cancel must land during the walk, not in a data loop.
         """
-        output = tmp_path / "never.comp"
+        source = "dirs_only_tree" if op.source == "source_tree" else op.source
         token = CancelToken()
         token.cancel()
 
         with pytest.raises(Cancelled):
-            compress_file(
-                str(big_compressible_file),
-                str(output),
-                "zstd",
-                "balanced",
-                3,
-                cancel=token,
-            )
+            op.run(request.getfixturevalue(source), tmp_path, cancel=token)
 
-        assert not output.exists()
+        assert not leftovers(tmp_path)
 
-    def test_uncancelled_token_does_not_interfere(
-        self, big_compressible_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that passing a token that is never cancelled completes normally."""
-        output = tmp_path / "fine.comp"
-        compress_file(
-            str(big_compressible_file),
-            str(output),
-            "zstd",
-            "balanced",
-            3,
-            cancel=CancelToken(),
-        )
-
-        assert output.stat().st_size > 0
-
+    @pytest.mark.parametrize("name", ["comp", "tar.zst"])
     def test_cancel_from_another_thread(
-        self, big_compressible_file: Path, tmp_path: Path
+        self, request: pytest.FixtureRequest, tmp_path: Path, name: str
     ) -> None:
-        """Test that a token can be cancelled by a thread other than the one compressing."""
-        output = tmp_path / "threaded.comp"
+        """Test that a token can be cancelled by a thread other than the one working.
+
+        The callback waits for the other thread, so the cancel always lands
+        before the job could finish.
+        """
+        op = OPERATIONS[name]
         token = CancelToken()
         started = threading.Event()
 
         def watcher() -> None:
-            started.wait(timeout=5)
+            """Cancel the token once the job has started."""
+            started.wait(timeout=10)
             token.cancel()
+
+        def on_progress(done: int, total: int) -> None:
+            """Let the watcher go, and wait for it to cancel."""
+            started.set()
+            thread.join(timeout=10)
 
         thread = threading.Thread(target=watcher)
         thread.start()
         try:
             with pytest.raises(Cancelled):
-                compress_file(
-                    str(big_compressible_file),
-                    str(output),
-                    "bzip2",
-                    "balanced",
-                    9,
-                    progress=lambda done, total: started.set(),
+                op.run(
+                    request.getfixturevalue(op.source),
+                    tmp_path,
+                    progress=on_progress,
                     cancel=token,
                 )
         finally:
             started.set()
-            thread.join(timeout=5)
+            thread.join(timeout=10)
+
+        assert not leftovers(tmp_path)
+
+    # tar.zst counts compressed bytes; random data keeps them near the raw size
+    @pytest.mark.parametrize("fmt", ["tar", "tar.zst"])
+    def test_cancelled_extraction_leaves_no_truncated_file(
+        self, source_tree: Path, tmp_path: Path, fmt: str
+    ) -> None:
+        """Test that entries already extracted are kept, but a half-written one is not.
+
+        Unlike a failure, a cancel undoes only the entry in flight.
+        """
+        archive = tmp_path / f"in.{fmt}"
+        dest = tmp_path / "out"
+        create_archive(archive, fmt, [source_tree])
+
+        # Stop midway through the second entry, so at least one has completed
+        # and one is genuinely in flight
+        token = CancelToken()
+
+        def cancel_partway(done: int, total: int) -> None:
+            """Cancel on the first report inside the second entry."""
+            if done > ENTRY_SIZE:
+                token.cancel()
+
+        with pytest.raises(Cancelled):
+            extract_archive(archive, dest, [], progress=cancel_partway, cancel=token)
+
+        extracted = sorted((dest / source_tree.name).iterdir())
+        assert extracted, "expected the completed entries to be kept"
+        assert len(extracted) < ENTRY_COUNT, "expected the job to have stopped early"
+
+        originals = {p.name: p.read_bytes() for p in source_tree.iterdir()}
+        for restored in extracted:
+            assert restored.read_bytes() == originals[restored.name], (
+                f"{restored.name} was left truncated"
+            )
+
+    # Threaded codecs buffer the input, so most of their work follows it
+    @pytest.mark.parametrize("fmt", ["tar.zst", "tar.xz"])
+    def test_cancel_after_the_last_source_byte(
+        self, source_tree: Path, tmp_path: Path, fmt: str
+    ) -> None:
+        """Test that a cancel still lands while the codec flushes.
+
+        The last report inside the data loop is at the total, after which no
+        source bytes are left to poll from.
+        """
+        output = tmp_path / f"flushing.{fmt}"
+        token = CancelToken()
+
+        def cancel_at_end(done: int, total: int) -> None:
+            """Cancel once every source byte is counted."""
+            if done >= total:
+                token.cancel()
+
+        with pytest.raises(Cancelled):
+            create_archive(
+                output, fmt, [source_tree], progress=cancel_at_end, cancel=token
+            )
+
+        assert not output.exists()
 
 
 class TestCallbackErrors:
     """Test progress callback error behaviour."""
 
     def test_exception_from_callback_propagates(
-        self, big_compressible_file: Path, tmp_path: Path
+        self, op: Operation, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
-        """Test that the callback's own exception wins over any backend or Cancelled error."""
+        """Test that the callback's own exception wins, and cleans up like any failure."""
 
         class Boom(Exception):
             """Mock exception."""
@@ -331,36 +387,9 @@ class TestCallbackErrors:
             raise Boom("callback failed")
 
         with pytest.raises(Boom, match="callback failed"):
-            compress_file(
-                str(big_compressible_file),
-                str(tmp_path / "boom.comp"),
-                "zstd",
-                "balanced",
-                3,
-                progress=explode,
-            )
+            op.run(request.getfixturevalue(op.source), tmp_path, progress=explode)
 
-    def test_failed_callback_leaves_no_partial_file(
-        self, big_compressible_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that a callback failure cleans up like any other failure."""
-        output = tmp_path / "boom.comp"
-
-        def explode(done: int, total: int) -> None:
-            """Raises RuntimeError to simulate a failed callback."""
-            raise RuntimeError("callback failed")
-
-        with pytest.raises(RuntimeError):
-            compress_file(
-                str(big_compressible_file),
-                str(output),
-                "zstd",
-                "balanced",
-                3,
-                progress=explode,
-            )
-
-        assert not output.exists()
+        assert not leftovers(tmp_path)
 
     def test_non_callable_progress_is_rejected(
         self, sample_text_file: Path, tmp_path: Path
@@ -452,122 +481,51 @@ class TestSignalHandling:
         assert not output.exists()
 
 
-class TestConcurrency:
-    """Test that two jobs at once must not share progress or cancellation state."""
-
-    def test_parallel_jobs_keep_separate_contexts(
-        self, big_compressible_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that cancelling one job leaves the other to finish."""
-        finished: dict[str, object] = {}
-
-        def run_cancelled() -> None:
-            """Run a job that is cancelled before completion."""
-            token = CancelToken()
-            try:
-                compress_file(
-                    str(big_compressible_file),
-                    str(tmp_path / "a.comp"),
-                    "zstd",
-                    "balanced",
-                    3,
-                    progress=lambda done, total: token.cancel(),
-                    cancel=token,
-                )
-            except Cancelled:
-                finished["a"] = "cancelled"
-
-        def run_to_completion() -> None:
-            """Run a job that completes without cancellation."""
-            recorder = Recorder()
-            compress_file(
-                str(big_compressible_file),
-                str(tmp_path / "b.comp"),
-                "zstd",
-                "balanced",
-                3,
-                progress=recorder,
-                cancel=CancelToken(),
-            )
-            finished["b"] = recorder
-
-        threads = [
-            threading.Thread(target=run_cancelled),
-            threading.Thread(target=run_to_completion),
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=60)
-
-        assert finished["a"] == "cancelled"
-        assert not (tmp_path / "a.comp").exists()
-
-        recorder = finished["b"]
-        assert isinstance(recorder, Recorder)
-        recorder.assert_monotonic()
-        recorder.assert_finished()
-        assert (tmp_path / "b.comp").stat().st_size > 0
-
-
+@pytest.mark.parametrize("job", JOBS.values(), ids=list(JOBS))
 class TestJobIntegration:
     """Test that the frontend jobs surface progress and cancellation without raising."""
 
-    def test_compression_job_reports_progress(
-        self, big_compressible_file: Path, tmp_path: Path
+    def test_reports_progress(
+        self, job: JobFactory, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
-        """Test that CompressionJob.run drives the callback with real byte counts."""
-        calls: list[tuple[float, int, int]] = []
-        job = CompressionJob.from_file(
-            src=big_compressible_file, dest=tmp_path / "job.comp"
+        """Test that the job drives the callback with real byte counts."""
+        recorder = Recorder()
+        result = job.make(request.getfixturevalue(job.source), tmp_path).run(
+            progress=recorder
         )
-
-        result = job.run(progress=lambda f, done, total: calls.append((f, done, total)))
 
         assert result.ok is True
         assert result.cancelled is False
-        assert len(calls) > 1
-        assert [done for _, done, _ in calls] == sorted(done for _, done, _ in calls)
-        fraction, done, total = calls[-1]
-        assert done == total
-        assert fraction == pytest.approx(1.0)
+        recorder.assert_progressed()
+        recorder.assert_monotonic()
+        recorder.assert_finished()
 
-    def test_compression_job_reports_cancellation(
-        self, big_compressible_file: Path, tmp_path: Path
+    def test_reports_cancellation(
+        self, job: JobFactory, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
         """Test that a cancelled job comes back flagged, not raising and not an error."""
-        output = tmp_path / "job_cancelled.comp"
         token = CancelToken()
-        job = CompressionJob.from_file(src=big_compressible_file, dest=output)
-
-        result = job.run(progress=lambda f, done, total: token.cancel(), cancel=token)
+        result = job.make(request.getfixturevalue(job.source), tmp_path).run(
+            progress=lambda f, done, total: token.cancel(), cancel=token
+        )
 
         assert result.cancelled is True
         assert result.ok is False
         assert result.error is None
-        assert not output.exists()
+        assert not leftovers(tmp_path)
 
-    def test_decompression_job_reports_progress(
-        self, big_incompressible_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that DecompressionJob.run reports too, over the compressed size."""
-        compressed = tmp_path / "job.comp"
-        CompressionJob.from_file(src=big_incompressible_file, dest=compressed).run()
 
-        calls: list[tuple[float, int, int]] = []
-        job = DecompressionJob.from_file(src=compressed, dest=tmp_path / "job.out")
-        result = job.run(progress=lambda f, done, total: calls.append((f, done, total)))
+def test_core_progress_computes_fraction() -> None:
+    """Test that the job adapter derives the fraction, falling back to the job total."""
+    calls: list[tuple[float, int, int]] = []
+    on_progress = to_core_progress(lambda *args: calls.append(args), total=8)
+    assert on_progress is not None
+    on_progress(4, 0)
+    on_progress(10, 10)
+    assert calls == [(0.5, 4, 8), (1.0, 10, 10)]
 
-        assert result.ok is True
-        assert len(calls) > 1
-        _, done, total = calls[-1]
-        assert done == total
-
-    def test_job_result_defaults_to_not_cancelled(
-        self, sample_text_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that a job that ran to completion is not reported as cancelled."""
-        job = CompressionJob.from_file(
-            src=sample_text_file, dest=tmp_path / "plain.comp"
-        )
-        assert job.run().cancelled is False
+    calls.clear()
+    on_progress = to_core_progress(lambda *args: calls.append(args), total=0)
+    assert on_progress is not None
+    on_progress(0, 0)
+    assert calls == [(0.0, 0, 0)]

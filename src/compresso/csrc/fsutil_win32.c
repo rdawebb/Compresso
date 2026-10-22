@@ -40,7 +40,7 @@ typedef struct _COMPRESSO_REPARSE_DATA_BUFFER {
 
 // A UTF-8 byte never becomes more than one UTF-16 code unit, so FS_PATH_MAX
 // wide characters always hold the conversion of an FS_PATH_MAX-byte path
-static int fs_widen(const char *utf8, wchar_t *out, int out_count) {
+int fs_widen(const char *utf8, wchar_t *out, int out_count) {
   // MB_ERR_INVALID_CHARS refuses malformed input instead of substituting U+FFFD
   if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, out,
                           out_count) == 0) {

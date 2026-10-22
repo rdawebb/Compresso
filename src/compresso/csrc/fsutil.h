@@ -14,6 +14,12 @@
 // so prefix comparisons must test both
 #if defined(_WIN32) || defined(_WIN64)
 #define FS_IS_SEP(c) ((c) == '/' || (c) == '\\')
+
+#include <wchar.h>
+
+// Convert a UTF-8 path to UTF-16 for a library's wide-path API, since narrow
+// paths there are read in the ANSI code page
+int fs_widen(const char *utf8, wchar_t *out, int out_count);
 #else
 #define FS_IS_SEP(c) ((c) == '/')
 #endif

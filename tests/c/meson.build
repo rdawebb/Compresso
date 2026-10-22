@@ -2,7 +2,9 @@
 # Links the codec and format code directly rather than through the extension,
 # so it needs none of the archive libraries the root build does
 
-project('compresso-c-tests', 'c',
+project(
+  'compresso-c-tests',
+  'c',
   meson_version: '>=1.3.0',
   default_options: [
     # Matches the root build; see meson.build there
@@ -39,10 +41,10 @@ if not snappy_dep.found()
 endif
 
 deps = [
-  dependency('zlib'),
+  dependency('liblz4'),
   dependency('liblzma'),
   dependency('libzstd'),
-  dependency('liblz4'),
+  dependency('zlib'),
   bz2_dep,
   snappy_dep,
   # The backends raise Python exceptions, so the harness embeds an interpreter
@@ -55,30 +57,33 @@ fsutil_platform = host_machine.system() == 'windows' ? 'fsutil_win32.c' : 'fsuti
 
 unity = static_library('unity', 'unity/unity.c', include_directories: inc)
 
-# _core.c and archives/ are left out: they reach libarchive/libzip;
+# _core.c and the rest of archives/ are left out: they reach libarchive/libzip;
 # support/test_stubs.c supplies the exception objects and archive backends instead
-under_test = static_library('under_test',
-  'support/test_stubs.c',
+under_test = static_library(
+  'under_test',
   'support/backend_io.c',
   'support/files.c',
+  'support/test_stubs.c',
+  csrc / 'backends.c',
   csrc / 'common.c',
   csrc / 'comp_format.c',
   csrc / 'formats.c',
-  csrc / 'standalone.c',
   csrc / 'fsutil.c',
   csrc / fsutil_platform,
   csrc / 'pipeline.c',
   csrc / 'registry.c',
+  csrc / 'standalone.c',
   csrc / 'validate.c',
+  csrc / 'codec/bzip2.c',
   csrc / 'codec/codec.c',
-  csrc / 'codec/zstd.c',
+  csrc / 'codec/crc32c.c',
   csrc / 'codec/lz4.c',
   csrc / 'codec/lzma.c',
-  csrc / 'codec/bzip2.c',
-  csrc / 'codec/zlib.c',
   csrc / 'codec/snappy.c',
-  csrc / 'codec/crc32c.c',
-  csrc / 'backends.c',
+  csrc / 'codec/zlib.c',
+  csrc / 'codec/zstd.c',
+  csrc / 'archives/paths.c',
+  csrc / 'archives/select.c',
   include_directories: inc,
   dependencies: deps,
 )
@@ -97,9 +102,13 @@ if fuzz
     'link_with': under_test,
     'dependencies': compile_deps,
   }
-  foreach name : ['gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'snappy']
-    executable('fuzz_' + name, 'fuzz/decode.c',
-      c_args: '-DFORMAT=FORMAT_' + name.to_upper(), kwargs: fuzz_kwargs)
+  foreach name : ['bzip2', 'gzip', 'lz4', 'snappy', 'xz', 'zstd']
+    executable(
+      'fuzz_' + name,
+      'fuzz/decode.c',
+      c_args: '-DFORMAT=FORMAT_' + name.to_upper(),
+      kwargs: fuzz_kwargs,
+    )
   endforeach
   foreach name : ['detect', 'gzip_name']
     executable('fuzz_' + name, 'fuzz' / name + '.c', kwargs: fuzz_kwargs)
@@ -112,16 +121,16 @@ generate_runner = files('unity/generate_test_runner.rb')
 
 # Tests run from the build dir so their scratch files land there, and find the
 # fixtures by absolute path instead
-fixture_dir = '-DFIXTURE_DIR="@0@"'.format(
-  meson.current_source_dir() / '..' / 'fixtures'
-)
+fixture_dir = '-DFIXTURE_DIR="@0@"'.format(meson.current_source_dir() / '..' / 'fixtures')
 
 suites = {
   'test_context.c': 'core',
   'test_format_detection.c': 'core',
   'test_fsutil.c': 'core',
+  'test_paths.c': 'core',
   'test_pipeline.c': 'core',
   'test_registry.c': 'core',
+  'test_select.c': 'core',
   'test_validate.c': 'core',
   'test_codec.c': 'codec',
   'test_crc32c.c': 'codec',
@@ -134,13 +143,17 @@ suites = {
 foreach source, suite : suites
   name = source.replace('.c', '')
 
-  runner = custom_target(name + '_runner',
+  runner = custom_target(
+    name + '_runner',
     input: source,
     output: name + '_Runner.c',
     command: [ruby, generate_runner, '--use_param_tests=1', '@INPUT@', '@OUTPUT@'],
   )
 
-  exe = executable(name, source, runner,
+  exe = executable(
+    name,
+    source,
+    runner,
     include_directories: inc,
     c_args: fixture_dir,
     link_with: [under_test, unity],

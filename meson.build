@@ -1,4 +1,6 @@
-project('compresso', 'c',
+project(
+  'compresso',
+  'c',
   meson_version: '>=1.3.0',
   default_options: [
     # gnu11 on GCC/Clang, c11 on MSVC; strict ISO defines __STRICT_ANSI__,
@@ -25,12 +27,12 @@ if not snappy_dep.found()
 endif
 
 deps = [
-  dependency('zlib'),
-  dependency('liblzma', version: '>=5.4'), # lzma_stream_decoder_mt
-  dependency('libzstd'),
-  dependency('liblz4'),
-  dependency('libzip'),
   dependency('libarchive'),
+  dependency('liblz4'),
+  dependency('liblzma', version: '>=5.4'), # lzma_stream_decoder_mt
+  dependency('libzip'),
+  dependency('libzstd'),
+  dependency('zlib'),
   bz2_dep,
   snappy_dep,
 ]

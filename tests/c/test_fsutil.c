@@ -88,6 +88,49 @@ void test_join_rejects_path_longer_than_path_max(void) {
   TEST_ASSERT_EQUAL_INT(ENAMETOOLONG, errno);
 }
 
+// ---- fs_is_absolute / fs_is_stream_path ----
+
+#if defined(_WIN32) || defined(_WIN64)
+#define WIN_OR(win, posix) win
+#else
+#define WIN_OR(win, posix) posix
+#endif
+
+typedef struct {
+  const char *path;
+  int absolute;
+  int stream; // Only checked when relative, as callers check it after
+} PathKindCase;
+
+static const PathKindCase PATH_KIND_CASES[] = {
+    {"a/b", 0, 0},
+    {"", 0, 0},
+    {"/a", 1, 0},
+    // Windows forms are absolute on POSIX too
+    {"\\a", 1, 0},
+    {"C:\\a", 1, 0},
+    {"c:/a", 1, 0},
+    {"C:a", 1, 0},
+    {"\\\\server\\share", 1, 0},
+    {"\\\\?\\C:\\a", 1, 0},
+    {"a:b", 1, 0},            // A one-letter name is a drive
+    {"1:a", 0, WIN_OR(1, 0)}, // Not a drive letter
+    {"notes.txt:x", 0, WIN_OR(1, 0)},
+    {"notes.txt:x:$DATA", 0, WIN_OR(1, 0)},
+};
+
+_Static_assert(sizeof(PATH_KIND_CASES) / sizeof(PATH_KIND_CASES[0]) == 13,
+               "update TEST_RANGE");
+
+TEST_RANGE([ 0, 12, 1 ])
+void test_path_kind_is_classified(int index) {
+  const PathKindCase *c = &PATH_KIND_CASES[index];
+  TEST_ASSERT_EQUAL_INT_MESSAGE(c->absolute, fs_is_absolute(c->path), c->path);
+  if (!c->absolute)
+    TEST_ASSERT_EQUAL_INT_MESSAGE(c->stream, fs_is_stream_path(c->path),
+                                  c->path);
+}
+
 // ---- fs_same_file ----
 
 static fs_stat stat_of(const char *path) {
@@ -243,7 +286,7 @@ static const CommitCase COMMIT_CASES[] = {
 _Static_assert(sizeof(COMMIT_CASES) / sizeof(COMMIT_CASES[0]) == 8,
                "update TEST_RANGE");
 
-TEST_RANGE([0, 7, 1])
+TEST_RANGE([ 0, 7, 1 ])
 void test_commit_temp_applies_the_overwrite_scheme(int index) {
   const CommitCase *c = &COMMIT_CASES[index];
   write_file("tmp_fsutil_a", "newer");
