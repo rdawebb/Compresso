@@ -15,8 +15,8 @@ from ..frontend.archive_api import (
     OverwriteMode,
     SymlinkMode,
 )
+from ..frontend.dispatch import looks_like_archive, resolve_single_output
 from ._app import app
-from ._dispatch import looks_like_archive, resolve_single_output
 from ._render import (
     BAR_THRESHOLD,
     EXIT_USAGE,

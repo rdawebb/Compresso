@@ -52,7 +52,6 @@ py.install_sources(
   'cli/__init__.py',
   'cli/__main__.py',
   'cli/_app.py',
-  'cli/_dispatch.py',
   'cli/_render.py',
   'cli/algos.py',
   'cli/benchmark.py',
@@ -67,6 +66,7 @@ py.install_sources(
   'frontend/_job.py',
   'frontend/api.py',
   'frontend/archive_api.py',
+  'frontend/dispatch.py',
   subdir: 'compresso/frontend',
 )
 

@@ -12,9 +12,9 @@ import orjson
 from .._core import detect_format
 from ..frontend.archive_api import ArchiveEntry
 from ..frontend.archive_api import plan_extraction as plan_archive_extraction
+from ..frontend.dispatch import looks_like_archive
 from ..introspect.file_inspect import inspect as inspect_file
 from ._app import app
-from ._dispatch import looks_like_archive
 from ._render import (
     EXIT_USAGE,
     cancelled,

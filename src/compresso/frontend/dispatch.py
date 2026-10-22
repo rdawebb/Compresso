@@ -1,11 +1,11 @@
-"""Dispatcher for the two smart commands `compress` and `extract`."""
+"""Dispatch rules for the smart `compress` and `extract` commands."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from .._core import detect_format, format_is_archive
-from ..frontend.api import STANDALONE_FORMATS, canonical_standalone_format
+from .api import STANDALONE_FORMATS, canonical_standalone_format
 
 # What `compress` reaches for when given several inputs and no format
 DEFAULT_ARCHIVE_FORMAT = "zip"
@@ -50,7 +50,7 @@ def looks_like_archive(path: Path) -> bool:
     try:
         return bool(format_is_archive(detect_format(path)))
 
-    except Exception:
+    except Exception:  # noqa: BLE001 - unreadable means not an archive
         return False
 
 

@@ -9,8 +9,7 @@ from typing import Annotated
 from .._core import BackendError, Error, HeaderError
 from ..frontend.api import CompressionJob, CompressionOptions
 from ..frontend.archive_api import ArchiveJob, ArchiveOptions, OverwriteMode
-from ._app import app
-from ._dispatch import (
+from ..frontend.dispatch import (
     DEFAULT_ARCHIVE_FORMAT,
     default_archive_output,
     format_is_single_file,
@@ -18,6 +17,7 @@ from ._dispatch import (
     is_archive_format,
     resolve_single_output,
 )
+from ._app import app
 from ._render import (
     BAR_THRESHOLD,
     EXIT_USAGE,
