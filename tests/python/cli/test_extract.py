@@ -215,6 +215,50 @@ class TestSmartExtract:
         assert (tmp_path / "a").read_bytes() == payload.read_bytes()
         assert (tmp_path / "b").read_bytes() == payload.read_bytes()
 
+    # Unrecognised fails while planning, truncated while running; random bytes
+    # named .gz would be tried as gzip, so the unrecognised one has no codec suffix
+    @pytest.mark.parametrize("bad", ["unrecognised", "truncated"])
+    def test_a_failed_input_does_not_stop_the_rest(
+        self,
+        payload: Path,
+        source_tree: Path,
+        tmp_path: Path,
+        make_archive: Callable[[str], Path],
+        bad: str,
+    ) -> None:
+        """Test that the inputs either side of a bad one are still extracted, and
+        the bad one is named and exits 1."""
+        good = tmp_path / "good.gz"
+        good.write_bytes(gzip.compress(payload.read_bytes()))
+
+        if bad == "unrecognised":
+            broken = tmp_path / "bad.bin"
+            broken.write_bytes(payload.read_bytes())
+        else:
+            broken = tmp_path / "bad.gz"
+            broken.write_bytes(good.read_bytes()[: good.stat().st_size // 2])
+
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        result = invoke(
+            "extract",
+            good,
+            broken,
+            make_archive("zip"),
+            "-o",
+            dest,
+            "-q",
+            expect=EXIT_FAILED,
+        )
+
+        assert str(broken) in result.output
+        assert (dest / "good").read_bytes() == payload.read_bytes()
+        assert not (dest / "bad").exists()
+        for original in source_tree.iterdir():
+            restored = dest / source_tree.name / original.name
+            assert restored.read_bytes() == original.read_bytes()
+
     def test_listing_a_single_file_container_is_refused(
         self, payload: Path, tmp_path: Path
     ) -> None:

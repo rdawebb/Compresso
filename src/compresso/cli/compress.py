@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import time
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -11,15 +11,9 @@ from ..frontend.api import CompressionJob
 from ..frontend.archive_api import ArchiveJob, OverwriteMode
 from ..frontend.dispatch import CompressRequest, plan_compress
 from ._app import app
-from ._render import (
-    BAR_THRESHOLD,
-    EXIT_USAGE,
-    cancelled,
-    exit_for_result,
-    fail,
-    progress_bar,
-)
+from ._render import EXIT_USAGE, cancelled, fail
 from ._render.jobs import archive_plan, archive_result, compress_plan, compress_result
+from ._run import run_all, run_job
 
 
 def _compress_one_file(job: CompressionJob, quiet: bool) -> None:
@@ -37,18 +31,9 @@ def _compress_one_file(job: CompressionJob, quiet: bool) -> None:
     if not quiet:
         compress_plan(plan)
 
-    start_time: float = time.time()
-
-    with progress_bar(
-        "Compressing",
-        plan.input_size,
-        enabled=not quiet and plan.input_size > BAR_THRESHOLD,
-    ) as on_progress:
-        result = job.run(progress=on_progress)
-
-    elapsed: float = time.time() - start_time
-
-    exit_for_result(result, "Compression")
+    elapsed: float = run_job(
+        job, plan.src, "Compressing", plan.input_size, quiet=quiet, what="Compression"
+    )
 
     # RENAME may have written somewhere other than `plan.dest`; job.plan is
     # replaced on success with the path actually written
@@ -71,20 +56,16 @@ def _archive_many(job: ArchiveJob, quiet: bool) -> None:
     if not quiet:
         archive_plan(plan)
 
-    start_time: float = time.time()
-
     # A format with a codec stage reads the data twice, so the job reports a
     # larger total than this once it starts; the bar follows it
-    with progress_bar(
+    elapsed: float = run_job(
+        job,
+        plan.output,
         "Archiving",
         plan.total_input_size,
-        enabled=not quiet and plan.total_input_size > BAR_THRESHOLD,
-    ) as on_progress:
-        result = job.run(progress=on_progress)
-
-    elapsed: float = time.time() - start_time
-
-    exit_for_result(result, "Archive")
+        quiet=quiet,
+        what="Archive",
+    )
 
     # RENAME may have written somewhere other than `plan.output`; job.plan is
     # replaced on success with the path actually written
@@ -231,10 +212,13 @@ def compress(
         except ValueError as e:
             fail(f"Error: {e}", EXIT_USAGE)
 
-        if isinstance(job, ArchiveJob):
-            _archive_many(job, quiet)
-        else:
-            _compress_one_file(job, quiet)
+        def run_one(job: CompressionJob | ArchiveJob) -> None:
+            if isinstance(job, ArchiveJob):
+                _archive_many(job, quiet)
+            else:
+                _compress_one_file(job, quiet)
+
+        sys.exit(run_all([job], run_one, "Compression"))
 
     except KeyboardInterrupt:
         cancelled("Compression")

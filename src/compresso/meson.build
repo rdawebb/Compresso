@@ -52,6 +52,7 @@ py.install_sources(
   'cli/__init__.py',
   'cli/__main__.py',
   'cli/_app.py',
+  'cli/_run.py',
   'cli/algos.py',
   'cli/benchmark.py',
   'cli/compress.py',

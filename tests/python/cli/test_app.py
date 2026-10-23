@@ -194,12 +194,12 @@ class TestExitCodes:
         [
             ("compress", "nope.bin"),
             ("inspect", "payload.bin"),
-            ("extract", "payload.bin"),
+            ("extract", "nope.gz"),
         ],
     )
     def test_bad_input_is_usage(self, payload: Path, command: str, name: str) -> None:
-        """Test that a missing or unrecognised input is wrong, rather than the
-        operation having failed."""
+        """Test that a missing input, or one inspect can't read, is wrong, rather
+        than the operation having failed."""
         invoke(command, payload.parent / name, expect=EXIT_USAGE)
 
     @pytest.mark.parametrize("command", ["compress", "extract"])

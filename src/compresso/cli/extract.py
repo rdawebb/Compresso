@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import time
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -16,14 +16,7 @@ from ..frontend.archive_api import (
 )
 from ..frontend.dispatch import ExtractRequest, plan_extract
 from ._app import app
-from ._render import (
-    BAR_THRESHOLD,
-    EXIT_USAGE,
-    cancelled,
-    exit_for_result,
-    fail,
-    progress_bar,
-)
+from ._render import EXIT_USAGE, cancelled, fail
 from ._render.info import list_entries
 from ._render.jobs import (
     decompress_plan,
@@ -31,6 +24,7 @@ from ._render.jobs import (
     extract_plan,
     extract_result,
 )
+from ._run import InputFailed, run_all, run_job
 
 
 def _extract_archive(job: ExtractJob, list_only: bool, quiet: bool) -> None:
@@ -44,7 +38,7 @@ def _extract_archive(job: ExtractJob, list_only: bool, quiet: bool) -> None:
     plan = job.plan
 
     if not plan.can_run:
-        fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
+        raise InputFailed(f"{plan.archive}: {plan.reason_if_unavailable}")
 
     if list_only:
         list_entries(job.list_contents())
@@ -53,22 +47,16 @@ def _extract_archive(job: ExtractJob, list_only: bool, quiet: bool) -> None:
     if not quiet:
         extract_plan(plan)
 
-    start_time: float = time.time()
-
     # Progress covers the bytes written out; a compressed archive also reports
     # the pass that decompresses it, so the job's own total wins
-    extracted_size: int = sum(entry.size for entry in plan.entries)
-
-    with progress_bar(
+    elapsed: float = run_job(
+        job,
+        plan.archive,
         "Extracting",
-        extracted_size,
-        enabled=not quiet and extracted_size > BAR_THRESHOLD,
-    ) as on_progress:
-        result = job.run(progress=on_progress)
-
-    elapsed: float = time.time() - start_time
-
-    exit_for_result(result, "Extraction")
+        sum(entry.size for entry in plan.entries),
+        quiet=quiet,
+        what="Extraction",
+    )
 
     if not quiet:
         extract_result(plan, elapsed)
@@ -91,27 +79,23 @@ def _decompress_one_file(job: DecompressionJob, list_only: bool, quiet: bool) ->
         )
 
     if not plan.can_run:
-        fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
+        raise InputFailed(f"{plan.src}: {plan.reason_if_unavailable}")
 
     if not quiet:
         decompress_plan(plan)
-
-    start_time: float = time.time()
 
     # Progress counts the compressed bytes read, so the source's size is the
     # denominator rather than the size it expands to
     compressed_size: int = plan.src.stat().st_size
 
-    with progress_bar(
+    elapsed: float = run_job(
+        job,
+        plan.src,
         "Decompressing",
         compressed_size,
-        enabled=not quiet and compressed_size > BAR_THRESHOLD,
-    ) as on_progress:
-        result = job.run(progress=on_progress)
-
-    elapsed: float = time.time() - start_time
-
-    exit_for_result(result, "Decompression")
+        quiet=quiet,
+        what="Decompression",
+    )
 
     # RENAME may have written somewhere other than `plan.dest`; job.plan is
     # replaced on success with the path actually written
@@ -234,6 +218,12 @@ def extract(
     if not inputs:
         fail("Error: No input files given", EXIT_USAGE)
 
+    # A stat shows these, so nothing runs; what only an input's bytes show
+    # fails that input alone
+    for path in inputs:
+        if not path.is_file():
+            fail(f"Error: {path} does not exist or is not a file", EXIT_USAGE)
+
     if overwrite:
         mode = OverwriteMode.OVERWRITE
     elif skip_existing:
@@ -255,13 +245,15 @@ def extract(
         inputs=inputs, output=output, options=options, restore_name=name
     )
 
-    try:
-        for job in plan_extract(request):
-            if isinstance(job, ExtractJob):
-                _extract_archive(job, list_only, quiet)
+    def run_one(job: ExtractJob | DecompressionJob) -> None:
+        if isinstance(job, ExtractJob):
+            _extract_archive(job, list_only, quiet)
 
-            else:
-                _decompress_one_file(job, list_only, quiet)
+        else:
+            _decompress_one_file(job, list_only, quiet)
+
+    try:
+        sys.exit(run_all(plan_extract(request), run_one, "Extraction"))
 
     except KeyboardInterrupt:
         cancelled("Extraction")

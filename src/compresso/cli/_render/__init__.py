@@ -11,7 +11,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import NoReturn
 
-from ...frontend._job import JobResult, ProgressCallback
+from ...frontend._job import ProgressCallback
 from .._app import app
 
 # Exit codes
@@ -64,6 +64,15 @@ def format_time(seconds: float) -> str:
         return f"{mins}m {secs:.1f}s"
 
 
+def report_error(message: str) -> None:
+    """Print an error to stderr.
+
+    Args:
+        message: Text to show, without the leading marker.
+    """
+    app.echo(message=app.style(text=f"✗ {message}", fg="red"), err=True)
+
+
 def fail(message: str, code: int = EXIT_FAILED) -> NoReturn:
     """Print an error to stderr and exit.
 
@@ -71,7 +80,7 @@ def fail(message: str, code: int = EXIT_FAILED) -> NoReturn:
         message: Text to show, without the leading marker.
         code: Process exit code; see the EXIT_* constants.
     """
-    app.echo(message=app.style(text=f"✗ {message}", fg="red"), err=True)
+    report_error(message)
     sys.exit(code)
 
 
@@ -92,23 +101,6 @@ def cancelled(what: str) -> NoReturn:
     """
     app.echo(message=app.style(text=f"\n✗ {what} cancelled", fg="yellow"), err=True)
     sys.exit(EXIT_CANCELLED)
-
-
-def exit_for_result(result: JobResult, what: str) -> None:
-    """Exit with the right code if `result` did not succeed.
-
-    A cancelled job is not a failure, so it gets the conventional SIGINT
-    code rather than the generic failure one.
-
-    Args:
-        result: The outcome of a frontend job.
-        what: Operation name for the message, e.g. "Compression".
-    """
-    if result.cancelled:
-        cancelled(what)
-
-    if not result.ok:
-        fail(f"\n{what} failed: {result.error}")
 
 
 @contextmanager

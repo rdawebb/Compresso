@@ -11,8 +11,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, Result
 
-import compresso.cli.compress as compress_cmd
-import compresso.cli.extract as extract_cmd
+import compresso.cli._run as run_mod
 from compresso.cli import app
 from compresso.cli._render import (
     BAR_THRESHOLD,
@@ -145,9 +144,7 @@ def bars(monkeypatch: pytest.MonkeyPatch) -> list[Bar]:
 
             yield counting
 
-    # Each command imports progress_bar by name, so each binding is patched
-    monkeypatch.setattr(compress_cmd, "progress_bar", spy)
-    monkeypatch.setattr(extract_cmd, "progress_bar", spy)
+    monkeypatch.setattr(run_mod, "progress_bar", spy)
 
     return opened
 
