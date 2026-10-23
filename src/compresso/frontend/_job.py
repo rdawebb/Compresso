@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -229,6 +228,9 @@ class ThreadedJob(Generic[PlanT]):
         Returns:
             JobResult: The outcome of the job.
         """
+        # Deferred so sync callers skip asyncio's import cost
+        import asyncio
+
         token: CancelToken = cancel if cancel is not None else CancelToken()
         loop = asyncio.get_running_loop()
         future = loop.run_in_executor(None, self.run, progress, token)

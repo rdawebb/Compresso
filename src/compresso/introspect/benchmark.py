@@ -8,8 +8,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from tabulate import tabulate
-
 from .._core import compress_file, decompress_file
 from .._levels import to_core_level
 from .capabilities import get_by_name
@@ -311,5 +309,9 @@ def print_results(results: list[BenchmarkResult]) -> None:
             f"{r.ratio:.3f}",
         ]
         table_data.append(row)
+
+    # Deferred: tabulate pulls in wcwidth, which every CLI command would
+    # otherwise pay for via the introspect package import
+    from tabulate import tabulate
 
     print(tabulate(tabular_data=table_data, headers=headers, tablefmt="grid"))
