@@ -53,16 +53,17 @@ py.install_sources(
   'cli/__main__.py',
   'cli/_app.py',
   'cli/_run.py',
-  'cli/algos.py',
   'cli/benchmark.py',
   'cli/compress.py',
   'cli/extract.py',
+  'cli/formats.py',
   'cli/inspect.py',
   subdir: 'compresso/cli',
 )
 
 py.install_sources(
   'cli/_render/__init__.py',
+  'cli/_render/formats.py',
   'cli/_render/info.py',
   'cli/_render/jobs.py',
   subdir: 'compresso/cli/_render',

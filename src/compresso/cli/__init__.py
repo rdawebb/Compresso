@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import algos, benchmark, compress, extract, inspect
+from . import benchmark, compress, extract, formats, inspect
 from ._app import app
 
 __all__ = ["app", "main"]
@@ -13,7 +13,7 @@ _COMMAND_MODULES = (
     extract,
     inspect,
     benchmark,
-    algos,
+    formats,
 )
 
 for _module in _COMMAND_MODULES:

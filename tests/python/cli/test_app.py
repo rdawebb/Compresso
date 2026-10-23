@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-import compresso.cli.algos as algos_cmd
+import compresso.cli.formats as formats_cmd
 import compresso.cli.inspect as inspect_cmd
 from compresso.cli._render import (
     EXIT_CANCELLED,
@@ -71,12 +71,13 @@ class TestAppStructure:
     def test_commands_are_listed_in_workflow_order(self) -> None:
         """Test that the order is chosen in `__init__`, not inherited from import sorting.
 
-        Alphabetical imports would put `list` first.
+        Alphabetical imports would put `benchmark` first.
         """
         output = invoke("--help").output
 
-        # Matched on the alias column, which is unique per row; a bare command
-        # name also appears inside other commands' descriptions
+        # Matched on the alias column, which is unique per row, or the
+        # description where there is none; a bare command name also appears
+        # inside other commands' descriptions
         positions = [
             output.index(aliases)
             for aliases in [
@@ -84,7 +85,7 @@ class TestAppStructure:
                 "(x, ex",
                 "(i, info)",
                 "(b, bench)",
-                "(l, ls)",
+                "List the available",
             ]
         ]
         assert positions == sorted(positions)
@@ -106,8 +107,6 @@ class TestAppStructure:
             ("info", "inspect"),
             ("b", "benchmark"),
             ("bench", "benchmark"),
-            ("l", "list"),
-            ("ls", "list"),
         ],
     )
     def test_aliases_still_resolve(self, alias: str, command: str) -> None:
@@ -282,7 +281,7 @@ class TestInterruption:
         [
             (["compress"], "Compression cancelled"),
             (["inspect"], "Inspection cancelled"),
-            (["list"], "Listing cancelled"),
+            (["formats"], "Listing cancelled"),
         ],
     )
     def test_interrupt_is_reported(
@@ -300,10 +299,10 @@ class TestInterruption:
 
         monkeypatch.setattr(CompressionJob, "from_file", interrupt)
         monkeypatch.setattr(inspect_cmd, "inspect_file", interrupt)
-        monkeypatch.setattr(algos_cmd, "list_capabilities", interrupt)
+        monkeypatch.setattr(formats_cmd, "list_capabilities", interrupt)
 
         args: list[str | Path] = [*command]
-        if command[0] != "list":
+        if command[0] != "formats":
             args.append(payload)
 
         result = invoke(*args, expect=EXIT_CANCELLED)
