@@ -11,6 +11,7 @@ import pytest
 
 import compresso.cli.formats as formats_cmd
 import compresso.cli.inspect as inspect_cmd
+import compresso.cli.list as list_cmd
 from compresso.cli._render import (
     EXIT_CANCELLED,
     EXIT_FAILED,
@@ -83,6 +84,7 @@ class TestAppStructure:
             for aliases in [
                 "(c, comp",
                 "(x, ex",
+                "(l)",
                 "(i, info)",
                 "(b, bench)",
                 "List the available",
@@ -103,6 +105,7 @@ class TestAppStructure:
             ("decompress", "extract"),
             ("d", "extract"),
             ("decomp", "extract"),
+            ("l", "list"),
             ("i", "inspect"),
             ("info", "inspect"),
             ("b", "benchmark"),
@@ -194,6 +197,7 @@ class TestExitCodes:
             ("compress", "nope.bin"),
             ("inspect", "payload.bin"),
             ("extract", "nope.gz"),
+            ("list", "nope.zip"),
         ],
     )
     def test_bad_input_is_usage(self, payload: Path, command: str, name: str) -> None:
@@ -281,7 +285,8 @@ class TestInterruption:
         [
             (["compress"], "Compression cancelled"),
             (["inspect"], "Inspection cancelled"),
-            (["formats"], "Listing cancelled"),
+            (["list"], "Listing cancelled"),
+            (["formats"], "Format listing cancelled"),
         ],
     )
     def test_interrupt_is_reported(
@@ -299,6 +304,7 @@ class TestInterruption:
 
         monkeypatch.setattr(CompressionJob, "from_file", interrupt)
         monkeypatch.setattr(inspect_cmd, "inspect_file", interrupt)
+        monkeypatch.setattr(list_cmd, "detect_format", interrupt)
         monkeypatch.setattr(formats_cmd, "list_capabilities", interrupt)
 
         args: list[str | Path] = [*command]

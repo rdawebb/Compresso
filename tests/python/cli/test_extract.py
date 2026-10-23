@@ -13,16 +13,10 @@ import pytest
 from compresso.cli._render import (
     EXIT_FAILED,
     EXIT_OK,
-    EXIT_USAGE,
-    format_size,
-)
-from compresso.cli._render.info import list_entries
-from compresso.frontend.archive_api import (
-    ArchiveEntry,
 )
 
 from ..helpers import file_entry, link_entry, make_tar, renamed, umask
-from .conftest import CONFLICT_MODES, TREE_FILE_SIZE, invoke
+from .conftest import CONFLICT_MODES, invoke
 
 
 class TestArchiveRoundTrip:
@@ -45,51 +39,6 @@ class TestArchiveRoundTrip:
         for original in source_tree.iterdir():
             restored = dest / source_tree.name / original.name
             assert restored.read_bytes() == original.read_bytes()
-
-    def test_extract_list_only(
-        self,
-        tmp_path: Path,
-        make_archive: Callable[[str], Path],
-    ) -> None:
-        """Test that --list prints each entry's size and path without writing anything."""
-        archive = make_archive("tar")
-        dest = tmp_path / "dest"
-
-        result = invoke("extract", archive, "--list", "-o", dest)
-
-        lines = result.output.splitlines()
-        f0_line = next(line for line in lines if "f0.bin" in line)
-        assert f0_line.split()[:2] == format_size(TREE_FILE_SIZE).split()
-        assert not dest.exists()
-
-        # Directories have a blank size; their contents are indented beneath them
-        dir_line = next(line for line in lines if line.rstrip("/").endswith("tree"))
-        assert dir_line == f"{'':>10}  {dir_line.strip()}"
-        assert f0_line.endswith("    tree/f0.bin")
-
-    def test_extract_list_indents_by_depth(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Test that --list indents only under directories it has listed."""
-        entries = [
-            ArchiveEntry(path="a/", is_dir=True),
-            ArchiveEntry(path="a/b/", is_dir=True),
-            ArchiveEntry(path="a/b/c.txt", size=1024),
-            ArchiveEntry(path="a/d.txt", size=10),
-            ArchiveEntry(path="a/e", size=5, is_symlink=True, link_target="d.txt"),
-            ArchiveEntry(path="x/y.txt", size=0),  # no "x/" entry was listed
-        ]
-
-        list_entries(entries)
-
-        assert capsys.readouterr().out.splitlines() == [
-            " " * 12 + "a/",
-            " " * 14 + "a/b/",
-            "   1.00 KB" + " " * 6 + "a/b/c.txt",
-            "   10.00 B" + " " * 4 + "a/d.txt",
-            " " * 14 + "a/e -> d.txt",
-            "    0.00 B" + " " * 2 + "x/y.txt",
-        ]
 
     @pytest.mark.parametrize(
         "flags,expect,renames",
@@ -258,17 +207,6 @@ class TestSmartExtract:
         for original in source_tree.iterdir():
             restored = dest / source_tree.name / original.name
             assert restored.read_bytes() == original.read_bytes()
-
-    def test_listing_a_single_file_container_is_refused(
-        self, payload: Path, tmp_path: Path
-    ) -> None:
-        """Test that there is nothing to list in a container holding one file."""
-        packed = tmp_path / "p.gz"
-        invoke("compress", payload, "-o", packed, "-q")
-
-        result = invoke("extract", packed, "--list", expect=EXIT_USAGE)
-
-        assert "nothing to list" in result.output
 
 
 class TestMergedVerbCompatibility:

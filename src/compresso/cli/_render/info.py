@@ -14,7 +14,7 @@ from .._app import app
 from . import EXIT_USAGE, fail, format_size, format_time, succeed
 
 
-def list_entries(entries: list[ArchiveEntry]) -> None:
+def list_entries(entries: list[ArchiveEntry], *, long: bool = False) -> None:
     """Print one line per entry: its size, then its path.
 
     Directories and symlinks leave the size blank, a symlink is followed by
@@ -23,7 +23,14 @@ def list_entries(entries: list[ArchiveEntry]) -> None:
 
     Args:
         entries: The archive's entries, in archive order.
+        long: If True, print each entry's full detail line instead, unindented.
     """
+    if long:
+        for entry in entries:
+            print(_entry_detail_line(entry))
+
+        return
+
     listed_dirs: set[str] = set()
 
     for entry in entries:
@@ -85,13 +92,25 @@ def _entry_detail_line(entry: ArchiveEntry) -> str:
     return f"{mode}  {mtime}  {size:>10}  {entry.path}{target}{detail}"
 
 
+def listings_json(listings: list[tuple[Path, str, list[ArchiveEntry]]]) -> None:
+    """Print archives' entries as a JSON array of `{path, format, entries}`.
+
+    Args:
+        listings: Each archive's path, detected format and entries.
+    """
+    data = [
+        {"path": str(path), "format": fmt, "entries": entries}
+        for path, fmt, entries in listings
+    ]
+    print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
+
+
 def archive_info(
     file: Path,
     fmt: str | None,
     entries: list[ArchiveEntry],
     *,
     as_json: bool,
-    show_entries: bool,
 ) -> None:
     """Print an archive's metadata, as text or JSON.
 
@@ -100,7 +119,6 @@ def archive_info(
         fmt: The archive's detected format.
         entries: The archive's entries.
         as_json: If True, print JSON instead of text.
-        show_entries: If True, also print each entry's own detail.
     """
     total_size = sum(entry.size for entry in entries)
     archive_size: int = file.stat().st_size
@@ -114,23 +132,6 @@ def archive_info(
             "total_size": total_size,
             "archive_size": archive_size,
         }
-        if show_entries:
-            data["entries"] = [
-                {
-                    "path": entry.path,
-                    "size": entry.size,
-                    "is_dir": entry.is_dir,
-                    "is_symlink": entry.is_symlink,
-                    "is_hardlink": entry.is_hardlink,
-                    "mtime": entry.mtime,
-                    "mode": entry.mode,
-                    "link_target": entry.link_target,
-                    "compressed_size": entry.compressed_size,
-                    "crc": entry.crc,
-                    "method": entry.method,
-                }
-                for entry in entries
-            ]
         print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
         return
 
@@ -147,9 +148,6 @@ def archive_info(
         lines.append(f"Compression:   {ratio:.1f}% of original")
 
     print("\n".join(lines))
-
-    if show_entries:
-        print("\n" + "\n".join(_entry_detail_line(entry) for entry in entries))
 
 
 def file_info(result: InspectResult, *, as_json: bool) -> None:

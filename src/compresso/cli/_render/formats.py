@@ -12,10 +12,24 @@ if TYPE_CHECKING:
 
 
 def _heading(text: str, count: int) -> None:
+    """Print a section title with its item count, then a blank line.
+
+    Args:
+        text: The section title, e.g. `Native algorithms`.
+        count: How many items the section lists.
+    """
     app.echo(message=f"{text}: {count}\n")
 
 
 def _item(name: str, details: dict[str, str]) -> None:
+    """Print a bulleted name, then its details as indented `label: value` lines.
+
+    The values line up in one column, and empty `details` prints only the name.
+
+    Args:
+        name: The algorithm or format name, shown in bold green.
+        details: Labels mapped to their values, printed in order.
+    """
     app.echo(message=app.style(text=f"- {name}", fg="green", bold=True))
     width = max(map(len, details), default=0) + 2
     for label, value in details.items():
@@ -37,7 +51,7 @@ def list_formats(
         archives: Each archive format, mapped to the compressed variants
             written as `<archive>.<codec>`, e.g. `tar.zst`.
     """
-    _heading("Available compression algorithms", len(algos))
+    _heading("Native algorithms", len(algos))
     for cap in algos:
         levels = "none" if cap.min_level is None else f"{cap.min_level}-{cap.max_level}"
         _item(cap.name, {"ID": str(cap.id), "Levels": levels})

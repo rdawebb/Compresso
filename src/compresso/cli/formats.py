@@ -32,7 +32,7 @@ def formats() -> None:
         list_formats(caps, standalone, archives)
 
     except KeyboardInterrupt:
-        cancelled("Listing")
+        cancelled("Format listing")
 
     except Exception as e:
         fail(f"Error listing formats: {e}")

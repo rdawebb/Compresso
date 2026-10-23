@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import NoReturn
 
 from ...frontend._job import ProgressCallback
@@ -91,6 +92,19 @@ def succeed(message: str) -> None:
         message: Text to show, without the leading marker.
     """
     app.echo(message=app.style(text=f"✓ {message}", fg="green"))
+
+
+def input_header(path: Path, *, first: bool) -> None:
+    """Print the `==> name <==` line that head puts before each of several inputs.
+
+    Args:
+        path: The input, as given.
+        first: False puts a blank line above, to separate it from the last.
+    """
+    if not first:
+        print()
+
+    print(f"==> {path} <==")
 
 
 def cancelled(what: str) -> NoReturn:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import benchmark, compress, extract, formats, inspect
+from . import list as list_
 from ._app import app
 
 __all__ = ["app", "main"]
@@ -11,6 +12,7 @@ __all__ = ["app", "main"]
 _COMMAND_MODULES = (
     compress,
     extract,
+    list_,
     inspect,
     benchmark,
     formats,

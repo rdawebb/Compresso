@@ -58,6 +58,7 @@ py.install_sources(
   'cli/extract.py',
   'cli/formats.py',
   'cli/inspect.py',
+  'cli/list.py',
   subdir: 'compresso/cli',
 )
 

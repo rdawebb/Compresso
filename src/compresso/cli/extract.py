@@ -17,7 +17,6 @@ from ..frontend.archive_api import (
 from ..frontend.dispatch import ExtractRequest, plan_extract
 from ._app import app
 from ._render import EXIT_USAGE, cancelled, fail
-from ._render.info import list_entries
 from ._render.jobs import (
     decompress_plan,
     decompress_result,
@@ -27,22 +26,17 @@ from ._render.jobs import (
 from ._run import InputFailed, run_all, run_job
 
 
-def _extract_archive(job: ExtractJob, list_only: bool, quiet: bool) -> None:
+def _extract_archive(job: ExtractJob, quiet: bool) -> None:
     """Unpack one archive.
 
     Args:
         job: The planned job.
-        list_only: Whether to list entries only.
         quiet: Whether to suppress output.
     """
     plan = job.plan
 
     if not plan.can_run:
         raise InputFailed(f"{plan.archive}: {plan.reason_if_unavailable}")
-
-    if list_only:
-        list_entries(job.list_contents())
-        return
 
     if not quiet:
         extract_plan(plan)
@@ -62,21 +56,14 @@ def _extract_archive(job: ExtractJob, list_only: bool, quiet: bool) -> None:
         extract_result(plan, elapsed)
 
 
-def _decompress_one_file(job: DecompressionJob, list_only: bool, quiet: bool) -> None:
+def _decompress_one_file(job: DecompressionJob, quiet: bool) -> None:
     """Unpack one single-file container: a `.comp` or a standalone codec.
 
     Args:
         job: The planned job.
-        list_only: Whether to list entries only.
         quiet: Whether to suppress output.
     """
     plan = job.plan
-
-    if list_only:
-        fail(
-            f"Error: {plan.src.name} holds a single file, so there is nothing to list",
-            EXIT_USAGE,
-        )
 
     if not plan.can_run:
         raise InputFailed(f"{plan.src}: {plan.reason_if_unavailable}")
@@ -114,9 +101,6 @@ def extract(
             help="Where to write (default: beside the input)",
         ),
     ] = None,
-    list_only: Annotated[
-        bool, app.Option("--list", help="List archive contents without extracting")
-    ] = False,
     overwrite: Annotated[
         bool, app.Option("--overwrite", help="Replace files that already exist")
     ] = False,
@@ -194,7 +178,6 @@ def extract(
         output: Where to write (default: beside the input); a directory for
             archives, and for one file either a directory to put it in or the
             path to write.
-        list_only: If True, list archive contents without extracting.
         overwrite: If True, replace files that already exist.
         skip_existing: If True, leave files that already exist untouched.
         error_on_conflict: If True, fail instead of renaming a clashing file.
@@ -247,10 +230,10 @@ def extract(
 
     def run_one(job: ExtractJob | DecompressionJob) -> None:
         if isinstance(job, ExtractJob):
-            _extract_archive(job, list_only, quiet)
+            _extract_archive(job, quiet)
 
         else:
-            _decompress_one_file(job, list_only, quiet)
+            _decompress_one_file(job, quiet)
 
     try:
         sys.exit(run_all(plan_extract(request), run_one, "Extraction"))

@@ -32,23 +32,15 @@ class TestInspect:
         assert orjson.loads(result.output)["is_compresso"] is True
 
     def test_inspect_archive_text(self, make_archive: Callable[[str], Path]) -> None:
-        """Test that an archive shows only a summary unless --entries is given."""
-        archive = make_archive("zip")
-
-        summary = invoke("inspect", archive).output
-        listing = invoke("inspect", archive, "--entries").output
+        """Test that an archive shows a summary, not its entries."""
+        summary = invoke("inspect", make_archive("zip")).output
 
         assert "Entries:       4" in summary
         assert "f0.bin" not in summary
-        assert "f0.bin" in listing
 
     def test_inspect_archive_json(self, make_archive: Callable[[str], Path]) -> None:
-        """Test that --json carries entries only when --entries is given."""
-        archive = make_archive("zip")
-
-        summary = orjson.loads(invoke("inspect", archive, "--json").output)
-        listing = orjson.loads(invoke("inspect", archive, "--entries", "--json").output)
+        """Test that --json carries the summary, not the entries."""
+        summary = orjson.loads(invoke("inspect", make_archive("zip"), "--json").output)
 
         assert summary["entry_count"] == 4
         assert "entries" not in summary
-        assert sum("f0.bin" in e["path"] for e in listing["entries"]) == 1
