@@ -122,7 +122,7 @@ class TestDecompressConflicts:
         invoke("compress", payload, "-o", archive, "-q")
         restored.write_bytes(b"stale")
 
-        result = invoke("decompress", archive, "-o", restored, *flags, expect=expect)
+        result = invoke("extract", archive, "-o", restored, *flags, expect=expect)
 
         sibling = tmp_path / renamed(restored.name)
         assert (f"Renamed to:        {sibling}" in result.output) == renames
@@ -204,25 +204,6 @@ class TestSmartExtract:
         assert str(broken) in result.output
         assert (dest / "good").read_bytes() == payload.read_bytes()
         assert not (dest / "bad").exists()
-        for original in source_tree.iterdir():
-            restored = dest / source_tree.name / original.name
-            assert restored.read_bytes() == original.read_bytes()
-
-
-class TestMergedVerbCompatibility:
-    """Test that the old names still work, and the old argument order says so."""
-
-    def test_decompress_now_handles_archives_too(
-        self,
-        source_tree: Path,
-        tmp_path: Path,
-        make_archive: Callable[[str], Path],
-    ) -> None:
-        """Test that the merged verb does not care which name was typed."""
-        dest = tmp_path / "out"
-
-        invoke("decompress", make_archive("tar"), "-o", dest, "-q")
-
         for original in source_tree.iterdir():
             restored = dest / source_tree.name / original.name
             assert restored.read_bytes() == original.read_bytes()

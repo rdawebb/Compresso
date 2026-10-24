@@ -35,7 +35,6 @@ dev = [
 
 [project.scripts]
 compresso = "compresso.cli:main"
-comp = "compresso.cli:main"
 
 [tool.meson-python.args]
 # Meson only activates MSVC when no other compiler is on PATH, which the MinGW

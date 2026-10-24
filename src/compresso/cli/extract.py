@@ -1,4 +1,4 @@
-"""The `extract` command, which also answers to `decompress`."""
+"""The `extract` command, unpacking archives and compressed files."""
 
 from __future__ import annotations
 
@@ -249,4 +249,4 @@ def extract(
 
 def register() -> None:
     """Attach this command to the app."""
-    app.command(aliases=["x", "ex", "decompress", "d", "decomp"])(extract)
+    app.command(aliases=["x"])(extract)

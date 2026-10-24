@@ -133,4 +133,4 @@ def benchmark(
 
 def register() -> None:
     """Attach this command to the app."""
-    app.command(aliases=["b", "bench"])(benchmark)
+    app.command(aliases=["b"])(benchmark)

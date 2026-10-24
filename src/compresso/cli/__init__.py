@@ -14,8 +14,8 @@ _COMMAND_MODULES = (
     extract,
     list_,
     info,
-    benchmark,
     formats,
+    benchmark,
 )
 
 for _module in _COMMAND_MODULES:

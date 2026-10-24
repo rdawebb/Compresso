@@ -83,12 +83,12 @@ class TestAppStructure:
         positions = [
             output.index(aliases)
             for aliases in [
-                "(c, comp",
-                "(x, ex",
+                "(c)",
+                "(x)",
                 "(l)",
                 "(i)",
-                "(b, bench)",
                 "List the available",
+                "(b)",
             ]
         ]
         assert positions == sorted(positions)
@@ -97,19 +97,10 @@ class TestAppStructure:
         "alias,command",
         [
             ("c", "compress"),
-            ("comp", "compress"),
-            ("archive", "compress"),
-            ("a", "compress"),
-            ("ar", "compress"),
             ("x", "extract"),
-            ("ex", "extract"),
-            ("decompress", "extract"),
-            ("d", "extract"),
-            ("decomp", "extract"),
             ("l", "list"),
             ("i", "info"),
             ("b", "benchmark"),
-            ("bench", "benchmark"),
         ],
     )
     def test_aliases_still_resolve(self, alias: str, command: str) -> None:

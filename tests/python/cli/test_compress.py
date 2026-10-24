@@ -25,7 +25,7 @@ class TestCompressRoundTrip:
         result = invoke("compress", payload, "-o", archive)
         assert "Compression successful" in result.output
 
-        result = invoke("decompress", archive, "-o", restored)
+        result = invoke("extract", archive, "-o", restored)
         assert "Decompression successful" in result.output
 
         assert restored.read_bytes() == payload.read_bytes()
@@ -47,7 +47,7 @@ class TestCompressRoundTrip:
         restored = tmp_path / "restored.bin"
 
         invoke("compress", payload, "-o", archive, *args, "-q")
-        invoke("decompress", archive, "-o", restored, "-q")
+        invoke("extract", archive, "-o", restored, "-q")
 
         assert restored.read_bytes() == payload.read_bytes()
 

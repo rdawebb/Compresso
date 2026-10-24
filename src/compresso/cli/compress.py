@@ -1,4 +1,4 @@
-"""The `compress` command, which also answers to `archive`."""
+"""The `compress` command, packing files into archives and compressed files."""
 
 from __future__ import annotations
 
@@ -232,4 +232,4 @@ def compress(
 
 def register() -> None:
     """Attach this command to the app."""
-    app.command(aliases=["c", "comp", "archive", "a", "ar"])(compress)
+    app.command(aliases=["c"])(compress)
