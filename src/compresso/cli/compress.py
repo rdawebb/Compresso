@@ -13,7 +13,7 @@ from ..frontend.dispatch import CompressRequest, plan_compress
 from ._app import app
 from ._render import EXIT_USAGE, cancelled, fail
 from ._render.jobs import archive_plan, archive_result, compress_plan, compress_result
-from ._run import run_all, run_job
+from ._run import conflict_mode, run_all, run_job
 
 
 def _compress_one_file(job: CompressionJob, quiet: bool) -> None:
@@ -87,7 +87,7 @@ def compress(
         str | None,
         app.Option(
             "--format",
-            "-f",
+            "-F",
             case_sensitive=False,
             help="Container to write, e.g. gz, zst, tar.zst, zip",
         ),
@@ -115,24 +115,18 @@ def compress(
             help="Compression level; each algorithm's range is shown by `list`",
         ),
     ] = None,
-    overwrite: Annotated[
-        bool,
+    on_conflict: Annotated[
+        OverwriteMode | None,
         app.Option(
-            "--overwrite", help="Replace an archive that already exists at the output"
+            "--on-conflict",
+            case_sensitive=False,
+            help="What to do when the output exists",
+            show_default="rename",
         ),
-    ] = False,
-    skip_existing: Annotated[
+    ] = None,
+    force: Annotated[
         bool,
-        app.Option(
-            "--skip-existing", help="Leave an existing output archive untouched"
-        ),
-    ] = False,
-    error_on_conflict: Annotated[
-        bool,
-        app.Option(
-            "--error-on-conflict",
-            help="Fail instead of renaming a clashing output archive",
-        ),
+        app.Option("--force", "-f", help="Replace an existing output"),
     ] = False,
     threads: Annotated[
         int,
@@ -151,15 +145,14 @@ def compress(
     \f
 
     One file becomes a single-file container: a Compresso `.comp` by default,
-    or `-f gz`/`zst`/`xz`/`bz2`/`lz4` for a standalone one; a directory, or
+    or `-F gz`/`zst`/`xz`/`bz2`/`lz4` for a standalone one; a directory, or
     more than one input, becomes an archive (`zip` unless told otherwise);
-    a recognisable extension on `-o` picks the format on its own, and `-f`
+    a recognisable extension on `-o` picks the format on its own, and `-F`
     overrides it.
 
     A clashing output name by default gets a platform-native numbered sibling
     (`name 2.ext` on macOS, `name (2).ext` elsewhere), for an archive and a
-    single-file container alike; use `--overwrite`, `--skip-existing`, or
-    `--error-on-conflict` to change that.
+    single-file container alike; use `--on-conflict` or `-f` to change that.
 
     Args:
         inputs: The files and directories to compress.
@@ -168,27 +161,12 @@ def compress(
         algo: Algorithm for the Compresso container (default: auto).
         strategy: Strategy for the Compresso container (default: balanced).
         level: Compression level (default: the format's own).
-        overwrite: If True, replace an existing output.
-        skip_existing: If True, leave an existing output untouched.
-        error_on_conflict: If True, fail instead of renaming a clashing output.
+        on_conflict: What to do when the output exists (default: rename).
+        force: If True, replace an existing output.
         threads: Worker threads for zstd and xz (default: one per core).
         quiet: If True, suppress all output.
     """
-    if sum([overwrite, skip_existing, error_on_conflict]) > 1:
-        fail(
-            "Error: --overwrite, --skip-existing and --error-on-conflict "
-            "are mutually exclusive",
-            EXIT_USAGE,
-        )
-
-    if overwrite:
-        overwrite_mode = OverwriteMode.OVERWRITE
-    elif skip_existing:
-        overwrite_mode = OverwriteMode.SKIP
-    elif error_on_conflict:
-        overwrite_mode = OverwriteMode.ERROR
-    else:
-        overwrite_mode = OverwriteMode.RENAME
+    overwrite_mode = conflict_mode(on_conflict, force)
 
     try:
         if not inputs:

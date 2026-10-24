@@ -30,7 +30,7 @@ class TestArchiveRoundTrip:
         archive = tmp_path / f"out.{fmt}"
         dest = tmp_path / f"dest.{fmt}"
 
-        result = invoke("compress", source_tree, "-o", archive, "-f", fmt)
+        result = invoke("compress", source_tree, "-o", archive, "-F", fmt)
         assert "Archive created" in result.output
 
         result = invoke("extract", archive, "-o", dest)
@@ -44,11 +44,12 @@ class TestArchiveRoundTrip:
         "flags,expect,renames",
         [
             ((), EXIT_OK, True),
-            (("--error-on-conflict",), EXIT_FAILED, False),
-            (("--skip-existing",), EXIT_OK, False),
-            (("--overwrite",), EXIT_OK, False),
+            (("--on-conflict", "error"), EXIT_FAILED, False),
+            (("--on-conflict", "skip"), EXIT_OK, False),
+            (("--on-conflict", "overwrite"), EXIT_OK, False),
+            (("-f",), EXIT_OK, False),
         ],
-        ids=["rename", "error", "skip", "overwrite"],
+        ids=["rename", "error", "skip", "overwrite", "force"],
     )
     def test_extract_over_an_existing_tree(
         self,

@@ -111,7 +111,7 @@ def compress_target(
     if request.param == "file":
         return CompressTarget(payload, tmp_path / "out.comp", ())
 
-    return CompressTarget(source_tree, tmp_path / "out.tar", ("-f", "tar"))
+    return CompressTarget(source_tree, tmp_path / "out.tar", ("-F", "tar"))
 
 
 @dataclass
@@ -155,9 +155,12 @@ CONFLICT_MODES = pytest.mark.parametrize(
     "flags,expect,kept,renames",
     [
         ((), EXIT_OK, True, True),
-        (("--error-on-conflict",), EXIT_FAILED, True, False),
-        (("--skip-existing",), EXIT_OK, True, False),
-        (("--overwrite",), EXIT_OK, False, False),
+        (("--on-conflict", "rename"), EXIT_OK, True, True),
+        (("--on-conflict", "error"), EXIT_FAILED, True, False),
+        (("--on-conflict", "skip"), EXIT_OK, True, False),
+        (("--on-conflict", "overwrite"), EXIT_OK, False, False),
+        (("-f",), EXIT_OK, False, False),
+        (("-f", "--on-conflict", "overwrite"), EXIT_OK, False, False),
     ],
-    ids=["rename", "error", "skip", "overwrite"],
+    ids=["default", "rename", "error", "skip", "overwrite", "force", "force+overwrite"],
 )

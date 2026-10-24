@@ -103,7 +103,7 @@ class TestSmartCompress:
         result = invoke(
             "compress",
             source_tree,
-            "-f",
+            "-F",
             "gz",
             "-o",
             tmp_path / "o.gz",
@@ -113,5 +113,5 @@ class TestSmartCompress:
         assert "single file" in result.output
 
     def test_unknown_format_is_refused(self, payload: Path) -> None:
-        """Test that an unrecognised -f names neither container."""
-        invoke("compress", payload, "-f", "bogus", expect=EXIT_USAGE)
+        """Test that an unrecognised -F names neither container."""
+        invoke("compress", payload, "-F", "bogus", expect=EXIT_USAGE)

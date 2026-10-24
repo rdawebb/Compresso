@@ -60,22 +60,22 @@ class OverwriteMode(StrEnum):
     """What archiving or extraction does when a destination already exists.
 
     Attributes:
-        ERROR: Fail the operation.
-        SKIP: Leave the existing file untouched.
-        OVERWRITE: Replace the existing file.
         RENAME: Write to a platform-native numbered sibling instead (e.g.
             "name 2.ext" on macOS, "name (2).ext" elsewhere), leaving the
             existing file untouched.
+        OVERWRITE: Replace the existing file.
+        SKIP: Leave the existing file untouched.
+        ERROR: Fail the operation.
     """
 
-    ERROR = "error"
-    SKIP = "skip"
-    OVERWRITE = "overwrite"
     RENAME = "rename"
+    OVERWRITE = "overwrite"
+    SKIP = "skip"
+    ERROR = "error"
 
 
-# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h. Archive
-# creation applies the same codes to its single destination file.
+# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h; archive
+# creation applies the same codes to its single destination file
 _OVERWRITE_CODES: dict[OverwriteMode, int] = {
     OverwriteMode.ERROR: 0,
     OverwriteMode.SKIP: 1,
@@ -89,13 +89,13 @@ class SymlinkMode(StrEnum):
 
     Attributes:
         DENY: Refuse the archive.
-        ALLOW: Create the link, if its target stays inside the output directory.
         FILE: Write a regular file holding the link's target.
+        ALLOW: Create the link, if its target stays inside the output directory.
     """
 
     DENY = "deny"
-    ALLOW = "allow"
     FILE = "file"
+    ALLOW = "allow"
 
 
 _SYMLINK_CODES: dict[SymlinkMode, int] = {

@@ -23,7 +23,7 @@ from ._render.jobs import (
     extract_plan,
     extract_result,
 )
-from ._run import InputFailed, require_files, run_all, run_job
+from ._run import InputFailed, conflict_mode, require_files, run_all, run_job
 
 
 def _extract_archive(job: ExtractJob, quiet: bool) -> None:
@@ -104,17 +104,18 @@ def extract(
             help="Where to write (default: beside the input)",
         ),
     ] = None,
-    overwrite: Annotated[
-        bool, app.Option("--overwrite", help="Replace files that already exist")
-    ] = False,
-    skip_existing: Annotated[
-        bool, app.Option("--skip-existing", help="Leave files that already exist")
-    ] = False,
-    error_on_conflict: Annotated[
-        bool,
+    on_conflict: Annotated[
+        OverwriteMode | None,
         app.Option(
-            "--error-on-conflict", help="Fail instead of renaming a clashing file"
+            "--on-conflict",
+            case_sensitive=False,
+            help="What to do when a file exists",
+            show_default="rename",
         ),
+    ] = None,
+    force: Annotated[
+        bool,
+        app.Option("--force", "-f", help="Replace files that already exist"),
     ] = False,
     max_total_size: Annotated[
         int | None,
@@ -173,17 +174,16 @@ def extract(
     The result is written beside its input unless `-o` is provided.
 
     By default, a clashing name gets a platform-native numbered sibling
-    (`name 2.ext` on macOS, `name (2).ext` elsewhere); use `--overwrite`,
-    `--skip-existing`, or `--error-on-conflict` to change that.
+    (`name 2.ext` on macOS, `name (2).ext` elsewhere); use `--on-conflict` or
+    `-f` to change that.
 
     Args:
         inputs: The archives or compressed files to unpack.
         output: Where to write (default: beside the input); a directory for
             archives, and for one file either a directory to put it in or the
             path to write.
-        overwrite: If True, replace files that already exist.
-        skip_existing: If True, leave files that already exist untouched.
-        error_on_conflict: If True, fail instead of renaming a clashing file.
+        on_conflict: What to do when a file exists (default: rename).
+        force: If True, replace files that already exist.
         max_total_size: Cap on total extracted bytes (default: no cap).
         same_permissions: If True, restore archive entries' modes exactly;
             single-file outputs are unaffected.
@@ -194,26 +194,12 @@ def extract(
             stores, and give it the stored modification time, if any.
         quiet: If True, suppress all output.
     """
-    if sum([overwrite, skip_existing, error_on_conflict]) > 1:
-        fail(
-            "Error: --overwrite, --skip-existing and --error-on-conflict "
-            "are mutually exclusive",
-            EXIT_USAGE,
-        )
+    mode = conflict_mode(on_conflict, force)
 
     if not inputs:
         fail("Error: No input files given", EXIT_USAGE)
 
     require_files(inputs)
-
-    if overwrite:
-        mode = OverwriteMode.OVERWRITE
-    elif skip_existing:
-        mode = OverwriteMode.SKIP
-    elif error_on_conflict:
-        mode = OverwriteMode.ERROR
-    else:
-        mode = OverwriteMode.RENAME
 
     options = ExtractOptions(
         overwrite=mode,

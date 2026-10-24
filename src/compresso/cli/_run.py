@@ -9,6 +9,7 @@ from typing import Any, TypeVar
 
 from .._core import Error
 from ..frontend._job import ThreadedJob
+from ..frontend.archive_api import OverwriteMode
 from ._render import (
     BAR_THRESHOLD,
     EXIT_FAILED,
@@ -38,6 +39,25 @@ def require_files(paths: Iterable[Path]) -> None:
     for path in paths:
         if not path.is_file():
             fail(f"Error: {path} does not exist or is not a file", EXIT_USAGE)
+
+
+def conflict_mode(on_conflict: OverwriteMode | None, force: bool) -> OverwriteMode:
+    """Resolve `--on-conflict` and `-f` into one mode, exiting 2 if they disagree.
+
+    Args:
+        on_conflict: The mode given, or None if it was not.
+        force: Whether `-f`, shorthand for `--on-conflict overwrite`, was given.
+
+    Returns:
+        The mode to run with; RENAME if neither was given.
+    """
+    if not force:
+        return on_conflict or OverwriteMode.RENAME
+
+    if on_conflict not in (None, OverwriteMode.OVERWRITE):
+        fail(f"Error: -f contradicts --on-conflict {on_conflict}", EXIT_USAGE)
+
+    return OverwriteMode.OVERWRITE
 
 
 def run_job(

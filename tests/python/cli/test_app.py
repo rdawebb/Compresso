@@ -168,7 +168,7 @@ class TestProgressBar:
         archive = tmp_path / "out.tar"
         dest = tmp_path / "dest"
 
-        invoke("compress", tree, "-o", archive, "-f", "tar")
+        invoke("compress", tree, "-o", archive, "-F", "tar")
         invoke("extract", archive, "-o", dest)
 
         assert [bar.enabled for bar in bars] == [True, True]
@@ -221,31 +221,23 @@ class TestExitCodes:
         assert shown in result.stdout
 
     @pytest.mark.parametrize("command", ["compress", "extract"])
-    @pytest.mark.parametrize(
-        "flags",
-        [
-            ["--overwrite", "--skip-existing"],
-            ["--overwrite", "--error-on-conflict"],
-            ["--skip-existing", "--error-on-conflict"],
-        ],
-        ids=["overwrite+skip", "overwrite+error", "skip+error"],
-    )
-    def test_mutually_exclusive_flag_usage(
+    @pytest.mark.parametrize("mode", ["rename", "skip", "error"])
+    def test_force_with_another_conflict_mode_is_usage(
         self,
         source_tree: Path,
         tmp_path: Path,
         make_archive: Callable[[str], Path],
         command: str,
-        flags: list[str],
+        mode: str,
     ) -> None:
-        """Test that combining any two overwrite-mode flags is contradictory."""
+        """Test that -f, meaning overwrite, contradicts any other --on-conflict."""
         if command == "compress":
-            args = [source_tree, "-o", tmp_path / "out.tar", "-f", "tar"]
+            args = [source_tree, "-o", tmp_path / "out.tar", "-F", "tar"]
         else:
             args = [make_archive("tar"), "-o", tmp_path / "d"]
 
-        result = invoke(command, *args, *flags, expect=EXIT_USAGE)
-        assert "mutually exclusive" in result.output
+        result = invoke(command, *args, "-f", "--on-conflict", mode, expect=EXIT_USAGE)
+        assert f"-f contradicts --on-conflict {mode}" in result.output
 
     # An archive's level is checked against the stage that compresses
     @pytest.mark.parametrize(
@@ -275,11 +267,11 @@ class TestExitCodes:
         """Test that a level that is not a number is a usage error."""
         invoke("benchmark", payload, "--levels", "nope", expect=EXIT_USAGE)
 
-    @pytest.mark.parametrize("flags", [(), ("-f", "7z")], ids=["suffix", "flag"])
+    @pytest.mark.parametrize("flags", [(), ("-F", "7z")], ids=["suffix", "flag"])
     def test_recognised_but_unsupported_archive_names_itself(
         self, source_tree: Path, tmp_path: Path, flags: tuple[str, ...]
     ) -> None:
-        """Test that 7z, asked for by -f or by `-o x.7z` alone, reports its own name
+        """Test that 7z, asked for by -F or by `-o x.7z` alone, reports its own name
         rather than being written as a zip."""
         dest = tmp_path / "o.7z"
         result = invoke("compress", source_tree, "-o", dest, *flags, expect=EXIT_FAILED)
