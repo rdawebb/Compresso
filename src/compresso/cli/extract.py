@@ -23,7 +23,7 @@ from ._render.jobs import (
     extract_plan,
     extract_result,
 )
-from ._run import InputFailed, run_all, run_job
+from ._run import InputFailed, require_files, run_all, run_job
 
 
 def _extract_archive(job: ExtractJob, quiet: bool) -> None:
@@ -91,7 +91,10 @@ def _decompress_one_file(job: DecompressionJob, quiet: bool) -> None:
 
 
 def extract(
-    inputs: Annotated[list[Path], app.Argument(help="Archives or compressed files")],
+    inputs: Annotated[
+        list[Path],
+        app.Argument(help="Archives or compressed files", readable=False),
+    ],
     output: Annotated[
         Path | None,
         app.Option(
@@ -201,11 +204,7 @@ def extract(
     if not inputs:
         fail("Error: No input files given", EXIT_USAGE)
 
-    # A stat shows these, so nothing runs; what only an input's bytes show
-    # fails that input alone
-    for path in inputs:
-        if not path.is_file():
-            fail(f"Error: {path} does not exist or is not a file", EXIT_USAGE)
+    require_files(inputs)
 
     if overwrite:
         mode = OverwriteMode.OVERWRITE

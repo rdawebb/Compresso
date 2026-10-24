@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 import pytest
 
 import compresso.cli.formats as formats_cmd
-import compresso.cli.inspect as inspect_cmd
+import compresso.cli.info as info_cmd
 import compresso.cli.list as list_cmd
 from compresso.cli._render import (
     EXIT_CANCELLED,
@@ -85,7 +86,7 @@ class TestAppStructure:
                 "(c, comp",
                 "(x, ex",
                 "(l)",
-                "(i, info)",
+                "(i)",
                 "(b, bench)",
                 "List the available",
             ]
@@ -106,8 +107,7 @@ class TestAppStructure:
             ("d", "extract"),
             ("decomp", "extract"),
             ("l", "list"),
-            ("i", "inspect"),
-            ("info", "inspect"),
+            ("i", "info"),
             ("b", "benchmark"),
             ("bench", "benchmark"),
         ],
@@ -195,15 +195,39 @@ class TestExitCodes:
         "command,name",
         [
             ("compress", "nope.bin"),
-            ("inspect", "payload.bin"),
+            ("info", "nope.comp"),
             ("extract", "nope.gz"),
             ("list", "nope.zip"),
         ],
     )
     def test_bad_input_is_usage(self, payload: Path, command: str, name: str) -> None:
-        """Test that a missing input, or one inspect can't read, is wrong, rather
-        than the operation having failed."""
+        """Test that a missing input is wrong, rather than the operation having
+        failed."""
         invoke(command, payload.parent / name, expect=EXIT_USAGE)
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX, not root"
+    )
+    @pytest.mark.parametrize(
+        "command,shown", [("list", "f0.bin"), ("info", "Entries:")]
+    )
+    def test_unreadable_input_fails_alone(
+        self,
+        tmp_path: Path,
+        make_archive: Callable[[str], Path],
+        command: str,
+        shown: str,
+    ) -> None:
+        """Test that an OSError from one input is reported against it, as gzip
+        does, and the next input still runs."""
+        locked = tmp_path / "locked.zip"
+        locked.write_bytes(b"")
+        locked.chmod(0)
+
+        result = invoke(command, locked, make_archive("zip"), expect=EXIT_FAILED)
+
+        assert f"{locked}: Permission denied" in result.output
+        assert shown in result.stdout
 
     @pytest.mark.parametrize("command", ["compress", "extract"])
     @pytest.mark.parametrize(
@@ -284,7 +308,7 @@ class TestInterruption:
         "command,expected",
         [
             (["compress"], "Compression cancelled"),
-            (["inspect"], "Inspection cancelled"),
+            (["info"], "Inspection cancelled"),
             (["list"], "Listing cancelled"),
             (["formats"], "Format listing cancelled"),
         ],
@@ -303,7 +327,7 @@ class TestInterruption:
             raise KeyboardInterrupt
 
         monkeypatch.setattr(CompressionJob, "from_file", interrupt)
-        monkeypatch.setattr(inspect_cmd, "inspect_file", interrupt)
+        monkeypatch.setattr(info_cmd, "detect_format", interrupt)
         monkeypatch.setattr(list_cmd, "detect_format", interrupt)
         monkeypatch.setattr(formats_cmd, "list_capabilities", interrupt)
 

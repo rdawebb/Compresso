@@ -551,14 +551,6 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
         """
         return cls(plan=plan_extraction(archive, output_dir, files, options))
 
-    def list_contents(self) -> list[ArchiveEntry]:
-        """List archive entry paths without extracting.
-
-        Returns:
-            List of ArchiveEntry instances.
-        """
-        return list(self.plan.entries)
-
     def run(
         self,
         progress: ProgressCallback | None = None,

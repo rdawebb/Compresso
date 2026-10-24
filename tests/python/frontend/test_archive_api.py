@@ -280,7 +280,6 @@ class TestArchiveRoundTrip:
         assert result.ok, result.error
 
         extract_job = ExtractJob.from_archive(archive_path, tmp_path / "sortie")
-        assert all(isinstance(e, ArchiveEntry) for e in extract_job.list_contents())
         result = extract_job.run()
         assert result.ok, result.error
 

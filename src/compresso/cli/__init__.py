@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import benchmark, compress, extract, formats, inspect
+from . import benchmark, compress, extract, formats, info
 from . import list as list_
 from ._app import app
 
@@ -13,7 +13,7 @@ _COMMAND_MODULES = (
     compress,
     extract,
     list_,
-    inspect,
+    info,
     benchmark,
     formats,
 )

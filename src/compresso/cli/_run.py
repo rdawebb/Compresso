@@ -13,7 +13,9 @@ from ._render import (
     BAR_THRESHOLD,
     EXIT_FAILED,
     EXIT_OK,
+    EXIT_USAGE,
     cancelled,
+    fail,
     progress_bar,
     report_error,
 )
@@ -23,6 +25,19 @@ J = TypeVar("J")
 
 class InputFailed(Exception):
     """One input failed; the runner reports it and goes on to the next."""
+
+
+def require_files(paths: Iterable[Path]) -> None:
+    """Exit 2 before any input runs if one is missing or not a file.
+
+    A stat shows these; what only an input's bytes show fails that input alone.
+
+    Args:
+        paths: The inputs, as given.
+    """
+    for path in paths:
+        if not path.is_file():
+            fail(f"Error: {path} does not exist or is not a file", EXIT_USAGE)
 
 
 def run_job(
@@ -73,7 +88,8 @@ def run_all(jobs: Iterable[J], run_one: Callable[[J], None], what: str) -> int:
 
     Args:
         jobs: The planned jobs, one per input.
-        run_one: Runs one job, raising `InputFailed` or `Error` if it fails.
+        run_one: Runs one job, raising `InputFailed`, `Error` or `OSError` if
+            it fails; anything else is a bug and stops the run.
         what: Operation name for messages, e.g. "Compression".
 
     Returns:
@@ -90,6 +106,11 @@ def run_all(jobs: Iterable[J], run_one: Callable[[J], None], what: str) -> int:
 
         except Error as e:
             report_error(f"{what} error: {e}")
+            failed = True
+
+        # As gzip does, e.g. an input removed or made unreadable since the stat
+        except OSError as e:
+            report_error(f"{e.filename}: {e.strerror}" if e.filename else str(e))
             failed = True
 
     return EXIT_FAILED if failed else EXIT_OK

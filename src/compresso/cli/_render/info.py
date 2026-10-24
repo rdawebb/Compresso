@@ -11,7 +11,7 @@ import orjson
 from ...frontend.archive_api import ArchiveEntry
 from ...introspect.file_inspect import InspectResult
 from .._app import app
-from . import EXIT_USAGE, fail, format_size, format_time, succeed
+from . import format_size, format_time, succeed
 
 
 def list_entries(entries: list[ArchiveEntry], *, long: bool = False) -> None:
@@ -92,50 +92,49 @@ def _entry_detail_line(entry: ArchiveEntry) -> str:
     return f"{mode}  {mtime}  {size:>10}  {entry.path}{target}{detail}"
 
 
-def listings_json(listings: list[tuple[Path, str, list[ArchiveEntry]]]) -> None:
-    """Print archives' entries as a JSON array of `{path, format, entries}`.
+def print_json(items: list[dict[str, object]]) -> None:
+    """Print a JSON array, one item per input.
 
     Args:
-        listings: Each archive's path, detected format and entries.
+        items: Each input's description.
     """
-    data = [
-        {"path": str(path), "format": fmt, "entries": entries}
-        for path, fmt, entries in listings
-    ]
-    print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
+    print(orjson.dumps(items, option=orjson.OPT_INDENT_2).decode())
 
 
 def archive_info(
     file: Path,
-    fmt: str | None,
+    fmt: str,
     entries: list[ArchiveEntry],
     *,
     as_json: bool,
-) -> None:
-    """Print an archive's metadata, as text or JSON.
+) -> dict[str, object]:
+    """Describe an archive, printing the text form unless JSON is wanted.
 
     Args:
         file: The archive's path.
         fmt: The archive's detected format.
         entries: The archive's entries.
-        as_json: If True, print JSON instead of text.
+        as_json: If True, print nothing; the caller prints the returned item.
+
+    Returns:
+        The archive's JSON item.
     """
     total_size = sum(entry.size for entry in entries)
     archive_size: int = file.stat().st_size
+    data: dict[str, object] = {
+        "path": str(file),
+        "format": fmt,
+        "is_archive": True,
+        "entry_count": len(entries),
+        "total_size": total_size,
+        "archive_size": archive_size,
+    }
 
     if as_json:
-        data: dict[str, object] = {
-            "path": str(file),
-            "format": fmt,
-            "is_archive": True,
-            "entry_count": len(entries),
-            "total_size": total_size,
-            "archive_size": archive_size,
-        }
-        print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
-        return
+        return data
 
     lines: list[str] = [
+        "",
         f"File:          {file}",
         f"Format:        {fmt}",
         f"Entries:       {len(entries)}",
@@ -148,44 +147,70 @@ def archive_info(
         lines.append(f"Compression:   {ratio:.1f}% of original")
 
     print("\n".join(lines))
+    print()
+
+    return data
 
 
-def file_info(result: InspectResult, *, as_json: bool) -> None:
-    """Print a single-file container's metadata, as text or JSON.
+def codec_info(file: Path, fmt: str, *, as_json: bool) -> dict[str, object]:
+    """Describe a standalone codec file, e.g. a `.gz`, by its format and size.
+
+    Args:
+        file: The file's path.
+        fmt: The file's detected format.
+        as_json: If True, print nothing; the caller prints the returned item.
+
+    Returns:
+        The file's JSON item.
+    """
+    size: int = file.stat().st_size
+    data: dict[str, object] = {"path": str(file), "format": fmt, "size": size}
+
+    lines: list[str] = [
+        "",
+        f"File:          {file}",
+        f"Format:        {fmt}",
+        f"Size:          {format_size(size_bytes=size)}",
+        "",
+    ]
+
+    if not as_json:
+        print("\n".join(lines))
+
+    return data
+
+
+def file_info(result: InspectResult, *, as_json: bool) -> dict[str, object]:
+    """Describe a `.comp` file with a valid header from its inspection.
 
     Args:
         result: The container's inspection.
-        as_json: If True, print JSON instead of text.
+        as_json: If True, print nothing; the caller prints the returned item.
+
+    Returns:
+        The file's JSON item.
     """
+    data: dict[str, object] = {
+        "path": str(object=result.path),
+        "format": "compresso",
+        "is_compresso": result.is_compresso,
+        "header_ok": result.header_ok,
+        "version": result.version,
+        "algo_id": result.algo_id,
+        "algo_name": result.algo_name,
+        "level": result.level,
+        "flags": result.flags,
+        "orig_size": result.orig_size,
+        "backend_available": result.backend_available,
+        "can_decompress": result.can_decompress,
+        "estimated_decomp_s": result.estimated_decomp_s,
+        "reason": result.reason,
+    }
+
     if as_json:
-        data: dict[str, str | int | None | float] = {
-            "path": str(object=result.path),
-            "is_compresso": result.is_compresso,
-            "header_ok": result.header_ok,
-            "version": result.version,
-            "algo_id": result.algo_id,
-            "algo_name": result.algo_name,
-            "level": result.level,
-            "flags": result.flags,
-            "orig_size": result.orig_size,
-            "backend_available": result.backend_available,
-            "can_decompress": result.can_decompress,
-            "estimated_decomp_s": result.estimated_decomp_s,
-            "reason": result.reason,
-        }
-        print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
-        return
+        return data
 
     print(f"File: {result.path}\n")
-
-    if not result.is_compresso:
-        reason = f"\n  Reason: {result.reason}" if result.reason else ""
-        fail(f"Not a valid Compresso file{reason}", EXIT_USAGE)
-
-    if not result.header_ok:
-        reason = f"\n  Reason: {result.reason}" if result.reason else ""
-        fail(f"Invalid file header{reason}", EXIT_USAGE)
-
     succeed("Valid Compresso file\n")
 
     lines: list[str] = [
@@ -219,9 +244,10 @@ def file_info(result: InspectResult, *, as_json: bool) -> None:
         lines.append(
             f"Est. decomp time:   {format_time(seconds=result.estimated_decomp_s)}"
         )
-        lines.append("")
 
     print("\n".join(lines))
 
     if not result.can_decompress and result.reason:
         app.echo(message=app.style(text=f"\n⚠ {result.reason}", fg="yellow"))
+
+    return data

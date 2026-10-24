@@ -11,9 +11,9 @@ from ..frontend.archive_api import ArchiveEntry
 from ..frontend.archive_api import plan_extraction as plan_archive_extraction
 from ..frontend.dispatch import is_archive_format
 from ._app import app
-from ._render import EXIT_USAGE, cancelled, fail, input_header
-from ._render.info import list_entries, listings_json
-from ._run import InputFailed, run_all
+from ._render import cancelled, fail, input_header
+from ._render.info import list_entries, print_json
+from ._run import InputFailed, require_files, run_all
 
 
 def _read_entries(path: Path) -> tuple[str, list[ArchiveEntry]]:
@@ -45,7 +45,9 @@ def _read_entries(path: Path) -> tuple[str, list[ArchiveEntry]]:
 
 
 def list_archives(
-    inputs: Annotated[list[Path], app.Argument(help="Archives to list")],
+    inputs: Annotated[
+        list[Path], app.Argument(help="Archives to list", readable=False)
+    ],
     long: Annotated[
         bool,
         app.Option("--long", "-l", help="Show each entry's mode, mtime and detail"),
@@ -66,11 +68,9 @@ def list_archives(
         long: If True, show each entry's full detail.
         output_json: If True, print a JSON array of `{path, format, entries}`.
     """
-    for path in inputs:
-        if not path.is_file():
-            fail(f"Error: {path} does not exist or is not a file", EXIT_USAGE)
+    require_files(inputs)
 
-    listings: list[tuple[Path, str, list[ArchiveEntry]]] = []
+    listings: list[dict[str, object]] = []
 
     def run_one(path: Path) -> None:
         fmt, entries = _read_entries(path)
@@ -81,13 +81,13 @@ def list_archives(
 
             list_entries(entries, long=long)
 
-        listings.append((path, fmt, entries))
+        listings.append({"path": str(path), "format": fmt, "entries": entries})
 
     try:
         code = run_all(inputs, run_one, "Listing")
 
         if output_json:
-            listings_json(listings)
+            print_json(listings)
 
         sys.exit(code)
 
