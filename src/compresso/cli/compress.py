@@ -12,24 +12,34 @@ from ..frontend.archive_api import ArchiveJob, OverwriteMode
 from ..frontend.dispatch import CompressRequest, plan_compress
 from ._app import app
 from ._render import EXIT_USAGE, cancelled, fail
-from ._render.jobs import archive_plan, archive_result, compress_plan, compress_result
+from ._render.jobs import (
+    archive_plan,
+    archive_result,
+    compress_plan,
+    compress_result,
+    skipped,
+    summary,
+)
 from ._run import conflict_mode, run_all, run_job
 
 
-def _compress_one_file(job: CompressionJob, quiet: bool) -> None:
+def _compress_one_file(job: CompressionJob, quiet: bool, verbose: bool) -> None:
     """Compress a single file into a one-file container.
 
     Args:
         job: The planned job.
-        quiet: Whether to suppress progress output.
+        quiet: Whether to suppress all output.
+        verbose: Whether to print the plan and stats blocks.
     """
     plan = job.plan
 
     if not plan.can_compress:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
-    if not quiet:
+    if verbose:
         compress_plan(plan)
+
+    skips: bool = plan.options.overwrite is OverwriteMode.SKIP and plan.dest.exists()
 
     elapsed: float = run_job(
         job, plan.src, "Compressing", plan.input_size, quiet=quiet, what="Compression"
@@ -37,24 +47,38 @@ def _compress_one_file(job: CompressionJob, quiet: bool) -> None:
 
     # RENAME may have written somewhere other than `plan.dest`; job.plan is
     # replaced on success with the path actually written
-    if not quiet:
-        compress_result(plan, job.plan.dest, elapsed)
+    written: Path = job.plan.dest
+    if verbose:
+        compress_result(plan, written, elapsed)
+
+    elif quiet:
+        return
+
+    elif skips:
+        skipped(plan.dest)
+
+    else:
+        renamed: Path | None = written if written != plan.dest else None
+        summary(plan.dest, plan.input_size, written.stat().st_size, elapsed, renamed)
 
 
-def _archive_many(job: ArchiveJob, quiet: bool) -> None:
+def _archive_many(job: ArchiveJob, quiet: bool, verbose: bool) -> None:
     """Pack several paths, or a directory, into one archive.
 
     Args:
         job: The planned job.
-        quiet: Whether to suppress progress output.
+        quiet: Whether to suppress all output.
+        verbose: Whether to print the plan and stats blocks.
     """
     plan = job.plan
 
     if not plan.can_run:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
-    if not quiet:
+    if verbose:
         archive_plan(plan)
+
+    skips: bool = plan.options.overwrite is OverwriteMode.SKIP and plan.output.exists()
 
     # A format with a codec stage reads the data twice, so the job reports a
     # larger total than this once it starts; the bar follows it
@@ -69,8 +93,25 @@ def _archive_many(job: ArchiveJob, quiet: bool) -> None:
 
     # RENAME may have written somewhere other than `plan.output`; job.plan is
     # replaced on success with the path actually written
-    if not quiet:
-        archive_result(plan, job.plan.output, elapsed)
+    written: Path = job.plan.output
+    if verbose:
+        archive_result(plan, written, elapsed)
+
+    elif quiet:
+        return
+
+    elif skips:
+        skipped(plan.output)
+
+    else:
+        renamed: Path | None = written if written != plan.output else None
+        summary(
+            plan.output,
+            plan.total_input_size,
+            written.stat().st_size,
+            elapsed,
+            renamed,
+        )
 
 
 def compress(
@@ -137,6 +178,10 @@ def compress(
             help="Worker threads for zstd and xz, or 0 for one per core",
         ),
     ] = 0,
+    verbose: Annotated[
+        bool,
+        app.Option("--verbose", "-v", help="Show the plan and full stats"),
+    ] = False,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
@@ -154,6 +199,9 @@ def compress(
     (`name 2.ext` on macOS, `name (2).ext` elsewhere), for an archive and a
     single-file container alike; use `--on-conflict` or `-f` to change that.
 
+    Each output gets one summary line; `-v` shows the plan and full stats
+    instead, and `-q` nothing at all.
+
     Args:
         inputs: The files and directories to compress.
         output: Where to write (default: named after the first input).
@@ -164,9 +212,12 @@ def compress(
         on_conflict: What to do when the output exists (default: rename).
         force: If True, replace an existing output.
         threads: Worker threads for zstd and xz (default: one per core).
+        verbose: If True, show the plan and full stats.
         quiet: If True, suppress all output.
     """
     overwrite_mode = conflict_mode(on_conflict, force)
+    if verbose and quiet:
+        fail("Error: -v contradicts -q", EXIT_USAGE)
 
     try:
         if not inputs:
@@ -192,9 +243,9 @@ def compress(
 
         def run_one(job: CompressionJob | ArchiveJob) -> None:
             if isinstance(job, ArchiveJob):
-                _archive_many(job, quiet)
+                _archive_many(job, quiet, verbose)
             else:
-                _compress_one_file(job, quiet)
+                _compress_one_file(job, quiet, verbose)
 
         sys.exit(run_all([job], run_one, "Compression"))
 

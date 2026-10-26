@@ -9,6 +9,35 @@ from ...frontend.archive_api import ArchivePlan, ExtractPlan
 from . import format_size, format_time, succeed
 
 
+def summary(
+    name: Path, before: int, after: int, elapsed: float, renamed: Path | None
+) -> None:
+    """Print the one line a finished input gets by default.
+
+    Args:
+        name: The output for compress, the input for extract.
+        before: Bytes read.
+        after: Bytes written.
+        elapsed: Seconds the job took.
+        renamed: Where the output went instead, if its name was taken.
+    """
+    percent: float = after / before * 100 if before else 0
+    note: str = f", output renamed to {renamed}" if renamed else ""
+    print(
+        f"\n{name}  {format_size(before)} → {format_size(after)} ({percent:.0f}%) "
+        f"in {format_time(elapsed)}{note}\n"
+    )
+
+
+def skipped(existing: Path) -> None:
+    """Print the line an input gets when `--on-conflict skip` left its output alone.
+
+    Args:
+        existing: The output that was already there.
+    """
+    print(f"{existing}  skipped, already exists")
+
+
 def compress_plan(plan: CompressionPlan) -> None:
     """Print what a single-file compression is about to do.
 
@@ -83,7 +112,6 @@ def archive_result(plan: ArchivePlan, written: Path, elapsed: float) -> None:
         written: The path actually written, which a rename may have moved.
         elapsed: Seconds the job took.
     """
-    print()
     succeed("Archive created!\n")
     if written != plan.output:
         print(f"  Renamed to:   {written}")
@@ -115,7 +143,6 @@ def extract_result(plan: ExtractPlan, elapsed: float) -> None:
         plan: The extraction's plan.
         elapsed: Seconds the job took.
     """
-    print()
     succeed("Extraction successful!\n")
     print(
         f"  Entries: {len(plan.entries)}\n  Time:    {format_time(seconds=elapsed)}\n"

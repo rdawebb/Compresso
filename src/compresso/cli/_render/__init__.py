@@ -71,6 +71,9 @@ def report_error(message: str) -> None:
     Args:
         message: Text to show, without the leading marker.
     """
+    # A piped stdout is block-buffered, so without this an error could
+    # land before the outputs ahead of it
+    sys.stdout.flush()
     app.echo(message=app.style(text=f"✗ {message}", fg="red"), err=True)
 
 

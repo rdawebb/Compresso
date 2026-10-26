@@ -22,18 +22,10 @@ class TestCompressRoundTrip:
         archive = tmp_path / "out.comp"
         restored = tmp_path / "restored.bin"
 
-        result = invoke("compress", payload, "-o", archive)
-        assert "Compression successful" in result.output
-
-        result = invoke("extract", archive, "-o", restored)
-        assert "Decompression successful" in result.output
+        invoke("compress", payload, "-o", archive, "-q")
+        invoke("extract", archive, "-o", restored, "-q")
 
         assert restored.read_bytes() == payload.read_bytes()
-
-    def test_quiet_suppresses_output(self, payload: Path, tmp_path: Path) -> None:
-        """Test that --quiet prints nothing on success."""
-        result = invoke("compress", payload, "-o", tmp_path / "q.comp", "-q")
-        assert result.output.strip() == ""
 
     # The backends are covered in core and C tests; this checks the flags
     @pytest.mark.parametrize(
@@ -64,14 +56,20 @@ class TestCompressConflicts:
         kept: bool,
         renames: bool,
     ) -> None:
-        """Test that each overwrite mode keeps, replaces or renames around the output."""
+        """Test that each overwrite mode keeps, replaces or renames around the
+        output, and the summary line says which."""
         t = compress_target
         t.dest.write_bytes(b"stale")
 
-        invoke("compress", t.source, "-o", t.dest, *t.args, *flags, "-q", expect=expect)
+        result = invoke(
+            "compress", t.source, "-o", t.dest, *t.args, *flags, expect=expect
+        )
 
+        sibling = t.dest.parent / renamed(t.dest.name)
         assert (t.dest.read_bytes() == b"stale") == kept
-        assert (t.dest.parent / renamed(t.dest.name)).is_file() == renames
+        assert sibling.is_file() == renames
+        assert (f"output renamed to {sibling}" in result.output) == renames
+        assert (f"{t.dest}  skipped" in result.output) == ("skip" in flags)
 
 
 class TestSmartCompress:

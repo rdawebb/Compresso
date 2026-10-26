@@ -343,6 +343,10 @@ def plan_decompression(
     try:
         detected: str = detect_format(src_path)
 
+    # The caller names the file with the error
+    except OSError as e:
+        return plan(None, False, e.strerror or str(e))
+
     except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
         return plan(None, False, f"Cannot read file: {e}")
 

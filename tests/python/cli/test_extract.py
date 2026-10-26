@@ -30,11 +30,8 @@ class TestArchiveRoundTrip:
         archive = tmp_path / f"out.{fmt}"
         dest = tmp_path / f"dest.{fmt}"
 
-        result = invoke("compress", source_tree, "-o", archive, "-F", fmt)
-        assert "Archive created" in result.output
-
-        result = invoke("extract", archive, "-o", dest)
-        assert "Extraction successful" in result.output
+        invoke("compress", source_tree, "-o", archive, "-F", fmt, "-q")
+        invoke("extract", archive, "-o", dest, "-q")
 
         for original in source_tree.iterdir():
             restored = dest / source_tree.name / original.name
@@ -117,7 +114,8 @@ class TestDecompressConflicts:
         kept: bool,
         renames: bool,
     ) -> None:
-        """Test that each overwrite mode keeps, replaces or renames around the output."""
+        """Test that each overwrite mode keeps, replaces or renames around the
+        output, and the summary line says which."""
         archive = tmp_path / "out.comp"
         restored = tmp_path / "restored.bin"
         invoke("compress", payload, "-o", archive, "-q")
@@ -126,7 +124,8 @@ class TestDecompressConflicts:
         result = invoke("extract", archive, "-o", restored, *flags, expect=expect)
 
         sibling = tmp_path / renamed(restored.name)
-        assert (f"Renamed to:        {sibling}" in result.output) == renames
+        assert (f"output renamed to {sibling}" in result.output) == renames
+        assert (f"{restored}  skipped" in result.output) == ("skip" in flags)
         assert restored.read_bytes() == (b"stale" if kept else payload.read_bytes())
         assert sibling.exists() == renames
 

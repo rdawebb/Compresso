@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import gzip
 import os
+import re
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -179,6 +182,96 @@ class TestProgressBar:
             )
 
 
+@pytest.fixture(params=["compress", "archive", "decompress", "extract"])
+def job_args(
+    request: pytest.FixtureRequest,
+    payload: Path,
+    source_tree: Path,
+    tmp_path: Path,
+    make_archive: Callable[[str], Path],
+) -> tuple[list[str | Path], Path]:
+    """One command line for each kind of job, and the path its summary names."""
+    packed = tmp_path / "out.comp"
+    match request.param:
+        case "compress":
+            return ["compress", payload, "-o", packed], packed
+
+        case "archive":
+            return ["compress", source_tree, "-o", tmp_path / "out.tar"], (
+                tmp_path / "out.tar"
+            )
+
+        case "decompress":
+            invoke("compress", payload, "-o", packed, "-q")
+            return ["extract", packed, "-o", tmp_path / "restored.bin"], packed
+
+        case _:
+            archive = make_archive("tar")
+            return ["extract", archive, "-o", tmp_path / "dest"], archive
+
+
+class TestOutput:
+    """Test one summary line per input by default, the blocks with -v, and
+    nothing with -q."""
+
+    def test_default_is_one_summary_line(
+        self, job_args: tuple[list[str | Path], Path]
+    ) -> None:
+        """Test that a job prints `name  before → after (n%) in time` and no more."""
+        args, name = job_args
+        output = invoke(*args).output
+
+        assert re.fullmatch(
+            rf"{re.escape(str(name))}  \S+ \S+ → \S+ \S+ \(\d+%\) in \S+\n", output
+        ), output
+
+    def test_verbose_prints_the_blocks(
+        self, job_args: tuple[list[str | Path], Path]
+    ) -> None:
+        """Test that -v brings back the plan before and the stats after."""
+        args, _ = job_args
+        output = invoke(*args, "-v").output
+
+        assert "Output" in output
+        assert "Time:" in output
+
+    def test_quiet_prints_nothing(
+        self, job_args: tuple[list[str | Path], Path]
+    ) -> None:
+        """Test that -q prints nothing on success."""
+        args, _ = job_args
+        assert invoke(*args, "-q").output == ""
+
+    def test_verbose_with_quiet_is_usage(
+        self, job_args: tuple[list[str | Path], Path]
+    ) -> None:
+        """Test that -v and -q together are refused before any work starts."""
+        args, _ = job_args
+        result = invoke(*args, "-v", "-q", expect=EXIT_USAGE)
+        assert "-v contradicts -q" in result.output
+
+    def test_an_error_lands_after_the_inputs_before_it(
+        self, payload: Path, tmp_path: Path
+    ) -> None:
+        """Test that a failed input's error follows the earlier inputs' lines
+        when stdout is a pipe, which block-buffers it."""
+        good = tmp_path / "good.gz"
+        good.write_bytes(gzip.compress(payload.read_bytes()))
+        bad = tmp_path / "bad.bin"
+        bad.write_bytes(payload.read_bytes())
+
+        result = subprocess.run(
+            [sys.executable, "-m", "compresso.cli", "extract", good, bad],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == EXIT_FAILED
+        assert result.stdout.index(str(good)) < result.stdout.index(str(bad))
+
+
 class TestExitCodes:
     """Test 0 success, 1 the operation failed, 2 the request could not be made."""
 
@@ -200,7 +293,8 @@ class TestExitCodes:
         sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX, not root"
     )
     @pytest.mark.parametrize(
-        "command,shown", [("list", "f0.bin"), ("info", "Entries:")]
+        "command,shown",
+        [("list", "f0.bin"), ("info", "Entries:"), ("extract", "out.zip  ")],
     )
     def test_unreadable_input_fails_alone(
         self,

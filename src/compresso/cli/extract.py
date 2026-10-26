@@ -22,58 +22,62 @@ from ._render.jobs import (
     decompress_result,
     extract_plan,
     extract_result,
+    skipped,
+    summary,
 )
 from ._run import InputFailed, conflict_mode, require_files, run_all, run_job
 
 
-def _extract_archive(job: ExtractJob, quiet: bool) -> None:
+def _extract_archive(job: ExtractJob, quiet: bool, verbose: bool) -> None:
     """Unpack one archive.
 
     Args:
         job: The planned job.
-        quiet: Whether to suppress output.
+        quiet: Whether to suppress all output.
+        verbose: Whether to print the plan and stats blocks.
     """
     plan = job.plan
 
     if not plan.can_run:
         raise InputFailed(f"{plan.archive}: {plan.reason_if_unavailable}")
 
-    if not quiet:
+    if verbose:
         extract_plan(plan)
 
     # Progress covers the bytes written out; a compressed archive also reports
     # the pass that decompresses it, so the job's own total wins
+    total: int = sum(entry.size for entry in plan.entries)
     elapsed: float = run_job(
-        job,
-        plan.archive,
-        "Extracting",
-        sum(entry.size for entry in plan.entries),
-        quiet=quiet,
-        what="Extraction",
+        job, plan.archive, "Extracting", total, quiet=quiet, what="Extraction"
     )
 
-    if not quiet:
+    if verbose:
         extract_result(plan, elapsed)
 
+    elif not quiet:
+        summary(plan.archive, plan.archive.stat().st_size, total, elapsed, None)
 
-def _decompress_one_file(job: DecompressionJob, quiet: bool) -> None:
+
+def _decompress_one_file(job: DecompressionJob, quiet: bool, verbose: bool) -> None:
     """Unpack one single-file container: a `.comp` or a standalone codec.
 
     Args:
         job: The planned job.
-        quiet: Whether to suppress output.
+        quiet: Whether to suppress all output.
+        verbose: Whether to print the plan and stats blocks.
     """
     plan = job.plan
 
     if not plan.can_run:
         raise InputFailed(f"{plan.src}: {plan.reason_if_unavailable}")
 
-    if not quiet:
+    if verbose:
         decompress_plan(plan)
 
     # Progress counts the compressed bytes read, so the source's size is the
     # denominator rather than the size it expands to
     compressed_size: int = plan.src.stat().st_size
+    skips: bool = plan.overwrite is OverwriteMode.SKIP and plan.dest.exists()
 
     elapsed: float = run_job(
         job,
@@ -86,8 +90,19 @@ def _decompress_one_file(job: DecompressionJob, quiet: bool) -> None:
 
     # RENAME may have written somewhere other than `plan.dest`; job.plan is
     # replaced on success with the path actually written
-    if not quiet:
-        decompress_result(plan, job.plan.dest, compressed_size, elapsed)
+    written: Path = job.plan.dest
+    if verbose:
+        decompress_result(plan, written, compressed_size, elapsed)
+
+    elif quiet:
+        return
+
+    elif skips:
+        skipped(plan.dest)
+
+    else:
+        renamed: Path | None = written if written != plan.dest else None
+        summary(plan.src, compressed_size, written.stat().st_size, elapsed, renamed)
 
 
 def extract(
@@ -159,6 +174,14 @@ def extract(
             help="Name and date a .gz file's output as its header does",
         ),
     ] = False,
+    verbose: Annotated[
+        bool,
+        app.Option(
+            "--verbose",
+            "-v",
+            help="Show the plan and full stats",
+        ),
+    ] = False,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
@@ -177,6 +200,9 @@ def extract(
     (`name 2.ext` on macOS, `name (2).ext` elsewhere); use `--on-conflict` or
     `-f` to change that.
 
+    Each input gets one summary line; `-v` shows the plan and full stats
+    instead, and `-q` nothing at all.
+
     Args:
         inputs: The archives or compressed files to unpack.
         output: Where to write (default: beside the input); a directory for
@@ -192,9 +218,12 @@ def extract(
         threads: Worker threads for xz (default: one per core).
         name: If True, name a gzip file's output after the name its header
             stores, and give it the stored modification time, if any.
+        verbose: If True, show the plan and full stats.
         quiet: If True, suppress all output.
     """
     mode = conflict_mode(on_conflict, force)
+    if verbose and quiet:
+        fail("Error: -v contradicts -q", EXIT_USAGE)
 
     if not inputs:
         fail("Error: No input files given", EXIT_USAGE)
@@ -215,10 +244,10 @@ def extract(
 
     def run_one(job: ExtractJob | DecompressionJob) -> None:
         if isinstance(job, ExtractJob):
-            _extract_archive(job, quiet)
+            _extract_archive(job, quiet, verbose)
 
         else:
-            _decompress_one_file(job, quiet)
+            _decompress_one_file(job, quiet, verbose)
 
     try:
         sys.exit(run_all(plan_extract(request), run_one, "Extraction"))
