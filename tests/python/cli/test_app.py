@@ -222,7 +222,7 @@ class TestOutput:
         output = invoke(*args).output
 
         assert re.fullmatch(
-            rf"{re.escape(str(name))}  \S+ \S+ → \S+ \S+ \(\d+%\) in \S+\n", output
+            rf"\n{re.escape(str(name))}  \S+ \S+ → \S+ \S+ \(\d+%\) in \S+\n\n", output
         ), output
 
     def test_verbose_prints_the_blocks(

@@ -29,12 +29,14 @@ class TestCompressRoundTrip:
 
     # The backends are covered in core and C tests; this checks the flags
     @pytest.mark.parametrize(
-        "args", [("-a", "bzip2"), ("-a", "zstd", "-l", "19")], ids=["algo", "level"]
+        "args",
+        [("-a", "bzip2"), ("-a", "zstd", "-l", "19"), ("-s", "fast")],
+        ids=["algo", "level", "strategy"],
     )
     def test_algorithms_round_trip(
         self, payload: Path, tmp_path: Path, args: tuple[str, ...]
     ) -> None:
-        """Test that -a and -l reach the backend."""
+        """Test that -a, -l and -s reach the backend."""
         archive = tmp_path / "out.comp"
         restored = tmp_path / "restored.bin"
 
@@ -42,6 +44,43 @@ class TestCompressRoundTrip:
         invoke("extract", archive, "-o", restored, "-q")
 
         assert restored.read_bytes() == payload.read_bytes()
+
+
+class TestCompOnlyFlags:
+    """Test that -a and -s, which pick the .comp codec, are refused elsewhere."""
+
+    def test_algo_with_strategy(self, payload: Path) -> None:
+        """Test that -a and -s together are a usage error."""
+        result = invoke(
+            "compress", payload, "-a", "zstd", "-s", "fast", expect=EXIT_USAGE
+        )
+
+        assert "-a contradicts -s" in result.output
+
+    @pytest.mark.parametrize(
+        ("args", "message"),
+        [
+            (("-a", "zstd", "-F", "gz"), "-a applies only to .comp, not gz"),
+            (("-s", "fast", "-o", "x.zip"), "-s applies only to .comp, not zip"),
+        ],
+        ids=["algo-standalone", "strategy-archive"],
+    )
+    def test_refused_outside_comp(
+        self,
+        payload: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        args: tuple[str, ...],
+        message: str,
+    ) -> None:
+        """Test that a format with its own codec refuses -a and -s, writing nothing."""
+        monkeypatch.chdir(tmp_path)
+        before = set(tmp_path.iterdir())
+
+        result = invoke("compress", payload, *args, expect=EXIT_USAGE)
+
+        assert message in result.output
+        assert set(tmp_path.iterdir()) == before
 
 
 class TestCompressConflicts:

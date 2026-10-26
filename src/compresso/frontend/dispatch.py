@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 
@@ -110,7 +110,7 @@ class CompressRequest:
         output: The `-o` value, or None to name the output after the first input.
         format: The container asked for, or None to infer it.
         algo: The `.comp` algorithm, or None for the strategy's default.
-        strategy: The `.comp` strategy.
+        strategy: The `.comp` strategy, or None for the default.
         level: The compression level, or None for the format's own.
         overwrite: What to do when the output already exists.
         threads: Worker threads, or 0 for one per core.
@@ -120,7 +120,7 @@ class CompressRequest:
     output: Path | None = None
     format: str | None = None
     algo: str | None = None
-    strategy: str = "balanced"
+    strategy: str | None = None
     level: int | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
     threads: int = 0
@@ -155,7 +155,8 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
         request: The parsed request.
 
     Returns:
-        The planned job, which may still be unable to run (see its plan).
+        The planned job, which may still be unable to run (see its plan),
+        as when `algo` or `strategy` is given for anything but a `.comp`.
 
     Raises:
         ValueError: If a single-file format was asked for with several inputs
@@ -163,6 +164,9 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
     """
     fmt: str | None = request.format or infer_format(request.output)
     many: bool = len(request.inputs) > 1 or any(p.is_dir() for p in request.inputs)
+
+    # Only the .comp container records its codec; the others fix their own
+    comp_flag: str | None = "-a" if request.algo else "-s" if request.strategy else None
 
     if format_is_single_file(fmt) and many:
         raise ValueError(
@@ -180,14 +184,22 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
             threads=request.threads,
         )
 
-        return ArchiveJob.from_paths(
+        archive_job = ArchiveJob.from_paths(
             sources=request.inputs, output=output, options=archive_options
         )
+        if comp_flag:
+            archive_job.plan = replace(
+                archive_job.plan,
+                can_run=False,
+                reason_if_unavailable=f"{comp_flag} applies only to .comp, not {fmt}",
+            )
+
+        return archive_job
 
     source: Path = request.inputs[0]
     options = CompressionOptions(
         algo=request.algo,
-        strategy=request.strategy,
+        strategy=request.strategy or CompressionOptions.strategy,
         level=request.level,
         format=fmt,
         overwrite=request.overwrite,
@@ -199,6 +211,13 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
     dest: Path = resolve_single_output(request.output, job.plan.dest)
     if dest != job.plan.dest:
         job = CompressionJob.from_file(src=source, dest=dest, options=options)
+
+    if comp_flag and format_is_single_file(fmt):
+        job.plan = replace(
+            job.plan,
+            can_compress=False,
+            reason_if_unavailable=f"{comp_flag} applies only to .comp, not {fmt}",
+        )
 
     return job
 

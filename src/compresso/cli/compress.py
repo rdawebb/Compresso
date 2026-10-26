@@ -140,14 +140,15 @@ def compress(
         ),
     ] = "auto",
     strategy: Annotated[
-        str,
+        str | None,
         app.Option(
             "--strategy",
             "-s",
             case_sensitive=False,
             help="Compression strategy to use (fast/balanced/max_ratio)",
+            show_default="balanced",
         ),
-    ] = "balanced",
+    ] = None,
     level: Annotated[
         int | None,
         app.Option(
@@ -206,8 +207,10 @@ def compress(
         inputs: The files and directories to compress.
         output: Where to write (default: named after the first input).
         format: Container to write (default: inferred, else .comp or zip).
-        algo: Algorithm for the Compresso container (default: auto).
-        strategy: Strategy for the Compresso container (default: balanced).
+        algo: Algorithm for the Compresso container (default: auto); any
+            other format refuses it.
+        strategy: Strategy for the Compresso container (default: balanced);
+            any other format refuses it, as does `-a`.
         level: Compression level (default: the format's own).
         on_conflict: What to do when the output exists (default: rename).
         force: If True, replace an existing output.
@@ -224,12 +227,19 @@ def compress(
             fail("Error: No input paths given", EXIT_USAGE)
 
         algo_lower: str | None = algo.lower() if algo else None
+        if algo_lower == "auto":
+            algo_lower = None
+
+        # -a names the algorithm that -s would otherwise pick
+        if algo_lower and strategy:
+            fail("Error: -a contradicts -s", EXIT_USAGE)
+
         request = CompressRequest(
             inputs=inputs,
             output=output,
             format=format,
-            algo=None if algo_lower == "auto" else algo_lower,
-            strategy=strategy.lower(),
+            algo=algo_lower,
+            strategy=strategy.lower() if strategy else None,
             level=level,
             overwrite=overwrite_mode,
             threads=threads,
