@@ -126,6 +126,15 @@ def extract(
             help="File to write, for one compressed file that isn't an archive",
         ),
     ] = None,
+    member: Annotated[
+        list[str] | None,
+        app.Option(
+            "--member",
+            "-m",
+            help="Extract only this entry, or the directory and all below it; "
+            "repeatable",
+        ),
+    ] = None,
     on_conflict: Annotated[
         OverwriteMode | None,
         app.Option(
@@ -214,6 +223,9 @@ def extract(
         inputs: The archives or compressed files to unpack.
         directory: The directory to write into (default: beside each input).
         output: The file to write, for a single input that isn't an archive.
+        member: Entry paths to extract from each archive (default: all); a
+            path matching no entry fails that archive after the rest is
+            extracted.
         on_conflict: What to do when a file exists (default: rename).
         force: If True, replace files that already exist.
         max_total_size: Cap on total extracted bytes (default: no cap).
@@ -254,6 +266,7 @@ def extract(
         inputs=inputs,
         directory=directory,
         output=output,
+        files=member,
         options=options,
         restore_name=name,
     )

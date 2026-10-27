@@ -190,7 +190,7 @@ class ExtractPlan:
         output_dir: Directory to extract into.
         files: Optional subset of entry paths to extract (None = all).
         options: Extraction policy to apply.
-        entries: Entries discovered in the archive.
+        entries: The archive's entries that `files` selects.
         can_run: Whether the extract operation can proceed.
         reason_if_unavailable: Reason the operation cannot proceed, if any.
     """
@@ -415,6 +415,15 @@ def plan_extraction(
             can_run=False,
             reason_if_unavailable=f"Cannot read archive: {e}",
         )
+
+    # As the extractor matches: a name selects that entry and anything below it
+    if files:
+        names: set[str] = {name.rstrip("/") for name in files} - {""}
+        entries = [
+            e
+            for e in entries
+            if any(e.path == n or e.path.startswith(f"{n}/") for n in names)
+        ]
 
     return ExtractPlan(
         archive=archive_path,

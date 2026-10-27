@@ -112,6 +112,8 @@ class ExtractRequest:
         inputs: The archives and single-file containers to unpack.
         directory: The `-C` value, or None to write beside each input.
         output: The `-o` file, for a single non-archive input.
+        files: The `-m` entry paths to extract from each archive, or
+            None for all.
         options: The extraction policy; single-file inputs use only its
             `overwrite` and `threads`.
         restore_name: Whether to name and date a gzip file's output as its
@@ -121,6 +123,7 @@ class ExtractRequest:
     inputs: list[Path]
     directory: Path | None = None
     output: Path | None = None
+    files: list[str] | None = None
     options: ExtractOptions = field(default_factory=ExtractOptions)
     restore_name: bool = False
 
@@ -214,7 +217,10 @@ def plan_extract(request: ExtractRequest) -> list[ExtractJob | DecompressionJob]
     for source in request.inputs:
         if looks_like_archive(source):
             archive_job = ExtractJob.from_archive(
-                archive=source, output_dir=request.directory, options=request.options
+                archive=source,
+                output_dir=request.directory,
+                files=request.files,
+                options=request.options,
             )
             if request.output:
                 archive_job.plan = replace(
@@ -234,11 +240,19 @@ def plan_extract(request: ExtractRequest) -> list[ExtractJob | DecompressionJob]
             restore_name=request.restore_name,
         )
         if request.output or not request.directory:
-            jobs.append(plan(dest=request.output))
-            continue
+            job: DecompressionJob = plan(dest=request.output)
 
-        # Planned once to learn the default name, then moved into `-C`
-        job: DecompressionJob = plan(dest=None)
-        jobs.append(plan(dest=request.directory / job.plan.dest.name))
+        else:
+            # Planned once to learn the default name, then moved into `-C`
+            job = plan(dest=request.directory / plan(dest=None).plan.dest.name)
+
+        if request.files:
+            job.plan = replace(
+                job.plan,
+                can_run=False,
+                reason_if_unavailable="--member/-m applies only to archives",
+            )
+
+        jobs.append(job)
 
     return jobs

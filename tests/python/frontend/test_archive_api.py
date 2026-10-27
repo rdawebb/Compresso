@@ -262,6 +262,23 @@ class TestExtractJob:
 
         assert plan.output_dir == tmp_path.resolve()
 
+    def test_files_select_the_planned_entries(self, tmp_path: Path) -> None:
+        """Test that the plan holds only what `files` selects, as the extractor
+        matches it: an entry, or a directory and everything below it."""
+        archive = tmp_path / "a.tar"
+        make_tar(
+            archive,
+            dir_entry("d/"),
+            file_entry("d/x"),
+            file_entry("dx"),
+            file_entry("y"),
+            file_entry("z"),
+        )
+
+        plan = ExtractJob.from_archive(archive, files=["d/", "y", "nope"]).plan
+
+        assert [e.path for e in plan.entries] == ["d/", "d/x", "y"]
+
 
 class TestArchiveRoundTrip:
     """Test end-to-end archive -> extract round-trip."""

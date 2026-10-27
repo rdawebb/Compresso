@@ -242,3 +242,69 @@ class TestOutputFlags:
         result = invoke("extract", archive, "-o", out, expect=EXIT_FAILED)
         assert f"{archive}: -o names one file; use -C for an archive" in result.output
         assert not out.exists()
+
+
+class TestMember:
+    """Test that --member/-m extracts only the entries named."""
+
+    @pytest.mark.parametrize("fmt", ["tar", "zip"])
+    def test_only_the_chosen_entries(
+        self,
+        source_tree: Path,
+        tmp_path: Path,
+        make_archive: Callable[[str], Path],
+        fmt: str,
+    ) -> None:
+        """Test that the named entries are written and nothing else."""
+        archive = make_archive(fmt)
+        dest = tmp_path / "dest"
+        top = source_tree.name
+
+        invoke(
+            "extract",
+            archive,
+            "-C",
+            dest,
+            "--member",
+            f"{top}/f0.bin",
+            "-m",
+            f"{top}/f2.bin",
+            "-q",
+        )
+
+        assert sorted(p.name for p in (dest / top).iterdir()) == ["f0.bin", "f2.bin"]
+        for name in ("f0.bin", "f2.bin"):
+            assert (dest / top / name).read_bytes() == (source_tree / name).read_bytes()
+
+    def test_a_missing_member_fails_after_the_rest(
+        self, source_tree: Path, tmp_path: Path, make_archive: Callable[[str], Path]
+    ) -> None:
+        """Test that a name matching nothing exits 1, naming it, once the rest is
+        written."""
+        dest = tmp_path / "dest"
+        top = source_tree.name
+
+        result = invoke(
+            "extract",
+            make_archive("tar"),
+            "-C",
+            dest,
+            "--member",
+            f"{top}/f1.bin",
+            "-m",
+            "nope",
+            expect=EXIT_FAILED,
+        )
+
+        assert "nope" in result.output
+        assert sorted(p.name for p in (dest / top).iterdir()) == ["f1.bin"]
+
+    def test_a_single_file_input_fails(self, payload: Path, tmp_path: Path) -> None:
+        """Test that --member/-m on an input that isn't an archive fails it."""
+        packed = tmp_path / "a.gz"
+        packed.write_bytes(gzip.compress(payload.read_bytes()))
+
+        result = invoke("extract", packed, "-m", "x", expect=EXIT_FAILED)
+
+        assert f"{packed}: --member/-m applies only to archives" in result.output
+        assert not (tmp_path / "a").exists()
