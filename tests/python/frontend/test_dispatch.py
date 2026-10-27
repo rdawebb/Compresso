@@ -19,7 +19,6 @@ from compresso.frontend.dispatch import (
     looks_like_archive,
     plan_compress,
     plan_extract,
-    resolve_single_output,
 )
 
 
@@ -130,29 +129,6 @@ class TestDefaultArchiveOutput:
         )
 
 
-class TestResolveSingleOutput:
-    """Test where `-o` sends a single-file job."""
-
-    def test_no_output_keeps_default(self, tmp_path: Path) -> None:
-        """Test that without `-o` the default path is used."""
-        default = tmp_path / "x.gz"
-
-        assert resolve_single_output(None, default) == default
-
-    def test_existing_directory_receives_the_file(self, tmp_path: Path) -> None:
-        """Test that an existing directory gets the default filename inside it."""
-        out = tmp_path / "out"
-        out.mkdir()
-
-        assert resolve_single_output(out, tmp_path / "x.gz") == out / "x.gz"
-
-    def test_anything_else_is_the_file(self, tmp_path: Path) -> None:
-        """Test that any other path is taken as the output file itself."""
-        out = tmp_path / "out" / "y.gz"
-
-        assert resolve_single_output(out, tmp_path / "x.gz") == out
-
-
 class TestPlanCompress:
     """Test `compress` picks the job from its inputs and the format asked for."""
 
@@ -241,18 +217,6 @@ class TestPlanCompress:
         assert job.plan.can_run
         assert job.plan.options.format == name.removeprefix("out.")
 
-    def test_existing_directory_receives_the_file(
-        self, small_file: Path, tmp_path: Path
-    ) -> None:
-        """Test that an existing `-o` directory gets the default filename."""
-        into = tmp_path / "into"
-        into.mkdir()
-
-        job = plan_compress(CompressRequest([small_file], output=into, format="gz"))
-
-        assert isinstance(job, CompressionJob)
-        assert job.plan.dest == into / "small.txt.gz"
-
     def test_single_file_format_refuses_several_inputs(self, tree: Path) -> None:
         """Test that a single-file format on a directory errors, suggesting tar."""
         with pytest.raises(ValueError, match="tar.gz"):
@@ -290,14 +254,14 @@ class TestPlanExtract:
             zf.writestr("a.txt", "a")
         dest = tmp_path / "out"
 
-        [job] = plan_extract(ExtractRequest([disguised], output=dest))
+        [job] = plan_extract(ExtractRequest([disguised], directory=dest))
 
         assert isinstance(job, ExtractJob)
         assert job.plan.can_run
         assert job.plan.output_dir == dest
 
     def test_an_archive_unpacks_beside_itself(self, tmp_path: Path) -> None:
-        """Test that without `-o` an archive extracts into its own directory."""
+        """Test that without `-C` an archive extracts into its own directory."""
         archive = tmp_path / "x.zip"
         with zipfile.ZipFile(archive, "w") as zf:
             zf.writestr("a.txt", "a")
@@ -307,17 +271,29 @@ class TestPlanExtract:
         assert isinstance(job, ExtractJob)
         assert job.plan.output_dir == tmp_path
 
-    def test_output_directory_receives_a_single_file(self, tmp_path: Path) -> None:
-        """Test that an existing `-o` directory gets the suffix-stripped name."""
+    def test_directory_receives_a_single_file(self, tmp_path: Path) -> None:
+        """Test that `-C` gets the suffix-stripped name."""
         packed = tmp_path / "p.gz"
         packed.write_bytes(gzip.compress(b"a"))
         into = tmp_path / "into"
         into.mkdir()
 
-        [job] = plan_extract(ExtractRequest([packed], output=into))
+        [job] = plan_extract(ExtractRequest([packed], directory=into))
 
         assert isinstance(job, DecompressionJob)
         assert job.plan.dest == into / "p"
+
+    def test_output_refuses_an_archive(self, tmp_path: Path) -> None:
+        """Test that `-o` on an archive plans a job that cannot run."""
+        archive = tmp_path / "x.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("a.txt", "a")
+
+        [job] = plan_extract(ExtractRequest([archive], output=tmp_path / "out"))
+
+        assert isinstance(job, ExtractJob)
+        assert not job.plan.can_run
+        assert "use -C" in str(job.plan.reason_if_unavailable)
 
     def test_each_input_is_dispatched_on_its_own(self, tmp_path: Path) -> None:
         """Test that a mixed list plans one job per input, in order."""

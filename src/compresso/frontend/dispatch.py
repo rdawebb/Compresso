@@ -67,28 +67,6 @@ def default_archive_output(first_input: Path, fmt: str) -> Path:
     return first_input.resolve().parent / f"{stem}.{fmt}"
 
 
-def resolve_single_output(output: Path | None, default: Path) -> Path:
-    """Work out where a single-file job should write.
-
-    `-o` means a directory for an archive, but for one file it is the file itself;
-    an existing directory receives the file, anything else is the file.
-
-    Args:
-        output: The `-o` value, or None.
-        default: Where the job would write if not told otherwise.
-
-    Returns:
-        The destination path.
-    """
-    if output is None:
-        return default
-
-    if output.is_dir():
-        return output / default.name
-
-    return output
-
-
 def format_is_single_file(fmt: str | None) -> bool:
     """Return whether `fmt` names a container holding exactly one file.
 
@@ -132,7 +110,8 @@ class ExtractRequest:
 
     Attributes:
         inputs: The archives and single-file containers to unpack.
-        output: The `-o` value, or None to write beside each input.
+        directory: The `-C` value, or None to write beside each input.
+        output: The `-o` file, for a single non-archive input.
         options: The extraction policy; single-file inputs use only its
             `overwrite` and `threads`.
         restore_name: Whether to name and date a gzip file's output as its
@@ -140,6 +119,7 @@ class ExtractRequest:
     """
 
     inputs: list[Path]
+    directory: Path | None = None
     output: Path | None = None
     options: ExtractOptions = field(default_factory=ExtractOptions)
     restore_name: bool = False
@@ -206,11 +186,7 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
         threads=request.threads,
     )
 
-    job = CompressionJob.from_file(src=source, dest=None, options=options)
-    # Planned once to learn the default name, then repointed if `-o` moves it
-    dest: Path = resolve_single_output(request.output, job.plan.dest)
-    if dest != job.plan.dest:
-        job = CompressionJob.from_file(src=source, dest=dest, options=options)
+    job = CompressionJob.from_file(src=source, dest=request.output, options=options)
 
     if comp_flag and format_is_single_file(fmt):
         job.plan = replace(
@@ -237,11 +213,17 @@ def plan_extract(request: ExtractRequest) -> list[ExtractJob | DecompressionJob]
     jobs: list[ExtractJob | DecompressionJob] = []
     for source in request.inputs:
         if looks_like_archive(source):
-            jobs.append(
-                ExtractJob.from_archive(
-                    archive=source, output_dir=request.output, options=request.options
-                )
+            archive_job = ExtractJob.from_archive(
+                archive=source, output_dir=request.directory, options=request.options
             )
+            if request.output:
+                archive_job.plan = replace(
+                    archive_job.plan,
+                    can_run=False,
+                    reason_if_unavailable="-o names one file; use -C for an archive",
+                )
+
+            jobs.append(archive_job)
             continue
 
         plan = partial(
@@ -251,8 +233,12 @@ def plan_extract(request: ExtractRequest) -> list[ExtractJob | DecompressionJob]
             threads=request.options.threads,
             restore_name=request.restore_name,
         )
+        if request.output or not request.directory:
+            jobs.append(plan(dest=request.output))
+            continue
+
+        # Planned once to learn the default name, then moved into `-C`
         job: DecompressionJob = plan(dest=None)
-        dest: Path = resolve_single_output(request.output, job.plan.dest)
-        jobs.append(job if dest == job.plan.dest else plan(dest=dest))
+        jobs.append(plan(dest=request.directory / job.plan.dest.name))
 
     return jobs

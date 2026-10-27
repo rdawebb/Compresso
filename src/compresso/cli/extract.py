@@ -110,13 +110,20 @@ def extract(
         list[Path],
         app.Argument(help="Archives or compressed files", readable=False),
     ],
+    directory: Annotated[
+        Path | None,
+        app.Option(
+            "--directory",
+            "-C",
+            help="Directory to write into (default: beside each input)",
+        ),
+    ] = None,
     output: Annotated[
         Path | None,
         app.Option(
-            "--output-dir",
             "--output",
             "-o",
-            help="Where to write (default: beside the input)",
+            help="File to write, for one compressed file that isn't an archive",
         ),
     ] = None,
     on_conflict: Annotated[
@@ -194,7 +201,7 @@ def extract(
     Compresso `.comp`, or a standalone `.gz`/`.bz2`/`.xz`/`.zst`/`.lz4`/`.sz`,
     is decompressed to one file.
 
-    The result is written beside its input unless `-o` is provided.
+    The result is written beside its input unless `-C` or `-o` is provided.
 
     By default, a clashing name gets a platform-native numbered sibling
     (`name 2.ext` on macOS, `name (2).ext` elsewhere); use `--on-conflict` or
@@ -205,9 +212,8 @@ def extract(
 
     Args:
         inputs: The archives or compressed files to unpack.
-        output: Where to write (default: beside the input); a directory for
-            archives, and for one file either a directory to put it in or the
-            path to write.
+        directory: The directory to write into (default: beside each input).
+        output: The file to write, for a single input that isn't an archive.
         on_conflict: What to do when a file exists (default: rename).
         force: If True, replace files that already exist.
         max_total_size: Cap on total extracted bytes (default: no cap).
@@ -228,6 +234,12 @@ def extract(
     if not inputs:
         fail("Error: No input files given", EXIT_USAGE)
 
+    if output and directory:
+        fail("Error: -o contradicts -C", EXIT_USAGE)
+
+    if output and len(inputs) > 1:
+        fail("Error: -o names one file; use -C for several inputs", EXIT_USAGE)
+
     require_files(inputs)
 
     options = ExtractOptions(
@@ -239,7 +251,11 @@ def extract(
     )
 
     request = ExtractRequest(
-        inputs=inputs, output=output, options=options, restore_name=name
+        inputs=inputs,
+        directory=directory,
+        output=output,
+        options=options,
+        restore_name=name,
     )
 
     def run_one(job: ExtractJob | DecompressionJob) -> None:

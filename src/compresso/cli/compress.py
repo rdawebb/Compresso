@@ -136,7 +136,11 @@ def compress(
     algo: Annotated[
         str | None,
         app.Option(
-            "--algo", "-a", case_sensitive=False, help="Compression algorithm to use"
+            "--algo",
+            "-a",
+            case_sensitive=False,
+            help="Compression algorithm to use",
+            show_default=False,
         ),
     ] = "auto",
     strategy: Annotated[

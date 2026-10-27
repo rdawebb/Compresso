@@ -124,7 +124,7 @@ class TestSmartCompress:
         invoke(
             "extract",
             source_tree.with_name(f"{source_tree.name}.zip"),
-            "-o",
+            "-C",
             dest,
             "-q",
         )

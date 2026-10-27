@@ -172,7 +172,7 @@ class TestProgressBar:
         dest = tmp_path / "dest"
 
         invoke("compress", tree, "-o", archive, "-F", "tar")
-        invoke("extract", archive, "-o", dest)
+        invoke("extract", archive, "-C", dest)
 
         assert [bar.enabled for bar in bars] == [True, True]
         assert all(bar.updates > 0 for bar in bars)
@@ -207,7 +207,7 @@ def job_args(
 
         case _:
             archive = make_archive("tar")
-            return ["extract", archive, "-o", tmp_path / "dest"], archive
+            return ["extract", archive, "-C", tmp_path / "dest"], archive
 
 
 class TestOutput:
@@ -328,7 +328,7 @@ class TestExitCodes:
         if command == "compress":
             args = [source_tree, "-o", tmp_path / "out.tar", "-F", "tar"]
         else:
-            args = [make_archive("tar"), "-o", tmp_path / "d"]
+            args = [make_archive("tar"), "-C", tmp_path / "d"]
 
         result = invoke(command, *args, "-f", "--on-conflict", mode, expect=EXIT_USAGE)
         assert f"-f contradicts --on-conflict {mode}" in result.output
