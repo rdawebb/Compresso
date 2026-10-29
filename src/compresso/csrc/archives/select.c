@@ -58,6 +58,78 @@ int entry_is_selected(const ArchiveEntry *entry, Selection *sel) {
   }
 }
 
+// The pattern after its first token if that token matches `c`, else NULL
+static const char *match_token(const char *pat, unsigned char c) {
+  if (*pat == '?')
+    return pat + 1;
+  if (*pat == '\\' && pat[1])
+    return (unsigned char)pat[1] == c ? pat + 2 : NULL;
+
+  if (*pat == '[') {
+    const char *p = pat + 1;
+    int negate = *p == '!' || *p == '^';
+    if (negate)
+      p++;
+    // A `]` straight after the opening is literal
+    int hit = 0;
+    do {
+      if (*p == '\0')
+        return c == '[' ? pat + 1 : NULL; // Unterminated, so `[` is literal
+      unsigned char lo = (unsigned char)*p, hi = lo;
+      if (p[1] == '-' && p[2] && p[2] != ']') {
+        hi = (unsigned char)p[2];
+        p += 2;
+      }
+      hit |= lo <= c && c <= hi;
+      p++;
+    } while (*p != ']');
+    return hit != negate ? p + 1 : NULL;
+  }
+
+  return (unsigned char)*pat == c ? pat + 1 : NULL;
+}
+
+// Whether `pat` matches `s` up to its end or a '/'; backtracks only to the
+// last `*`, so the time stays linear: O(len * strlen(pat))
+static int glob_match(const char *pat, const char *s, size_t len) {
+  const char *star = NULL;
+  size_t retry = 0, i = 0;
+  while (i < len) {
+    if (*pat == '\0' && i > 0 && s[i] == '/')
+      return 1;
+    if (*pat == '*') {
+      star = ++pat;
+      retry = i;
+      continue;
+    }
+    const char *next = match_token(pat, (unsigned char)s[i]);
+    if (next) {
+      pat = next;
+      i++;
+    } else if (star) {
+      pat = star;
+      i = ++retry;
+    } else {
+      return 0;
+    }
+  }
+  while (*pat == '*')
+    pat++;
+  return *pat == '\0';
+}
+
+int path_matches(const char *path, const char *pat) {
+  size_t len = strlen(path);
+  while (len > 0 && path[len - 1] == '/')
+    len--;
+
+  for (size_t start = 0; start < len; start++)
+    if ((start == 0 || path[start - 1] == '/') &&
+        glob_match(pat, path + start, len - start))
+      return 1;
+  return 0;
+}
+
 static PyObject *join_str(const char *sep, PyObject *items) {
   PyObject *s = PyUnicode_FromString(sep);
   PyObject *joined = s ? PyUnicode_Join(s, items) : NULL;

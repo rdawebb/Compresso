@@ -66,3 +66,39 @@ void test_names_select_whole_components(int index) {
   TEST_ASSERT_EQUAL_STRING(c->selected, selected);
   TEST_ASSERT_EQUAL_STRING(c->unmatched, unmatched);
 }
+
+typedef struct {
+  const char *pat;
+  const char *path;
+  int matches;
+} MatchCase;
+
+static const MatchCase MATCH_CASES[] = {
+    {"*.log", "a/b.log", 1},
+    {"*.log", "b.log.gz", 0},
+    {"node_modules", "x/node_modules_old/y.js", 0},
+    {"a/b", "x/a/b/c", 1},
+    {"b", "ab", 0},
+    {"a*c", "a/b/c", 1}, // `*` crosses '/'
+    {"a*b*c", "aXbYbZc", 1},
+    {"?.txt", "a.txt", 1},
+    {"[!ab].txt", "a.txt", 0},
+    {"[a-c]x", "bx", 1},
+    {"[]]", "]", 1},
+    {"[a", "[a", 1}, // Unterminated, so literal
+    {"\\*", "*", 1},
+    {"\\*", "a", 0},
+    {"d", "d/", 1}, // A zip directory's trailing slash
+    {"", "/a", 0},  // A tar's absolute path has no empty component to match
+};
+
+// The TEST_RANGE below must span exactly these rows
+_Static_assert(sizeof(MATCH_CASES) / sizeof(MATCH_CASES[0]) == 16,
+               "update TEST_RANGE");
+
+TEST_RANGE([ 0, 15, 1 ])
+void test_path_matches(int index) {
+  const MatchCase *c = &MATCH_CASES[index];
+  TEST_ASSERT_EQUAL_INT_MESSAGE(c->matches, path_matches(c->path, c->pat),
+                                c->pat);
+}

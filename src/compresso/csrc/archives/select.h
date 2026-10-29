@@ -23,6 +23,11 @@ int selection_init(Selection *sel, const char **files, size_t num_files);
 // marks every name that matches, so "d" and "d/x" both count as found
 int entry_is_selected(const ArchiveEntry *entry, Selection *sel);
 
+// Whether the glob `pat` matches any run of whole components in `path`: e.g.
+// "*.log" matches "a/b.log", and "a" matches everything below "a/"; the syntax
+// is fnmatch(3)'s with no flags, so `*` and `?` also match '/'
+int path_matches(const char *path, const char *pat);
+
 // Raises an error listing unmatched requested names and skipped hardlinks
 int report_incomplete(const Selection *sel, PyObject *skipped_links,
                       CoreContext *ctx);
