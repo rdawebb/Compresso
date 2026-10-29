@@ -10,7 +10,13 @@ from . import format_size, format_time, succeed
 
 
 def summary(
-    name: Path, before: int, after: int, elapsed: float, renamed: Path | None
+    name: Path,
+    before: int,
+    after: int,
+    elapsed: float,
+    renamed: Path | None,
+    *,
+    ratio: bool = True,
 ) -> None:
     """Print the one line a finished input gets by default.
 
@@ -20,11 +26,12 @@ def summary(
         after: Bytes written.
         elapsed: Seconds the job took.
         renamed: Where the output went instead, if its name was taken.
+        ratio: Whether to show the (de)compression ratio in the summary.
     """
-    percent: float = after / before * 100 if before else 0
+    percent: str = f" ({after / before * 100:.0f}%)" if ratio and before else ""
     note: str = f", output renamed to {renamed}" if renamed else ""
     print(
-        f"\n{name}  {format_size(before)} → {format_size(after)} ({percent:.0f}%) "
+        f"{name}  {format_size(before)} → {format_size(after)}{percent} "
         f"in {format_time(elapsed)}{note}\n"
     )
 
@@ -35,7 +42,7 @@ def skipped(existing: Path) -> None:
     Args:
         existing: The output that was already there.
     """
-    print(f"{existing}  skipped, already exists")
+    print(f"{existing}  skipped, already exists\n")
 
 
 def compress_plan(plan: CompressionPlan) -> None:

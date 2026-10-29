@@ -261,6 +261,9 @@ def compress(
             else:
                 _compress_one_file(job, quiet, verbose)
 
+        if not (quiet or verbose):
+            print()
+
         sys.exit(run_all([job], run_one, "Compression"))
 
     except KeyboardInterrupt:

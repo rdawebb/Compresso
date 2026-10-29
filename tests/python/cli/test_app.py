@@ -217,12 +217,31 @@ class TestOutput:
     def test_default_is_one_summary_line(
         self, job_args: tuple[list[str | Path], Path]
     ) -> None:
-        """Test that a job prints `name  before → after (n%) in time` and no more."""
+        """Test that a job prints `name  before → after (n%) in time` and no
+        more, without the ratio on extraction."""
         args, name = job_args
         output = invoke(*args).output
 
+        ratio = r"\(\d+%\) " if args[0] == "compress" else ""
+
         assert re.fullmatch(
-            rf"\n{re.escape(str(name))}  \S+ \S+ → \S+ \S+ \(\d+%\) in \S+\n\n", output
+            rf"\n{re.escape(str(name))}  \S+ \S+ → \S+ \S+ {ratio}in \S+\n\n", output
+        ), output
+
+    def test_inputs_are_one_blank_line_apart(
+        self, payload: Path, tmp_path: Path
+    ) -> None:
+        """Test that several inputs' lines have one blank line before, between
+        and after them."""
+        inputs = [tmp_path / "a.gz", tmp_path / "b.gz"]
+        for path in inputs:
+            path.write_bytes(gzip.compress(payload.read_bytes()))
+
+        output = invoke("extract", *inputs, "-C", tmp_path / "dest").output
+
+        assert re.fullmatch(
+            "".join(rf"\n{re.escape(str(path))}  [^\n]+\n" for path in inputs) + "\n",
+            output,
         ), output
 
     def test_verbose_prints_the_blocks(

@@ -81,7 +81,9 @@ def _extract_archive(job: ExtractJob, quiet: bool, verbose: bool) -> None:
         extract_result(plan, elapsed)
 
     elif not quiet:
-        summary(plan.archive, plan.archive.stat().st_size, total, elapsed, None)
+        summary(
+            plan.archive, plan.archive.stat().st_size, total, elapsed, None, ratio=False
+        )
 
 
 def _decompress_one_file(job: DecompressionJob, quiet: bool, verbose: bool) -> None:
@@ -128,7 +130,14 @@ def _decompress_one_file(job: DecompressionJob, quiet: bool, verbose: bool) -> N
 
     else:
         renamed: Path | None = written if written != plan.dest else None
-        summary(plan.src, compressed_size, written.stat().st_size, elapsed, renamed)
+        summary(
+            plan.src,
+            compressed_size,
+            written.stat().st_size,
+            elapsed,
+            renamed,
+            ratio=False,
+        )
 
 
 def extract(
@@ -344,6 +353,9 @@ def extract(
                 directory.mkdir(parents=True, exist_ok=True)
 
             _decompress_one_file(job, quiet, verbose)
+
+    if not (quiet or verbose):
+        print()
 
     try:
         sys.exit(run_all(plan_extract(request), run_one, "Extraction"))
