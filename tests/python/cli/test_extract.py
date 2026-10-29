@@ -10,11 +10,14 @@ from pathlib import Path
 
 import pytest
 
+import compresso.cli.extract as extract_cmd
 from compresso.cli._render import (
+    EXIT_CANCELLED,
     EXIT_FAILED,
     EXIT_OK,
     EXIT_USAGE,
 )
+from compresso.frontend.dispatch import ExtractRequest
 
 from ..helpers import file_entry, link_entry, make_tar, renamed, umask
 from .conftest import CONFLICT_MODES, invoke
@@ -244,8 +247,8 @@ class TestOutputFlags:
         assert not out.exists()
 
 
-class TestMember:
-    """Test that --member/-m extracts only the entries named."""
+class TestEntry:
+    """Test that --entry extracts only the entries named."""
 
     @pytest.mark.parametrize("fmt", ["tar", "zip"])
     def test_only_the_chosen_entries(
@@ -265,9 +268,9 @@ class TestMember:
             archive,
             "-C",
             dest,
-            "--member",
+            "--entry",
             f"{top}/f0.bin",
-            "-m",
+            "-e",
             f"{top}/f2.bin",
             "-q",
         )
@@ -276,7 +279,7 @@ class TestMember:
         for name in ("f0.bin", "f2.bin"):
             assert (dest / top / name).read_bytes() == (source_tree / name).read_bytes()
 
-    def test_a_missing_member_fails_after_the_rest(
+    def test_a_missing_entry_fails_after_the_rest(
         self, source_tree: Path, tmp_path: Path, make_archive: Callable[[str], Path]
     ) -> None:
         """Test that a name matching nothing exits 1, naming it, once the rest is
@@ -289,9 +292,9 @@ class TestMember:
             make_archive("tar"),
             "-C",
             dest,
-            "--member",
+            "--entry",
             f"{top}/f1.bin",
-            "-m",
+            "-e",
             "nope",
             expect=EXIT_FAILED,
         )
@@ -300,11 +303,103 @@ class TestMember:
         assert sorted(p.name for p in (dest / top).iterdir()) == ["f1.bin"]
 
     def test_a_single_file_input_fails(self, payload: Path, tmp_path: Path) -> None:
-        """Test that --member/-m on an input that isn't an archive fails it."""
+        """Test that --entry on an input that isn't an archive fails it."""
         packed = tmp_path / "a.gz"
         packed.write_bytes(gzip.compress(payload.read_bytes()))
 
-        result = invoke("extract", packed, "-m", "x", expect=EXIT_FAILED)
+        result = invoke("extract", packed, "--entry", "x", expect=EXIT_FAILED)
 
-        assert f"{packed}: --member/-m applies only to archives" in result.output
+        assert f"{packed}: --entry applies only to archives" in result.output
         assert not (tmp_path / "a").exists()
+
+
+class TestExtractOptions:
+    """Test the flags that set `ExtractOptions`, named as tar names them."""
+
+    @pytest.mark.parametrize(
+        "flags,field,value",
+        [
+            (("--no-same-permissions",), "preserve_permissions", False),
+            (("-m",), "preserve_timestamps", False),
+            (("--overwrite-dir",), "overwrite_dir_metadata", True),
+            (("--max-depth", "5"), "max_depth", 5),
+            (("--max-depth", "0"), "max_depth", 0),
+            (("--max-size", "500M"), "max_total_size", 500 * 1024**2),
+            (("--max-size", "10g"), "max_total_size", 10 * 1024**3),
+            (("--max-size", "1KB"), "max_total_size", 1024),
+            (("--max-size", "2048"), "max_total_size", 2048),
+            (("--max-size", "0"), "max_total_size", 0),
+        ],
+    )
+    def test_flag_reaches_its_field(
+        self,
+        payload: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        flags: tuple[str, ...],
+        field: str,
+        value: object,
+    ) -> None:
+        """Test that each flag sets its field, recorded before anything runs."""
+        seen: list[ExtractRequest] = []
+
+        def record(request: ExtractRequest) -> None:
+            seen.append(request)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(extract_cmd, "plan_extract", record)
+
+        invoke("extract", payload, *flags, expect=EXIT_CANCELLED)
+
+        assert getattr(seen[0].options, field) == value
+
+    @pytest.mark.parametrize("size", ["5X", "-1", "1.5G", "M", "10MBB"])
+    def test_bad_max_size_is_usage(self, payload: Path, size: str) -> None:
+        """Test that a size that doesn't parse is refused before any work."""
+        invoke("extract", payload, "--max-size", size, expect=EXIT_USAGE)
+
+    def test_same_permissions_contradicts_no_same_permissions(
+        self, payload: Path
+    ) -> None:
+        """Test that -p with --no-same-permissions exits 2."""
+        result = invoke(
+            "extract", payload, "-p", "--no-same-permissions", expect=EXIT_USAGE
+        )
+        assert "-p contradicts --no-same-permissions" in result.output
+
+    @pytest.mark.parametrize("touch", [False, True], ids=["mtime", "touch"])
+    def test_touch_skips_the_stored_time(self, tmp_path: Path, touch: bool) -> None:
+        """Test that -m leaves an entry with the time it was extracted."""
+        archive = tmp_path / "old.tar"
+        make_tar(archive, file_entry("a.txt", mtime=1_000_000))
+        dest = tmp_path / "dest"
+
+        invoke("extract", archive, "-C", dest, *(["-m"] if touch else []), "-q")
+
+        assert ((dest / "a.txt").stat().st_mtime == 1_000_000) != touch
+
+    @pytest.mark.parametrize("depth,expect", [("2", EXIT_FAILED), ("3", EXIT_OK)])
+    def test_max_depth_bounds_entry_paths(
+        self, tmp_path: Path, depth: str, expect: int
+    ) -> None:
+        """Test that an entry nested deeper than --max-depth fails the archive."""
+        archive = tmp_path / "deep.tar"
+        make_tar(archive, file_entry("a/b/c.txt"))
+        dest = tmp_path / "dest"
+
+        invoke("extract", archive, "-C", dest, "--max-depth", depth, expect=expect)
+
+        assert (dest / "a/b/c.txt").exists() == (expect == EXIT_OK)
+
+    def test_missing_directory_is_created(
+        self, payload: Path, tmp_path: Path, make_archive: Callable[[str], Path]
+    ) -> None:
+        """Test that a `-C` that doesn't exist is made for a single file, as it
+        is for an archive."""
+        packed = tmp_path / "a.gz"
+        packed.write_bytes(gzip.compress(payload.read_bytes()))
+        dest = tmp_path / "new" / "dir"
+
+        invoke("extract", packed, make_archive("zip"), "-C", dest, "-q")
+
+        assert (dest / "a").read_bytes() == payload.read_bytes()
+        assert (dest / "tree").is_dir()

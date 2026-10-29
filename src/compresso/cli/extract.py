@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -26,6 +27,31 @@ from ._render.jobs import (
     summary,
 )
 from ._run import InputFailed, conflict_mode, require_files, run_all, run_job
+
+_SIZE = re.compile(r"(\d+)(?:([kmgt])(?:i?b)?|b)?", re.IGNORECASE)
+_UNITS = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
+
+
+def parse_size(value: str) -> int:
+    """Parse a byte count with an optional binary suffix, e.g. `500M` or `1KB`.
+
+    Args:
+        value: The text given.
+
+    Returns:
+        The count in bytes.
+
+    Raises:
+        ValueError: If `value` isn't a size, which the parser reports as a
+            usage error.
+    """
+    match = _SIZE.fullmatch(value.strip())
+    if not match:
+        raise ValueError(value)
+
+    count, unit = match.groups()
+
+    return int(count) * _UNITS[(unit or "").lower()]
 
 
 def _extract_archive(job: ExtractJob, quiet: bool, verbose: bool) -> None:
@@ -126,11 +152,11 @@ def extract(
             help="File to write, for one compressed file that isn't an archive",
         ),
     ] = None,
-    member: Annotated[
+    entry: Annotated[
         list[str] | None,
         app.Option(
-            "--member",
-            "-m",
+            "--entry",
+            "-e",
             help="Extract only this entry, or the directory and all below it; "
             "repeatable",
         ),
@@ -148,19 +174,44 @@ def extract(
         bool,
         app.Option("--force", "-f", help="Replace files that already exist"),
     ] = False,
-    max_total_size: Annotated[
+    max_size: Annotated[
         int | None,
         app.Option(
-            "--max-total-size",
-            help="Refuse archives extracting to more than this many bytes",
+            "--max-size",
+            metavar="SIZE",
+            parser=parse_size,
+            help="Refuse archives extracting to more than this, e.g. 500M or 10G",
         ),
     ] = None,
+    max_depth: Annotated[
+        int,
+        app.Option(
+            "--max-depth",
+            min=0,
+            help="Refuse entries nested deeper than this, or 0 for no limit",
+        ),
+    ] = 32,
     same_permissions: Annotated[
         bool,
         app.Option(
             "--same-permissions",
             "-p",
             help="Restore modes exactly, keeping setuid/setgid/sticky and ignoring the umask",
+        ),
+    ] = False,
+    no_same_permissions: Annotated[
+        bool,
+        app.Option("--no-same-permissions", help="Don't restore modes"),
+    ] = False,
+    touch: Annotated[
+        bool,
+        app.Option("--touch", "-m", help="Don't restore modification times"),
+    ] = False,
+    overwrite_dir: Annotated[
+        bool,
+        app.Option(
+            "--overwrite-dir",
+            help="Also restore the mode and time of directories that already exist",
         ),
     ] = False,
     symlinks: Annotated[
@@ -223,14 +274,19 @@ def extract(
         inputs: The archives or compressed files to unpack.
         directory: The directory to write into (default: beside each input).
         output: The file to write, for a single input that isn't an archive.
-        member: Entry paths to extract from each archive (default: all); a
+        entry: Entry paths to extract from each archive (default: all); a
             path matching no entry fails that archive after the rest is
             extracted.
         on_conflict: What to do when a file exists (default: rename).
         force: If True, replace files that already exist.
-        max_total_size: Cap on total extracted bytes (default: no cap).
+        max_size: Cap on total extracted bytes (default: no cap).
+        max_depth: Cap on an entry path's depth, or 0 for none.
         same_permissions: If True, restore archive entries' modes exactly;
             single-file outputs are unaffected.
+        no_same_permissions: If True, don't restore archive entries' modes.
+        touch: If True, don't restore archive entries' modification times.
+        overwrite_dir: If True, directories that already exist also get the
+            archive's mode and modification time.
         symlinks: What to do with a symlink entry (default: write a zip's as
             files, refuse any other archive's).
         threads: Worker threads for xz (default: one per core).
@@ -252,12 +308,19 @@ def extract(
     if output and len(inputs) > 1:
         fail("Error: -o names one file; use -C for several inputs", EXIT_USAGE)
 
+    if same_permissions and no_same_permissions:
+        fail("Error: -p contradicts --no-same-permissions", EXIT_USAGE)
+
     require_files(inputs)
 
     options = ExtractOptions(
         overwrite=mode,
-        max_total_size=max_total_size or 0,
+        max_total_size=max_size or 0,
+        max_depth=max_depth,
+        preserve_permissions=not no_same_permissions,
         exact_permissions=same_permissions,
+        preserve_timestamps=not touch,
+        overwrite_dir_metadata=overwrite_dir,
         symlinks=symlinks,
         threads=threads,
     )
@@ -266,7 +329,7 @@ def extract(
         inputs=inputs,
         directory=directory,
         output=output,
-        files=member,
+        files=entry,
         options=options,
         restore_name=name,
     )
@@ -276,6 +339,10 @@ def extract(
             _extract_archive(job, quiet, verbose)
 
         else:
+            # An archive creates a missing `-C` itself; a single file needs it made
+            if directory:
+                directory.mkdir(parents=True, exist_ok=True)
+
             _decompress_one_file(job, quiet, verbose)
 
     try:

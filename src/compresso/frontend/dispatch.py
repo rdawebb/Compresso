@@ -250,7 +250,7 @@ def plan_extract(request: ExtractRequest) -> list[ExtractJob | DecompressionJob]
             job.plan = replace(
                 job.plan,
                 can_run=False,
-                reason_if_unavailable="--member/-m applies only to archives",
+                reason_if_unavailable="--entry applies only to archives",
             )
 
         jobs.append(job)
