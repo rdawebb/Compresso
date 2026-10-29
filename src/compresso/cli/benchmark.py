@@ -5,30 +5,59 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from ..introspect.benchmark import benchmark_file, print_results
+from ..introspect.benchmark import benchmark_file
 from ._app import app
 from ._render import EXIT_USAGE, cancelled, fail, succeed
+from ._render.benchmark import benchmark_header, benchmark_results
+
+
+def _parse_level(value: str) -> int | None:
+    """Parse one `-l` value, exiting 2 if it's neither a number nor `auto`.
+
+    Args:
+        value: The text given.
+
+    Returns:
+        The level, or None for `auto`, the strategy's own.
+    """
+    if value.lower() == "auto":
+        return None
+
+    try:
+        return int(value)
+
+    except ValueError:
+        fail(f"Error: Invalid level {value!r}; use an integer or 'auto'", EXIT_USAGE)
 
 
 def benchmark(
     file: Annotated[Path, app.Argument(help="File to benchmark")],
-    algos: Annotated[
-        str | None, app.Option("--algos", help="Comma-separated list of algorithms")
-    ] = "all",
-    strategies: Annotated[
-        str | None,
-        app.Option("--strategies", help="Comma-separated list of strategies"),
-    ] = "all",
-    levels: Annotated[
-        str | None,
+    algo: Annotated[
+        list[str] | None,
+        app.Option("--algo", "-a", help="Algorithm to run; repeatable (default: all)"),
+    ] = None,
+    strategy: Annotated[
+        list[str] | None,
         app.Option(
-            "--levels",
-            help="Comma-separated list of levels, or 'auto'; a level outside an "
-            "algorithm's range is skipped for that algorithm",
+            "--strategy", "-s", help="Strategy to run; repeatable (default: all)"
         ),
-    ] = "auto",
+    ] = None,
+    level: Annotated[
+        list[str] | None,
+        app.Option(
+            "--level",
+            "-l",
+            metavar="N|auto",
+            help="Level to run, or 'auto'; repeatable; a level outside an "
+            "algorithm's range is skipped for that algorithm",
+            show_default="auto",
+        ),
+    ] = None,
     repeats: Annotated[
-        int, app.Option("--repeats", help="Number of times to repeat each benchmark")
+        int,
+        app.Option(
+            "--repeats", "-r", help="Number of times to repeat each benchmark", min=1
+        ),
     ] = 1,
     temp_dir: Annotated[
         Path | None,
@@ -47,65 +76,23 @@ def benchmark(
 
     Args:
         file: The path to the file to benchmark.
-        algos: Comma-separated list of algorithms to use (default: all available).
-        strategies: Comma-separated list of strategies to use (default: all).
-        levels: Comma-separated list of levels to use (default: all).
+        algo: Algorithms to run (default: all available).
+        strategy: Strategies to run (default: all).
+        level: Levels to run, or `auto` for the strategy's own (default: auto).
         repeats: Number of times to repeat each benchmark (default: 1).
         temp_dir: Temporary directory for benchmark files (default: None).
         update_cache: If True, update the speed estimates cache with benchmark results (default: False).
     """
+    levels: list[int | None] = [_parse_level(v) for v in level or ["auto"]]
+
     try:
-        algo_list: list[str] = []
-        if algos and algos.lower() != "all":
-            algo_list = [a.strip() for a in algos.split(",") if a.strip()]
-
-        strategy_list: list[str] = []
-        if strategies and strategies.lower() != "all":
-            strategy_list = [s.strip() for s in strategies.split(",") if s.strip()]
-
-        level_list: list[int | None] = []
-        if levels:
-            for level in levels.split(sep=","):
-                level: str = level.strip()
-                if not level:
-                    continue
-
-                if level.lower() in ("auto", "default"):
-                    level_list.append(None)
-
-                else:
-                    try:
-                        level_list.append(int(level))
-
-                    except ValueError:
-                        fail(
-                            f"Invalid level: {level}. Use integers or 'auto'",
-                            EXIT_USAGE,
-                        )
-
-        lines: list[str] = [
-            f"Running benchmarks on: {file}",
-            f"Repeats: {repeats}",
-        ]
-        if algo_list:
-            lines.append(f"Algorithms: {', '.join(algo_list)}")
-
-        if strategy_list:
-            lines.append(f"Strategies: {', '.join(strategy_list)}")
-
-        if level_list is not None:
-            level_str: str = ", ".join(
-                str(object=level) if level is not None else "auto"
-                for level in level_list
-            )
-            lines.append(f"Levels: {level_str}")
-        print("\n".join(lines) + "\n")
+        benchmark_header(file, repeats, algo, strategy, levels)
 
         results = benchmark_file(
             src=file,
-            algos=algo_list or None,
-            strategies=strategy_list or None,
-            levels=level_list or None,
+            algos=algo,
+            strategies=strategy,
+            levels=levels,
             repeats=repeats,
             temp_dir=temp_dir,
             update_cache=update_cache,
@@ -114,7 +101,7 @@ def benchmark(
         if not results:
             fail("No benchmark results generated\n")
 
-        print_results(results)
+        benchmark_results(results)
 
         if update_cache:
             print()

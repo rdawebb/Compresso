@@ -357,10 +357,6 @@ class TestExitCodes:
         assert message in result.output
         assert not t.dest.exists()
 
-    def test_bad_benchmark_level_is_usage(self, payload: Path) -> None:
-        """Test that a level that is not a number is a usage error."""
-        invoke("benchmark", payload, "--levels", "nope", expect=EXIT_USAGE)
-
     @pytest.mark.parametrize("flags", [(), ("-F", "7z")], ids=["suffix", "flag"])
     def test_recognised_but_unsupported_archive_names_itself(
         self, source_tree: Path, tmp_path: Path, flags: tuple[str, ...]

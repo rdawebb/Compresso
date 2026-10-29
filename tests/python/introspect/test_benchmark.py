@@ -5,7 +5,6 @@ import pytest
 from compresso.introspect.benchmark import (
     BenchmarkResult,
     benchmark_file,
-    print_results,
 )
 
 MIB = 1024 * 1024
@@ -66,45 +65,3 @@ class TestBenchmarkFile:
 
         ran = {(r.algo, r.level) for r in results}
         assert ran == {("zlib", None), ("zstd", None), ("zstd", 15), ("snappy", None)}
-
-
-class TestPrintResults:
-    """Test the print_results function."""
-
-    def test_print_results_with_empty_list(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Test that no results says so rather than printing an empty table."""
-        print_results([])
-
-        assert capsys.readouterr().out == "No results to display.\n"
-
-    def test_print_results_with_multiple_results(self, capsys) -> None:
-        """Test printing results with multiple results."""
-        results = [
-            BenchmarkResult(
-                algo="zlib",
-                strategy="balanced",
-                level=6,
-                compress_time=1.0,
-                decompress_time=0.5,
-                input_size=1000000,
-                compressed_size=500000,
-            ),
-            BenchmarkResult(
-                algo="zstd",
-                strategy="fast",
-                level=1,
-                compress_time=0.5,
-                decompress_time=0.3,
-                input_size=1000000,
-                compressed_size=450000,
-            ),
-        ]
-
-        print_results(results)
-        captured = capsys.readouterr()
-
-        # Should contain both algo names
-        assert "zlib" in captured.out.lower()
-        assert "zstd" in captured.out.lower()

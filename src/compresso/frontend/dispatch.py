@@ -112,7 +112,7 @@ class ExtractRequest:
         inputs: The archives and single-file containers to unpack.
         directory: The `-C` value, or None to write beside each input.
         output: The `-o` file, for a single non-archive input.
-        files: The `-m` entry paths to extract from each archive, or
+        files: The `-e` entry paths to extract from each archive, or
             None for all.
         options: The extraction policy; single-file inputs use only its
             `overwrite` and `threads`.

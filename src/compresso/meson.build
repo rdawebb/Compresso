@@ -64,6 +64,7 @@ py.install_sources(
 
 py.install_sources(
   'cli/_render/__init__.py',
+  'cli/_render/benchmark.py',
   'cli/_render/formats.py',
   'cli/_render/info.py',
   'cli/_render/jobs.py',

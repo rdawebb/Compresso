@@ -36,7 +36,7 @@ from .frontend.archive_api import (
     plan_archive,
     plan_extraction,
 )
-from .introspect.benchmark import benchmark_file, print_results
+from .introspect.benchmark import benchmark_file
 from .introspect.capabilities import list_capabilities
 from .introspect.file_inspect import InspectResult, inspect
 from .introspect.speeds import get_estimated_speeds
@@ -79,5 +79,4 @@ __all__: list[str] = [
     "plan_compression",
     "plan_decompression",
     "plan_extraction",
-    "print_results",
 ]
