@@ -264,6 +264,67 @@ class TestArchiveWalk:
                 assert listed[i + 1 : i + 1 + len(inside)] == inside, listed
 
 
+class TestArchiveFilter:
+    """Test that `include` and `exclude` narrow the walk."""
+
+    @pytest.fixture
+    def tree(self, tmp_path: Path) -> Path:
+        """A tree with text, logs, a node_modules and an empty directory."""
+        for rel in ("t/a/keep.txt", "t/a/drop.log", "t/a/node_modules/m.txt", "t/b/n"):
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_text(rel)
+        (tmp_path / "t/empty").mkdir()
+        return tmp_path / "t"
+
+    @pytest.mark.parametrize(
+        ("include", "exclude", "expected"),
+        [
+            (
+                [],
+                ["node_modules", "*.log"],
+                ["t/", "t/a/", "t/a/keep.txt", "t/b/", "t/b/n", "t/empty/"],
+            ),
+            (
+                ["*.txt"],
+                [],
+                [
+                    "t/",
+                    "t/a/",
+                    "t/a/keep.txt",
+                    "t/a/node_modules/",
+                    "t/a/node_modules/m.txt",
+                ],
+            ),
+            (["*.txt"], ["node_modules"], ["t/", "t/a/", "t/a/keep.txt"]),
+        ],
+        ids=["exclude", "include-keeps-holding-dirs", "exclude-wins"],
+    )
+    def test_entries_kept(
+        self,
+        tree: Path,
+        tmp_path: Path,
+        include: list[str],
+        exclude: list[str],
+        expected: list[str],
+    ) -> None:
+        """Test which entries a filter stores."""
+        output = tmp_path / "out.tar"
+
+        _core.create_archive(
+            str(output), "tar", [str(tree)], include=include, exclude=exclude
+        )
+
+        listed = [e["path"] for e in _core.list_archive_contents(str(output))]
+        assert sorted(listed) == expected
+
+    def test_bare_string_is_refused(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a str isn't taken as a sequence of one-character patterns."""
+        with pytest.raises(TypeError, match="sequence of str, not str"):
+            _core.create_archive(
+                str(tmp_path / "out.tar"), "tar", [str(tree)], include="*.txt"
+            )
+
+
 class TestSizeChange:
     """Test a file whose size changes between the walk and its copy."""
 

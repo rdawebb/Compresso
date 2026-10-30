@@ -132,6 +132,34 @@ class TestSelectByPrefix:
         extracted = [p.relative_to(out).as_posix() for p in out.rglob("*")]
         assert sorted(p for p in extracted if (out / p).is_file()) == expected
 
+    @pytest.mark.parametrize(
+        ("files", "include", "exclude", "expected"),
+        [
+            ([], ["*.txt"], ["sub"], ["d/x.txt", "dx.txt", "e.txt"]),
+            (["d"], [], ["y.txt"], ["d/x.txt"]),
+            (["d"], ["e.txt"], ["y.txt"], ["d/x.txt", "e.txt"]),
+        ],
+        ids=["include-and-exclude", "with-files", "files-or-include"],
+    )
+    def test_filter_shapes_the_selection(
+        self,
+        archive: Path,
+        tmp_path: Path,
+        files: list[str],
+        include: list[str],
+        exclude: list[str],
+        expected: list[str],
+    ) -> None:
+        """Test that includes add to `files`, as in bsdtar, and excludes override both."""
+        out = tmp_path / "out"
+
+        _core.extract_archive(
+            str(archive), str(out), files, include=include, exclude=exclude
+        )
+
+        extracted = [p.relative_to(out).as_posix() for p in out.rglob("*")]
+        assert sorted(p for p in extracted if (out / p).is_file()) == expected
+
     def test_unmatched_names_are_reported_after_the_rest(
         self, archive: Path, tmp_path: Path
     ) -> None:
@@ -144,6 +172,46 @@ class TestSelectByPrefix:
             _core.extract_archive(str(archive), str(out), ["nope", "e.txt", "d/x"])
 
         assert [p.name for p in out.iterdir()] == ["e.txt"]
+
+    def test_unmatched_includes_are_reported_after_the_rest(
+        self, archive: Path, tmp_path: Path
+    ) -> None:
+        """Test that an include matching nothing raises, as bsdtar's does."""
+        out = tmp_path / "out"
+
+        with pytest.raises(
+            IncompleteExtractionError, match=r"Not found in archive: nope, zzz\*$"
+        ):
+            _core.extract_archive(
+                str(archive), str(out), [], include=["e.txt", "nope", "zzz*"]
+            )
+
+        assert [p.name for p in out.iterdir()] == ["e.txt"]
+
+    @pytest.mark.parametrize(
+        ("files", "include", "exclude"),
+        [
+            (["e.txt"], [], ["*"]),
+            ([], ["e.txt"], ["*"]),
+        ],
+        ids=["excluded-name", "excluded-include"],
+    )
+    def test_filtered_out_matches_are_not_reported(
+        self,
+        archive: Path,
+        tmp_path: Path,
+        files: list[str],
+        include: list[str],
+        exclude: list[str],
+    ) -> None:
+        """Test that what the filter drops still counts as found, as in tar."""
+        out = tmp_path / "out"
+
+        _core.extract_archive(
+            str(archive), str(out), files, include=include, exclude=exclude
+        )
+
+        assert not [p for p in out.rglob("*") if p.is_file()]
 
 
 class TestRecognisedButUnsupportedArchive:

@@ -153,6 +153,8 @@ def create_archive(
     threads: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
+    include: Sequence[str] = ...,
+    exclude: Sequence[str] = ...,
 ) -> str:
     """Create an archive from the given input paths in the given format.
 
@@ -161,6 +163,10 @@ def create_archive(
 
     Returns the path actually written, which RENAME may have changed from
     `output_path`; SKIP returns `output_path` unchanged and writes nothing.
+
+    `include` and `exclude` are globs matched against entry names; an exclude
+    wins and isn't descended into, and with any includes, only matching entries
+    and the directories holding them are stored.
     """
 
 def extract_archive(
@@ -179,6 +185,8 @@ def extract_archive(
     threads: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
+    include: Sequence[str] = ...,
+    exclude: Sequence[str] = ...,
 ) -> None:
     """Extract an archive to output_dir; an empty `files` extracts every entry.
 
@@ -187,12 +195,18 @@ def extract_archive(
 
     `overwrite` is 0 = error, 1 = skip, 2 = overwrite, 3 = rename;
     `allow_symlinks` is 0 = deny, 1 = allow if the target stays inside
-    output_dir, 2 = rewrite to regular files, -1 = the format's default (2 for zip, 0 otherwise);
-    `max_total_size` and `max_depth` treat 0 as unlimited;
+    output_dir, 2 = rewrite to regular files, -1 = the format's default (2 for zip,
+    0 otherwise); `max_total_size` and `max_depth` treat 0 as unlimited;
     `overwrite_dir_metadata` also restores the mode and mtime of a directory
     that already exists, as GNU tar does, except when `overwrite` is 1 (skip);
     `exact_permissions` restores modes verbatim, where by default
     setuid/setgid/sticky are dropped and the umask applies.
+
+    `include` and `exclude` are matched as for `create_archive`: as in bsdtar,
+    an entry is extracted if `files` names it or an include matches it, and an
+    exclude overrides both; a directory entry is kept only if it matches
+    itself; an include that no entry matches raises `IncompleteExtractionError`,
+    as a name in `files` does, after the rest is extracted.
     """
 
 def detect_format(file_path: StrOrBytesPath) -> str:

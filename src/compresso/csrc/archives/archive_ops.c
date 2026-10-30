@@ -81,32 +81,9 @@ static int check_storable_entry_name(const char *name) {
 
 // A walked path's entry name, or NULL with an exception set
 static char *entry_name(const WalkItem *item) {
-  const char *rel_path = item->path + item->prefix_len;
-  while (FS_IS_SEP(*rel_path))
-    rel_path++;
-
-  char *name = strdup(rel_path);
-  if (!name) {
-    PyErr_NoMemory();
+  char *name = walk_entry_name(item->path, item->prefix_len);
+  if (!name)
     return NULL;
-  }
-
-  // Normalise to '/', collapsing runs and dropping a trailing one; writers add
-  // the trailing separator a directory needs
-  char *w = name;
-  for (const char *r = name; *r; r++) {
-    if (FS_IS_SEP(*r)) {
-      // Keep a leading separator so the absolute name is still rejected below
-      if (w > name && w[-1] == '/')
-        continue;
-      *w++ = '/';
-    } else {
-      *w++ = *r;
-    }
-  }
-  while (w > name + 1 && w[-1] == '/')
-    w--;
-  *w = '\0';
 
   if (check_storable_entry_name(name) != 0) {
     free(name);
@@ -210,8 +187,9 @@ static int add_walked_entries(const CArchive *archive, void *writer,
 
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths,
-                   int overwrite_existing, char *out_actual_path,
-                   size_t out_actual_path_size, CoreContext *ctx) {
+                   const PathFilter *filter, int overwrite_existing,
+                   char *out_actual_path, size_t out_actual_path_size,
+                   CoreContext *ctx) {
   if (!pipeline_is_valid(pipeline) || pipeline->archive == ARCHIVE_NONE) {
     char name[32];
     pipeline_display_name(pipeline, name, sizeof(name));
@@ -276,8 +254,9 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   own_files_add(&own, output_path);
 
   WalkList walked = {0};
-  int ret = walk_sources(input_paths, num_paths, &own, archive->stores_specials,
-                         archive->stores_hardlinks, ctx, &walked);
+  int ret = walk_sources(input_paths, num_paths, filter, &own,
+                         archive->stores_specials, archive->stores_hardlinks,
+                         ctx, &walked);
   if (ret == 0) {
     ctx_begin_stage(ctx, walked.file_bytes);
     ret = add_walked_entries(archive, writer, &walked, ctx);

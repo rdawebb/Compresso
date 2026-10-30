@@ -157,19 +157,31 @@ int pipeline_is_valid(const CompressionPipeline *p);
 
 // ---- High-Level Operations ----
 
+// Globs on entry names: an exclude wins, and with any includes an entry must
+// match one, or be a directory holding one that does (when archiving) or a
+// requested name (when extracting)
+typedef struct {
+  const char **include;
+  size_t num_include;
+  const char **exclude;
+  size_t num_exclude;
+} PathFilter;
+
 // `overwrite_existing` follows the same 0-3 scheme as
 // `ExtractionPolicy.overwrite_existing`; on success, the path actually written
 // (which RENAME may have changed) is copied into `out_actual_path`
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths,
-                   int overwrite_existing, char *out_actual_path,
-                   size_t out_actual_path_size, CoreContext *ctx);
+                   const PathFilter *filter, int overwrite_existing,
+                   char *out_actual_path, size_t out_actual_path_size,
+                   CoreContext *ctx);
 
 // Entries are checked against `policy`; any failure but a cancel undoes what
 // the extraction wrote, restoring what OVERWRITE replaced
 int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files,
-                    const ExtractionPolicy *policy, CoreContext *ctx);
+                    const PathFilter *filter, const ExtractionPolicy *policy,
+                    CoreContext *ctx);
 
 // `ctx` carries signal checks and warnings; there is no progress to report
 PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx);

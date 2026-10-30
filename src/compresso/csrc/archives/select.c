@@ -11,14 +11,23 @@ static int selected_name_cmp(const void *a, const void *b) {
   return c ? c : (x->len > y->len) - (x->len < y->len);
 }
 
-int selection_init(Selection *sel, const char **files, size_t num_files) {
-  *sel = (Selection){0};
+int selection_init(Selection *sel, const char **files, size_t num_files,
+                   const PathFilter *filter) {
+  *sel = (Selection){.filter = *filter};
+  if (filter->num_include > 0) {
+    sel->include_found = safe_malloc(filter->num_include);
+    if (!sel->include_found)
+      return -1;
+    memset(sel->include_found, 0, filter->num_include);
+  }
   if (num_files == 0)
     return 0;
 
   sel->items = safe_malloc(num_files * sizeof(*sel->items));
-  if (!sel->items)
+  if (!sel->items) {
+    free(sel->include_found);
     return -1;
+  }
 
   for (size_t i = 0; i < num_files; i++) {
     size_t len = strlen(files[i]);
@@ -39,11 +48,9 @@ int selection_init(Selection *sel, const char **files, size_t num_files) {
 }
 
 int entry_is_selected(const ArchiveEntry *entry, Selection *sel) {
-  if (sel->count == 0)
-    return 1;
-
-  int selected = 0;
-  for (const char *p = entry->path;; p++) {
+  const PathFilter *filter = &sel->filter;
+  int selected = sel->count == 0 && filter->num_include == 0;
+  for (const char *p = entry->path; sel->count > 0; p++) {
     if ((*p == '/' || *p == '\0') && p > entry->path) {
       SelectedName key = {entry->path, (size_t)(p - entry->path), 0};
       SelectedName *hit = bsearch(&key, sel->items, sel->count,
@@ -54,8 +61,20 @@ int entry_is_selected(const ArchiveEntry *entry, Selection *sel) {
       }
     }
     if (*p == '\0')
-      return selected;
+      break;
   }
+
+  for (size_t i = 0; i < filter->num_include; i++)
+    if ((!selected || !sel->include_found[i]) &&
+        path_matches(entry->path, filter->include[i])) {
+      sel->include_found[i] = 1;
+      selected = 1;
+    }
+
+  // Excludes come last, so dropped entries still counts as found and aren't
+  // reported as missing from the archive
+  return selected &&
+         !path_matches_any(entry->path, filter->exclude, filter->num_exclude);
 }
 
 // The pattern after its first token if that token matches `c`, else NULL
@@ -130,6 +149,13 @@ int path_matches(const char *path, const char *pat) {
   return 0;
 }
 
+int path_matches_any(const char *path, const char **pats, size_t count) {
+  for (size_t i = 0; i < count; i++)
+    if (path_matches(path, pats[i]))
+      return 1;
+  return 0;
+}
+
 static PyObject *join_str(const char *sep, PyObject *items) {
   PyObject *s = PyUnicode_FromString(sep);
   PyObject *joined = s ? PyUnicode_Join(s, items) : NULL;
@@ -164,6 +190,15 @@ int report_incomplete(const Selection *sel, PyObject *skipped_links,
                                                  (Py_ssize_t)sel->items[i].len);
     int rc = name ? PyList_Append(names, name) : -1;
     Py_XDECREF(name);
+    if (rc != 0)
+      goto done;
+  }
+  for (size_t i = 0; i < sel->filter.num_include; i++) {
+    if (sel->include_found[i])
+      continue;
+    PyObject *pattern = PyUnicode_FromString(sel->filter.include[i]);
+    int rc = pattern ? PyList_Append(names, pattern) : -1;
+    Py_XDECREF(pattern);
     if (rc != 0)
       goto done;
   }

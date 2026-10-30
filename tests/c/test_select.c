@@ -40,8 +40,8 @@ TEST_RANGE([ 0, 6, 1 ])
 void test_names_select_whole_components(int index) {
   const SelectCase *c = &SELECT_CASES[index];
   Selection sel;
-  TEST_ASSERT_EQUAL_INT(
-      0, selection_init(&sel, (const char **)c->files, c->num_files));
+  TEST_ASSERT_EQUAL_INT(0, selection_init(&sel, (const char **)c->files,
+                                          c->num_files, &(PathFilter){0}));
 
   char selected[128] = "";
   for (size_t i = 0; i < sizeof(NAMES) / sizeof(NAMES[0]); i++) {

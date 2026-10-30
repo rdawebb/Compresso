@@ -727,7 +727,8 @@ cleanup:
 
 int extract_archive(const char *archive_path, const char *output_dir,
                     const char **files, size_t num_files,
-                    const ExtractionPolicy *policy, CoreContext *ctx) {
+                    const PathFilter *filter, const ExtractionPolicy *policy,
+                    CoreContext *ctx) {
   const CArchive *archive;
   CompressionPipeline pipe;
   FILE *src = open_archive_source(archive_path, &archive, &pipe, ctx);
@@ -763,7 +764,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
 
   Selection sel;
   PyObject *skipped_links = PyList_New(0);
-  if (!skipped_links || selection_init(&sel, files, num_files) != 0) {
+  if (!skipped_links || selection_init(&sel, files, num_files, filter) != 0) {
     Py_XDECREF(skipped_links);
     if (src)
       fclose(src);
@@ -828,5 +829,6 @@ int extract_archive(const char *archive_path, const char *output_dir,
     ret = report_incomplete(&sel, skipped_links, ctx);
   Py_DECREF(skipped_links);
   free(sel.items);
+  free(sel.include_found);
   return ret;
 }
