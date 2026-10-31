@@ -1,6 +1,7 @@
 """Tests for creating archives."""
 
 import contextlib
+import errno
 import logging
 import os
 import socket
@@ -14,7 +15,13 @@ from pathlib import Path
 import orjson
 import pytest
 
-from compresso import ArchiveJob, ArchiveOptions, BackendError, _core
+from compresso import (
+    ArchiveJob,
+    ArchiveOptions,
+    BackendError,
+    SourceRemovalError,
+    _core,
+)
 
 from .helpers import ARCHIVE_AND_LIST, run_child
 
@@ -389,6 +396,114 @@ class TestArchiveFilter:
 
         assert total(tree / "b") == (tree / "b" / "n").stat().st_size
         assert total(source_link) == 0
+
+
+class TestRemoveSources:
+    """Test that `remove_sources` deletes exactly what the archive stored."""
+
+    @pytest.fixture
+    def tree(self, tmp_path: Path) -> Path:
+        """A small tree with a nested directory."""
+        root = tmp_path / "tree"
+        (root / "sub").mkdir(parents=True)
+        (root / "a.txt").write_text("a")
+        (root / "sub" / "b.log").write_text("b")
+
+        return root
+
+    @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
+    def test_stored_tree_is_deleted(self, tree: Path, tmp_path: Path, fmt: str) -> None:
+        """Test that a stored tree goes, leaving a complete archive."""
+        output = tmp_path / f"out.{fmt}"
+
+        _core.create_archive(str(output), fmt, [str(tree)], remove_sources=True)
+
+        assert not tree.exists()
+        names = {e["path"].rstrip("/") for e in _core.list_archive_contents(output)}
+        assert names == {"tree", "tree/a.txt", "tree/sub", "tree/sub/b.log"}
+
+    def test_what_a_filter_left_out_stays(self, tree: Path, tmp_path: Path) -> None:
+        """Test that an excluded file keeps itself and the directory holding it."""
+        _core.create_archive(
+            str(tmp_path / "out.tar"),
+            "tar",
+            [str(tree)],
+            exclude=["b.log"],
+            remove_sources=True,
+        )
+
+        assert (tree / "sub" / "b.log").is_file()
+        assert not (tree / "a.txt").exists()
+
+    def test_output_inside_the_source_stays(self, tree: Path) -> None:
+        """Test that the walk skipping the archive saves it from the removal."""
+        output = tree / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(tree)], remove_sources=True)
+
+        assert [p.name for p in tree.iterdir()] == ["out.tar"]
+        assert len(_core.list_archive_contents(output)) == 4
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="needs a FIFO")
+    def test_unstored_special_file_stays(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a FIFO zip can't hold survives with its directory."""
+        os.mkfifo(tree / "pipe")
+
+        _core.create_archive(
+            str(tmp_path / "out.zip"), "zip", [str(tree)], remove_sources=True
+        )
+
+        assert [p.name for p in tree.iterdir()] == ["pipe"]
+
+    @pytest.mark.usefixtures("needs_symlinks")
+    def test_symlink_goes_but_not_its_target(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a source symlink, stored as a link, is all that's deleted."""
+        link = tmp_path / "link"
+        link.symlink_to(tree, target_is_directory=True)
+
+        _core.create_archive(
+            str(tmp_path / "out.tar"), "tar", [str(link)], remove_sources=True
+        )
+
+        assert not link.is_symlink()
+        assert (tree / "a.txt").is_file()
+
+    def test_skip_is_refused(self, tree: Path, tmp_path: Path) -> None:
+        """Test that skip, which can drop a finished archive, can't delete sources."""
+        with pytest.raises(ValueError, match="remove_sources"):
+            _core.create_archive(
+                str(tmp_path / "out.tar"),
+                "tar",
+                [str(tree)],
+                overwrite=1,
+                remove_sources=True,
+            )
+
+        assert (tree / "a.txt").is_file()
+        assert not (tmp_path / "out.tar").exists()
+
+    def test_undeletable_sources_are_each_reported(
+        self, tree: Path, locked: Path, tmp_path: Path
+    ) -> None:
+        """Test that the rest still go, and the error covers all that stayed."""
+        (locked / "c.txt").write_text("c")
+        (locked / "d.txt").write_text("d")
+        locked.chmod(0o555)
+        output = tmp_path / "out.tar"
+
+        with pytest.raises(SourceRemovalError) as caught:
+            _core.create_archive(
+                str(output), "tar", [str(tree), str(locked)], remove_sources=True
+            )
+
+        reason = os.strerror(errno.EACCES)
+        assert caught.value.output == str(output)
+        assert sorted(caught.value.failures) == [
+            (str(locked / "c.txt"), reason),
+            (str(locked / "d.txt"), reason),
+        ]
+        assert not tree.exists()
+        assert len(_core.list_archive_contents(output)) == 7
 
 
 class TestSizeChange:

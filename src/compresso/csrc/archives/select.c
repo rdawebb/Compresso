@@ -177,7 +177,7 @@ static int append_part(PyObject *parts, const char *label, PyObject *items) {
 }
 
 int report_incomplete(const Selection *sel, PyObject *skipped_links,
-                      CoreContext *ctx) {
+                      PyObject *skipped_nodes, CoreContext *ctx) {
   PyObject *names = PyList_New(0);
   PyObject *parts = PyList_New(0);
   int ret = -1;
@@ -203,7 +203,8 @@ int report_incomplete(const Selection *sel, PyObject *skipped_links,
       goto done;
   }
   if (append_part(parts, "Not found in archive", names) != 0 ||
-      append_part(parts, "Hardlink target missing", skipped_links) != 0)
+      append_part(parts, "Hardlink target missing", skipped_links) != 0 ||
+      append_part(parts, "Skipped, the rest was extracted", skipped_nodes) != 0)
     goto done;
 
   if (PyList_GET_SIZE(parts) == 0) {

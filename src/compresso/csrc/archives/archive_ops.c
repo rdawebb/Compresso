@@ -1,10 +1,10 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include "archive_ops.h"
-#include "paths.h"
 #include "../common.h"
 #include "../fsutil.h"
 #include "../standalone.h"
+#include "paths.h"
 #include "walk.h"
 #include <archive_entry.h>
 #include <errno.h>
@@ -183,13 +183,64 @@ static int add_walked_entries(const CArchive *archive, void *writer,
   return 0;
 }
 
+// Deepest first; a directory holding something unstored stays, and so does ".";
+// a path that won't go lands in `failed`, and the rest still go
+static int remove_walked(const WalkList *walked, PyObject *failed) {
+  for (size_t i = walked->count; i-- > 0;) {
+    const WalkItem *item = &walked->items[i];
+    int is_dir = item->st.type == FS_TYPE_DIR;
+    if ((is_dir ? fs_rmdir(item->path) : fs_unlink(item->path)) == 0)
+      continue;
+    if (is_dir && (errno == ENOTEMPTY || errno == EEXIST || errno == EINVAL))
+      continue;
+
+    const char *reason = strerror(errno);
+    PyObject *failure =
+        Py_BuildValue("(Ns)", PyUnicode_DecodeFSDefault(item->path), reason);
+    int rc = failure ? PyList_Append(failed, failure) : -1;
+    Py_XDECREF(failure);
+    if (rc != 0)
+      return -1;
+  }
+  return 0;
+}
+
+// The archive is committed by now, so what's raised also says where it went
+static int remove_stored(const WalkList *walked, const char *output,
+                         const CompErrors *errors) {
+  PyObject *failed = PyList_New(0);
+  int ret = failed ? remove_walked(walked, failed) : -1;
+
+  if (ret == 0 && PyList_GET_SIZE(failed) > 0) {
+    ret = -1;
+    PyObject *error = PyObject_CallFunction(
+        errors->source_removal, "s",
+        "Archive written, but some of its sources could not be deleted");
+    PyObject *path = PyUnicode_DecodeFSDefault(output);
+    if (error && path && PyObject_SetAttrString(error, "output", path) == 0 &&
+        PyObject_SetAttrString(error, "failures", failed) == 0)
+      PyErr_SetObject(errors->source_removal, error);
+    Py_XDECREF(path);
+    Py_XDECREF(error);
+  }
+
+  Py_XDECREF(failed);
+  return ret;
+}
+
 // ---- Archive Operations ----
 
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths,
                    const PathFilter *filter, int overwrite_existing,
-                   char *out_actual_path, size_t out_actual_path_size,
-                   CoreContext *ctx) {
+                   int remove_sources, char *out_actual_path,
+                   size_t out_actual_path_size, CoreContext *ctx) {
+  if (remove_sources && overwrite_existing == 1) {
+    PyErr_SetString(PyExc_ValueError,
+                    "remove_sources can't be combined with skip");
+    return -1;
+  }
+
   if (!pipeline_is_valid(pipeline) || pipeline->archive == ARCHIVE_NONE) {
     char name[32];
     pipeline_display_name(pipeline, name, sizeof(name));
@@ -261,7 +312,6 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
     ctx_begin_stage(ctx, walked.file_bytes);
     ret = add_walked_entries(archive, writer, &walked, ctx);
   }
-  walk_list_free(&walked);
 
   // libzip does all its compression inside zip_close, so that is where its
   // progress comes from; a run that already failed is discarded instead
@@ -271,28 +321,33 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
 
   if (!stream) {
     if (ret == 0)
-      return output_commit(tmp_path, &out);
-    fs_unlink(tmp_path);
-    return ret;
-  }
-
-  // libarchive only knows its write callback failed; failed streams return
-  // a failure to every write; empty ones swap in the cause (e.g. cancelled)
-  if (ret != 0) {
-    int stream_ret = codec_write(stream, NULL, 0);
-    if (stream_ret != 0) {
-      PyErr_Clear();
-      ret = stream_ret;
+      ret = output_commit(tmp_path, &out);
+    else
+      fs_unlink(tmp_path);
+  } else {
+    // libarchive only knows its write callback failed; failed streams return
+    // a failure to every write; empty ones swap in the cause (e.g. cancelled)
+    if (ret != 0) {
+      int stream_ret = codec_write(stream, NULL, 0);
+      if (stream_ret != 0) {
+        PyErr_Clear();
+        ret = stream_ret;
+      }
     }
+
+    int codec_ret = codec_writer_close(stream, ret != 0);
+    if (ret == 0)
+      ret = codec_ret;
+
+    char failure[64];
+    snprintf(failure, sizeof(failure), "%s compression failed", fmt->name);
+    ret = output_finish(ret, NULL, tmp, tmp_path, &out, ctx->errors, failure);
   }
 
-  int codec_ret = codec_writer_close(stream, ret != 0);
-  if (ret == 0)
-    ret = codec_ret;
-
-  char failure[64];
-  snprintf(failure, sizeof(failure), "%s compression failed", fmt->name);
-  return output_finish(ret, NULL, tmp, tmp_path, &out, ctx->errors, failure);
+  if (ret == 0 && remove_sources)
+    ret = remove_stored(&walked, out_actual_path, ctx->errors);
+  walk_list_free(&walked);
+  return ret;
 }
 
 FILE *open_archive_source(const char *archive_path, const CArchive **archive,

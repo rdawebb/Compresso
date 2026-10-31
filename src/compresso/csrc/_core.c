@@ -416,7 +416,7 @@ static PyObject *py_create_archive(PyObject *self, PyObject *args,
   static char *kwlist[] = {"output_path",       "format",    "input_paths",
                            "compression_level", "overwrite", "threads",
                            "progress",          "cancel",    "include",
-                           "exclude",           NULL};
+                           "exclude",           "remove_sources", NULL};
 
   PyObject *output_path_bytes = NULL;
   const char *format_name = NULL;
@@ -428,12 +428,14 @@ static PyObject *py_create_archive(PyObject *self, PyObject *args,
   PyObject *cancel = NULL;
   PathList include = {0};
   PathList exclude = {0};
+  int remove_sources = 0;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "O&sO&|i$iiOOO&O&", kwlist, PyUnicode_FSConverter,
+          args, kwargs, "O&sO&|i$iiOOO&O&p", kwlist, PyUnicode_FSConverter,
           &output_path_bytes, &format_name, path_list_converter, &inputs,
           &compression_level, &overwrite_existing, &threads, &progress, &cancel,
-          pattern_list_converter, &include, pattern_list_converter, &exclude)) {
+          pattern_list_converter, &include, pattern_list_converter, &exclude,
+          &remove_sources)) {
     return NULL; // Error already set
   }
   PathFilter filter = {include.paths, include.count, exclude.paths,
@@ -460,7 +462,8 @@ static PyObject *py_create_archive(PyObject *self, PyObject *args,
   char actual_path[FS_PATH_MAX];
   result = create_archive(
       PyBytes_AS_STRING(output_path_bytes), &pipe, inputs.paths, inputs.count,
-      &filter, overwrite_existing, actual_path, sizeof(actual_path), &ctx);
+      &filter, overwrite_existing, remove_sources, actual_path,
+      sizeof(actual_path), &ctx);
 
 done:
   Py_DECREF(output_path_bytes);
@@ -1046,6 +1049,7 @@ static int core_exec(PyObject *module) {
        &errors->error},
       {&errors->incomplete_extraction, "compresso.IncompleteExtractionError",
        &errors->error},
+      {&errors->source_removal, "compresso.SourceRemovalError", &errors->error},
       {&errors->trailing_data_warning, "compresso.TrailingDataWarning",
        &PyExc_UserWarning},
   };
@@ -1071,6 +1075,7 @@ static int core_traverse(PyObject *module, visitproc visit, void *arg) {
   Py_VISIT(errors->corrupt_data);
   Py_VISIT(errors->extraction_policy);
   Py_VISIT(errors->incomplete_extraction);
+  Py_VISIT(errors->source_removal);
   Py_VISIT(errors->cancelled);
   Py_VISIT(errors->trailing_data_warning);
   return 0;
@@ -1084,6 +1089,7 @@ static int core_clear(PyObject *module) {
   Py_CLEAR(errors->corrupt_data);
   Py_CLEAR(errors->extraction_policy);
   Py_CLEAR(errors->incomplete_extraction);
+  Py_CLEAR(errors->source_removal);
   Py_CLEAR(errors->cancelled);
   Py_CLEAR(errors->trailing_data_warning);
   return 0;

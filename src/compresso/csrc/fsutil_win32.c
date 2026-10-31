@@ -436,6 +436,11 @@ static void set_errno_from_win32(int fallback) {
   case ERROR_ACCESS_DENIED:
     errno = EACCES;
     break;
+  case ERROR_PRIVILEGE_NOT_HELD:
+  case ERROR_NOT_SUPPORTED:
+  case ERROR_INVALID_FUNCTION: // e.g. a FAT volume
+    errno = EPERM;
+    break;
   default:
     errno = fallback;
     break;
@@ -554,7 +559,8 @@ int fs_symlink(const char *target, const char *link_path) {
   if (ok)
     return 0;
 
-  set_errno_from_win32(EPERM); // e.g. ERROR_PRIVILEGE_NOT_HELD
+  // Not EPERM for anything else, e.g. a full disk, which must fail extraction
+  set_errno_from_win32(EIO);
   return -1;
 }
 

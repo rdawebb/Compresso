@@ -574,19 +574,32 @@ class TestSpecialExtraction:
     @pytest.mark.skipif(
         sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX, not root"
     )
-    def test_device_is_skipped_without_root(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Test that a device is skipped with a warning, the rest still extracted."""
+    def test_device_is_reported_without_root(self, tmp_path: Path) -> None:
+        """Test that a device fails the extraction, the rest still extracted."""
         archive = tmp_path / "nodes.tar"
         make_tar(archive, file_entry("a"), node_entry("char", tarfile.CHRTYPE))
         out = tmp_path / "out"
 
-        with caplog.at_level(logging.WARNING, logger="compresso"):
+        with pytest.raises(
+            IncompleteExtractionError,
+            match=r"^Skipped, the rest was extracted: char \(devices are only created by root",
+        ):
             _core.extract_archive(str(archive), str(out), [])
 
         assert os.listdir(out) == ["a"]
-        assert "Skipped char: devices are only created by root" in caplog.text
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX, not root"
+    )
+    def test_excluded_device_is_not_reported(self, tmp_path: Path) -> None:
+        """Test that a device left out on purpose doesn't fail the extraction."""
+        archive = tmp_path / "nodes.tar"
+        make_tar(archive, file_entry("a"), node_entry("char", tarfile.CHRTYPE))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [], exclude=["char"])
+
+        assert os.listdir(out) == ["a"]
 
     @pytest.mark.skipif(
         sys.platform == "win32" or os.geteuid() != 0, reason="needs root"
@@ -603,19 +616,19 @@ class TestSpecialExtraction:
         assert st.st_rdev == os.makedev(1, 3)
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only")
-    def test_windows_skips_a_fifo(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Test that a FIFO is skipped with a warning, the rest still extracted."""
+    def test_windows_reports_a_fifo(self, tmp_path: Path) -> None:
+        """Test that a FIFO fails the extraction, the rest still extracted."""
         archive = tmp_path / "nodes.tar"
         make_tar(archive, file_entry("a"), node_entry("fifo", tarfile.FIFOTYPE))
         out = tmp_path / "out"
 
-        with caplog.at_level(logging.WARNING, logger="compresso"):
+        with pytest.raises(
+            IncompleteExtractionError,
+            match=r"^Skipped, the rest was extracted: fifo \(FIFOs can't be created on this platform\)$",
+        ):
             _core.extract_archive(str(archive), str(out), [])
 
         assert os.listdir(out) == ["a"]
-        assert "Skipped fifo: FIFOs can't be created on this platform" in caplog.text
 
 
 class TestDirectoryMetadata:
@@ -895,6 +908,27 @@ class TestSymlinksAsFiles:
 
 class TestSymlinkExtraction:
     """Test allow_symlinks=1, which creates links whose targets stay inside."""
+
+    def test_uncreatable_link_is_reported(self, tmp_path: Path) -> None:
+        """Test that a link this process can't make keeps the rest extracted."""
+        try:
+            (tmp_path / "symlink-probe").symlink_to("x")
+        except OSError:
+            pass
+        else:
+            pytest.skip("symlinks are permitted here")
+
+        archive = tmp_path / "links.tar"
+        make_tar(archive, file_entry("a"), link_entry("b", "a", kind=tarfile.SYMTYPE))
+        out = tmp_path / "out"
+
+        with pytest.raises(
+            IncompleteExtractionError,
+            match=r"^Skipped, the rest was extracted: b \(this user or filesystem",
+        ):
+            _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
+
+        assert os.listdir(out) == ["a"]
 
     @pytest.mark.usefixtures("needs_symlinks")
     def test_link_is_created_as_stored(self, tmp_path: Path) -> None:

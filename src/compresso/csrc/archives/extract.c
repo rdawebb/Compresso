@@ -302,14 +302,27 @@ static int make_node(const void *entry, const char *out_path) {
   return fs_mknod(out_path, e->special, e->mode, e->rdev);
 }
 
+// Appends "path (reason)" to `skipped_nodes`; returns 0, or -1 with an
+// exception set
+static int skip_node(PyObject *skipped_nodes, const char *path,
+                     const char *reason) {
+  PyObject *node = PyUnicode_FromFormat("%s (%s)", path, reason);
+  int rc = node ? PyList_Append(skipped_nodes, node) : -1;
+  Py_XDECREF(node);
+  return rc;
+}
+
 // Runs `make(source, out_path)` under the overwrite mode, as for a file;
-// returns 0, or -1 with an exception set
+// returns 0, 1 if symlinks can't be created here, or -1 with an exception set
 static int place_link(int (*make)(const void *, const char *),
                       const void *source, const char *out_path,
                       const char *entry_path, int overwrite_existing,
                       int64_t mtime, Changes *changes) {
   if (make(source, out_path) == 0)
     return link_made(changes, out_path, mtime);
+  // Only here, as nothing has been moved aside yet
+  if (make == make_symlink && errno == EPERM)
+    return 1;
   if (errno != EEXIST) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, out_path);
     return -1;
@@ -421,9 +434,11 @@ static int extract_hardlink(const CompErrors *errors, const char *resolved_root,
                     policy->overwrite_existing, 0, changes);
 }
 
+// A symlink this user or filesystem can't create is appended to `skipped_nodes`
 static int extract_symlink(const CompErrors *errors, const char *resolved_root,
                            const char *out_path, const ArchiveEntry *entry,
-                           const ExtractionPolicy *policy, Changes *changes) {
+                           const ExtractionPolicy *policy,
+                           PyObject *skipped_nodes, Changes *changes) {
   char parent[FS_PATH_MAX];
   if (prepare_parent(errors, resolved_root, out_path, entry->path, changes,
                      parent) != 0)
@@ -432,26 +447,29 @@ static int extract_symlink(const CompErrors *errors, const char *resolved_root,
   if (check_target_from(errors, resolved_root, parent, entry) != 0)
     return -1;
 
-  return place_link(make_symlink, entry->link_target, out_path, entry->path,
-                    policy->overwrite_existing,
-                    policy->preserve_timestamps ? (int64_t)entry->mtime : 0,
-                    changes);
+  int rc = place_link(make_symlink, entry->link_target, out_path, entry->path,
+                      policy->overwrite_existing,
+                      policy->preserve_timestamps ? (int64_t)entry->mtime : 0,
+                      changes);
+  if (rc != 1)
+    return rc;
+  return skip_node(skipped_nodes, entry->path,
+                   "this user or filesystem can't create symlinks");
 }
 
-// A node this platform or user can't create is skipped with a warning; returns
-// 0, or -1 with an exception set
+// A node this platform or user can't create is appended to `skipped_nodes` as
+// "path (reason)"; returns 0, or -1 with an exception set
 static int extract_special(const CompErrors *errors, const char *resolved_root,
                            const char *out_path, const ArchiveEntry *entry,
                            const ExtractionPolicy *policy, uint32_t mode_mask,
-                           CoreContext *ctx, Changes *changes) {
-  if (!fs_can_mknod(entry->special)) {
-    ctx_log(ctx, CTX_LOG_WARNING, "Skipped %s: %s", entry->path,
-            !entry->special ? "sockets are not extracted"
-            : entry->special == AE_IFIFO
-                ? "FIFOs can't be created on this platform"
-                : "devices are only created by root, and not on Windows");
-    return 0;
-  }
+                           PyObject *skipped_nodes, Changes *changes) {
+  if (!fs_can_mknod(entry->special))
+    return skip_node(
+        skipped_nodes, entry->path,
+        !entry->special ? "sockets are not extracted"
+        : entry->special == AE_IFIFO
+            ? "FIFOs can't be created on this platform"
+            : "devices are only created by root, and not on Windows");
 
   char parent[FS_PATH_MAX];
   if (prepare_parent(errors, resolved_root, out_path, entry->path, changes,
@@ -621,13 +639,14 @@ static int extract_file(const CArchive *archive, void *reader,
 
 // Extract each entry from an open reader into `changes` and `deferred`; each
 // hardlink whose target is missing is appended to `skipped_links` as
-// "link -> target"; `data_ctx` counts bytes written, NULL callers count input
+// "link -> target", and each node that can't be created to `skipped_nodes`;
+// `data_ctx` counts bytes written, NULL callers count input
 static int extract_entries(const CArchive *archive, void *reader,
                            const char *output_dir, const char *resolved_root,
                            Selection *sel, const ExtractionPolicy *policy,
                            CoreContext *ctx, CoreContext *data_ctx,
                            Changes *changes, DeferredDirs *deferred,
-                           PyObject *skipped_links) {
+                           PyObject *skipped_links, PyObject *skipped_nodes) {
   ArchiveEntry entry = {0};
   uint64_t written_total = 0;
   Renames renames = {0};
@@ -691,7 +710,7 @@ static int extract_entries(const CArchive *archive, void *reader,
                        policy, mode_mask, &renames, changes, deferred);
     else if (entry.type == ENTRY_SYMLINK && policy->allow_symlinks == 1)
       rc = extract_symlink(ctx->errors, resolved_root, out_path, &entry, policy,
-                           changes);
+                           skipped_nodes, changes);
     else if (entry.type == ENTRY_FILE || entry.type == ENTRY_SYMLINK)
       rc = extract_file(archive, reader, ctx->errors, resolved_root, out_path,
                         &entry, policy, mode_mask, data_ctx, &written_total,
@@ -708,7 +727,7 @@ static int extract_entries(const CArchive *archive, void *reader,
       }
     } else if (entry.type == ENTRY_SPECIAL)
       rc = extract_special(ctx->errors, resolved_root, out_path, &entry, policy,
-                           mode_mask, ctx, changes);
+                           mode_mask, skipped_nodes, changes);
     if (rc < 0) {
       result = rc;
       goto cleanup;
@@ -764,8 +783,11 @@ int extract_archive(const char *archive_path, const char *output_dir,
 
   Selection sel;
   PyObject *skipped_links = PyList_New(0);
-  if (!skipped_links || selection_init(&sel, files, num_files, filter) != 0) {
+  PyObject *skipped_nodes = PyList_New(0);
+  if (!skipped_links || !skipped_nodes ||
+      selection_init(&sel, files, num_files, filter) != 0) {
     Py_XDECREF(skipped_links);
+    Py_XDECREF(skipped_nodes);
     if (src)
       fclose(src);
     return -1;
@@ -801,7 +823,7 @@ int extract_archive(const char *archive_path, const char *output_dir,
                                     &sel, policy, ctx, &declared_total)
               : extract_entries(archive, reader, output_dir, resolved_root,
                                 &sel, policy, ctx, src ? NULL : ctx, &changes,
-                                &deferred, skipped_links);
+                                &deferred, skipped_links, skipped_nodes);
 
     // A failed pass keeps its own error
     if (archive->close_reader(reader, ret != 0) != 0 && ret == 0)
@@ -826,8 +848,9 @@ int extract_archive(const char *archive_path, const char *output_dir,
 
   // After everything else has been extracted
   if (ret == 0)
-    ret = report_incomplete(&sel, skipped_links, ctx);
+    ret = report_incomplete(&sel, skipped_links, skipped_nodes, ctx);
   Py_DECREF(skipped_links);
+  Py_DECREF(skipped_nodes);
   free(sel.items);
   free(sel.include_found);
   return ret;

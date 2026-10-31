@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .._core import Error
-from ..frontend._job import ThreadedJob
+from .._core import Error, SourceRemovalError
+from ..frontend._job import JobResult, ThreadedJob
 from ..frontend.archive_api import OverwriteMode
 from ._render import (
     BAR_THRESHOLD,
@@ -19,6 +20,7 @@ from ._render import (
     fail,
     progress_bar,
     report_error,
+    report_warning,
 )
 
 J = TypeVar("J")
@@ -26,6 +28,10 @@ J = TypeVar("J")
 
 class InputFailed(Exception):
     """One input failed; the runner reports it and goes on to the next."""
+
+
+class NotRemoved(Exception):
+    """An output is written, but `--rm` left inputs; args are (path, reason)."""
 
 
 def require_files(paths: Iterable[Path]) -> None:
@@ -41,23 +47,53 @@ def require_files(paths: Iterable[Path]) -> None:
             fail(f"Error: {path} does not exist or is not a file", EXIT_USAGE)
 
 
-def conflict_mode(on_conflict: OverwriteMode | None, force: bool) -> OverwriteMode:
+def conflict_mode(
+    on_conflict: OverwriteMode | None, force: bool, remove: bool
+) -> OverwriteMode:
     """Resolve `--on-conflict` and `-f` into one mode, exiting 2 if they disagree.
 
     Args:
         on_conflict: The mode given, or None if it was not.
         force: Whether `-f`, shorthand for `--on-conflict overwrite`, was given.
+        remove: Whether `--rm`, which can't follow an output that was skipped,
+            was given.
 
     Returns:
         The mode to run with; RENAME if neither was given.
     """
     if not force:
+        if remove and on_conflict is OverwriteMode.SKIP:
+            fail(
+                "Error: --rm contradicts --on-conflict skip; "
+                "use --on-conflict error to keep inputs whose output exists",
+                EXIT_USAGE,
+            )
+
         return on_conflict or OverwriteMode.RENAME
 
     if on_conflict not in (None, OverwriteMode.OVERWRITE):
         fail(f"Error: -f contradicts --on-conflict {on_conflict}", EXIT_USAGE)
 
     return OverwriteMode.OVERWRITE
+
+
+def remove_source(source: Path, before: os.stat_result) -> None:
+    """Delete an input now its output is written when '--rm' flag is used.
+
+    Args:
+        source: The input.
+        before: Its stat from before the job; anything else at that path now
+            is the output, written over it, so it stays.
+
+    Raises:
+        NotRemoved: If the input can't be deleted.
+    """
+    try:
+        if os.path.samestat(source.stat(), before):
+            source.unlink()
+
+    except OSError as e:
+        raise NotRemoved((str(source), e.strerror or str(e))) from e
 
 
 def run_job(
@@ -68,7 +104,7 @@ def run_job(
     *,
     quiet: bool,
     what: str,
-) -> float:
+) -> tuple[float, JobResult]:
     """Run `job` under a progress bar.
 
     Args:
@@ -80,7 +116,8 @@ def run_job(
         what: Operation name for messages, e.g. "Compression".
 
     Returns:
-        Seconds the job took.
+        Seconds the job took, and its result; a `SourceRemovalError` in that
+        result is left for the caller, as the output is still there to report.
 
     Raises:
         InputFailed: If the job failed.
@@ -97,10 +134,10 @@ def run_job(
     if result.cancelled:
         cancelled(what)
 
-    if not result.ok:
+    if not result.ok and not isinstance(result.error, SourceRemovalError):
         raise InputFailed(f"{source}: {what} failed: {result.error}")
 
-    return elapsed
+    return elapsed, result
 
 
 def run_all(jobs: Iterable[J], run_one: Callable[[J], None], what: str) -> int:
@@ -122,6 +159,11 @@ def run_all(jobs: Iterable[J], run_one: Callable[[J], None], what: str) -> int:
 
         except InputFailed as e:
             report_error(str(e))
+            failed = True
+
+        except NotRemoved as e:
+            for path, reason in e.args:
+                report_warning(f"{path}: not removed: {reason}")
             failed = True
 
         except Error as e:

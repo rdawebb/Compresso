@@ -26,7 +26,14 @@ from ._render.jobs import (
     skipped,
     summary,
 )
-from ._run import InputFailed, conflict_mode, require_files, run_all, run_job
+from ._run import (
+    InputFailed,
+    conflict_mode,
+    remove_source,
+    require_files,
+    run_all,
+    run_job,
+)
 
 _SIZE = re.compile(r"(\d+)(?:([kmgt])(?:i?b)?|b)?", re.IGNORECASE)
 _UNITS = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
@@ -54,13 +61,14 @@ def parse_size(value: str) -> int:
     return int(count) * _UNITS[(unit or "").lower()]
 
 
-def _extract_archive(job: ExtractJob, quiet: bool, verbose: bool) -> None:
+def _extract_archive(job: ExtractJob, quiet: bool, verbose: bool, remove: bool) -> None:
     """Unpack one archive.
 
     Args:
         job: The planned job.
         quiet: Whether to suppress all output.
         verbose: Whether to print the plan and stats blocks.
+        remove: Whether to delete the archive once it is extracted.
     """
     plan = job.plan
 
@@ -73,7 +81,8 @@ def _extract_archive(job: ExtractJob, quiet: bool, verbose: bool) -> None:
     # Progress covers the bytes written out; a compressed archive also reports
     # the pass that decompresses it, so the job's own total wins
     total: int = sum(entry.size for entry in plan.entries)
-    elapsed: float = run_job(
+    before = plan.archive.stat()
+    elapsed, _ = run_job(
         job, plan.archive, "Extracting", total, quiet=quiet, what="Extraction"
     )
 
@@ -85,18 +94,22 @@ def _extract_archive(job: ExtractJob, quiet: bool, verbose: bool) -> None:
         extract_result(plan, elapsed)
 
     elif not quiet:
-        summary(
-            plan.archive, plan.archive.stat().st_size, total, elapsed, None, ratio=False
-        )
+        summary(plan.archive, before.st_size, total, elapsed, None, ratio=False)
+
+    if remove:
+        remove_source(plan.archive, before)
 
 
-def _decompress_one_file(job: DecompressionJob, quiet: bool, verbose: bool) -> None:
+def _decompress_one_file(
+    job: DecompressionJob, quiet: bool, verbose: bool, remove: bool
+) -> None:
     """Unpack one single-file container: a `.comp` or a standalone codec.
 
     Args:
         job: The planned job.
         quiet: Whether to suppress all output.
         verbose: Whether to print the plan and stats blocks.
+        remove: Whether to delete the input once the output is written.
     """
     plan = job.plan
 
@@ -108,10 +121,11 @@ def _decompress_one_file(job: DecompressionJob, quiet: bool, verbose: bool) -> N
 
     # Progress counts the compressed bytes read, so the source's size is the
     # denominator rather than the size it expands to
-    compressed_size: int = plan.src.stat().st_size
+    before = plan.src.stat()
+    compressed_size: int = before.st_size
     skips: bool = plan.overwrite is OverwriteMode.SKIP and plan.dest.exists()
 
-    elapsed: float = run_job(
+    elapsed, _ = run_job(
         job,
         plan.src,
         "Decompressing",
@@ -126,13 +140,10 @@ def _decompress_one_file(job: DecompressionJob, quiet: bool, verbose: bool) -> N
     if verbose:
         decompress_result(plan, written, compressed_size, elapsed)
 
-    elif quiet:
-        return
-
-    elif skips:
+    elif skips and not quiet:
         skipped(plan.dest)
 
-    else:
+    elif not quiet:
         renamed: Path | None = written if written != plan.dest else None
         summary(
             plan.src,
@@ -142,6 +153,9 @@ def _decompress_one_file(job: DecompressionJob, quiet: bool, verbose: bool) -> N
             renamed,
             ratio=False,
         )
+
+    if remove:
+        remove_source(plan.src, before)
 
 
 def extract(
@@ -202,6 +216,14 @@ def extract(
     force: Annotated[
         bool,
         app.Option("--force", "-f", help="Replace files that already exist"),
+    ] = False,
+    remove: Annotated[
+        bool,
+        app.Option(
+            "--rm/--keep",
+            " /-k",
+            help="Delete the input once it is fully extracted, or keep it",
+        ),
     ] = False,
     max_size: Annotated[
         int | None,
@@ -311,6 +333,7 @@ def extract(
             run left with nothing to extract warns, but still succeeds.
         on_conflict: What to do when a file exists (default: rename).
         force: If True, replace files that already exist.
+        remove: If True, delete each input once it is fully written out.
         max_size: Cap on total extracted bytes (default: no cap).
         max_depth: Cap on an entry path's depth, or 0 for none.
         same_permissions: If True, restore archive entries' modes exactly;
@@ -327,7 +350,12 @@ def extract(
         verbose: If True, show the plan and full stats.
         quiet: If True, suppress all output.
     """
-    mode = conflict_mode(on_conflict, force)
+    mode = conflict_mode(on_conflict, force, remove)
+
+    # Whatever these leave out would go with the archive
+    if remove and (entry or include or exclude):
+        fail("Error: --rm contradicts --entry, --include and --exclude", EXIT_USAGE)
+
     if verbose and quiet:
         fail("Error: -v contradicts -q", EXIT_USAGE)
 
@@ -370,14 +398,14 @@ def extract(
 
     def run_one(job: ExtractJob | DecompressionJob) -> None:
         if isinstance(job, ExtractJob):
-            _extract_archive(job, quiet, verbose)
+            _extract_archive(job, quiet, verbose, remove)
 
         else:
             # An archive creates a missing `-C` itself; a single file needs it made
             if directory:
                 directory.mkdir(parents=True, exist_ok=True)
 
-            _decompress_one_file(job, quiet, verbose)
+            _decompress_one_file(job, quiet, verbose, remove)
 
     if not (quiet or verbose):
         print()

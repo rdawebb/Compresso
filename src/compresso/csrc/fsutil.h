@@ -182,8 +182,8 @@ int fs_rename(const char *from, const char *to, int replace);
 int fs_link(const char *existing, const char *new_path);
 
 // Symlink `link_path` to `target`, stored unresolved; -1 with errno set
-// (EEXIST if `link_path` exists, EPERM on Windows without Developer Mode/admin
-// rights); on Windows, a target that is a directory gets a directory link
+// (EEXIST if `link_path` exists, EPERM if this user or filesystem can't create
+// symlinks; on Windows, a target that is a directory gets a directory link
 int fs_symlink(const char *target, const char *link_path);
 
 // Whether this process can create a node of `type` (fs_stat.special's values):

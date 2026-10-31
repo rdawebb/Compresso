@@ -19,6 +19,7 @@ from compresso import (
     ExtractionPolicyError,
     HeaderError,
     IncompleteExtractionError,
+    SourceRemovalError,
     _core,
     compress_file,
     decompress_file,
@@ -55,6 +56,7 @@ class TestCoreExceptions:
             CorruptDataError,
             ExtractionPolicyError,
             IncompleteExtractionError,
+            SourceRemovalError,
             Cancelled,
         ],
     )

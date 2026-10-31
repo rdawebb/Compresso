@@ -37,8 +37,9 @@ int path_matches(const char *path, const char *pat);
 // Whether any of `count` patterns matches `path`
 int path_matches_any(const char *path, const char **pats, size_t count);
 
-// Raises an error listing unmatched names and includes, and skipped hardlinks
+// Raises an error listing unmatched names and includes, skipped hardlinks, and
+// nodes that couldn't be created
 int report_incomplete(const Selection *sel, PyObject *skipped_links,
-                      CoreContext *ctx);
+                      PyObject *skipped_nodes, CoreContext *ctx);
 
 #endif // SELECT_H

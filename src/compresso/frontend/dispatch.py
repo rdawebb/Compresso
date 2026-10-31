@@ -95,6 +95,8 @@ class CompressRequest:
         threads: Worker threads, or 0 for one per core.
         include: Globs an archive's entries must match; see `ArchiveOptions`.
         exclude: Globs an archive's entries must not match.
+        remove_sources: Whether an archive deletes what it stored once written;
+            see `ArchiveOptions`.
     """
 
     inputs: list[Path]
@@ -107,6 +109,7 @@ class CompressRequest:
     threads: int = 0
     include: Sequence[str] = ()
     exclude: Sequence[str] = ()
+    remove_sources: bool = False
 
 
 @dataclass(frozen=True)
@@ -172,6 +175,7 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
             threads=request.threads,
             include=request.include,
             exclude=request.exclude,
+            remove_sources=request.remove_sources,
         )
 
         archive_job = ArchiveJob.from_paths(

@@ -167,14 +167,15 @@ typedef struct {
   size_t num_exclude;
 } PathFilter;
 
-// `overwrite_existing` follows the same 0-3 scheme as
-// `ExtractionPolicy.overwrite_existing`; on success, the path actually written
-// (which RENAME may have changed) is copied into `out_actual_path`
+// `overwrite_existing` is as in `ExtractionPolicy`; `out_actual_path` receives
+// the path written, which RENAME may change; `remove_sources` deletes only what
+// was stored; with SKIP, a file appearing during the run stops the commit, but
+// still returns success
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths,
                    const PathFilter *filter, int overwrite_existing,
-                   char *out_actual_path, size_t out_actual_path_size,
-                   CoreContext *ctx);
+                   int remove_sources, char *out_actual_path,
+                   size_t out_actual_path_size, CoreContext *ctx);
 
 // Entries are checked against `policy`; any failure but a cancel undoes what
 // the extraction wrote, restoring what OVERWRITE replaced

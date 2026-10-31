@@ -13,6 +13,7 @@ from typing import Self
 from .._core import (
     Cancelled,
     CancelToken,
+    SourceRemovalError,
     check_level,
     create_archive,
     extract_archive,
@@ -125,6 +126,9 @@ class ArchiveOptions:
             plus the directories holding it.
         exclude: Globs on entry names that aren't stored or descended into,
             overriding `include`.
+        remove_sources: Whether to delete what was stored once the archive is
+            written; anything else stays, including parent directories; running
+            with `OverwriteMode.SKIP` fails, as a skipped archive holds nothing.
     """
 
     format: str | None = None
@@ -133,6 +137,7 @@ class ArchiveOptions:
     threads: int = 0
     include: Sequence[str] = ()
     exclude: Sequence[str] = ()
+    remove_sources: bool = False
 
 
 @dataclass(frozen=True)
@@ -593,6 +598,7 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
                 threads=self.plan.options.threads,
                 include=self.plan.options.include,
                 exclude=self.plan.options.exclude,
+                remove_sources=self.plan.options.remove_sources,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )
@@ -602,6 +608,10 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
             # after a successful run
             self.plan = replace(self.plan, output=Path(actual_path))
             return JobResult(ok=True, error=None, plan=self.plan)
+
+        except SourceRemovalError as e:
+            self.plan = replace(self.plan, output=Path(e.output))
+            return JobResult(ok=False, error=e, plan=self.plan)
 
         # Cancellation is a deliberate stop, not a failure; see
         # `CompressionJob.run`.

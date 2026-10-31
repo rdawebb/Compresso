@@ -2,6 +2,8 @@
 
 import importlib
 import os
+import sys
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -45,6 +47,18 @@ def needs_symlinks(tmp_path: Path) -> None:
         pytest.skip("symlinks need privilege")
 
     probe.unlink()
+
+
+@pytest.fixture
+def locked(tmp_path: Path) -> Generator[Path]:
+    """A directory whose files can't be deleted once a test makes it read-only."""
+    if sys.platform == "win32" or os.geteuid() == 0:
+        pytest.skip("needs POSIX, not root")
+
+    root = tmp_path / "locked"
+    root.mkdir()
+    yield root
+    root.chmod(0o755)
 
 
 @pytest.fixture

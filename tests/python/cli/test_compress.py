@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from compresso.cli._render import (
+    EXIT_FAILED,
     EXIT_USAGE,
 )
 
@@ -110,6 +111,116 @@ class TestCompressConflicts:
         assert sibling.is_file() == renames
         assert (f"output renamed to {sibling}" in result.output) == renames
         assert (f"{t.dest}  skipped" in result.output) == ("skip" in flags)
+
+
+class TestRemoveInput:
+    """Test what `--rm` and `-k` do to the input."""
+
+    @pytest.mark.parametrize(
+        "flags,removes",
+        [
+            ((), False),
+            (("--rm",), True),
+            (("-k",), False),
+            (("--rm", "--keep"), False),
+            (("-k", "--rm"), True),
+        ],
+        ids=["default", "rm", "keep", "rm-then-keep", "keep-then-rm"],
+    )
+    def test_flags(
+        self,
+        compress_target: CompressTarget,
+        flags: tuple[str, ...],
+        removes: bool,
+    ) -> None:
+        """Test that the input goes only with --rm, the last flag winning."""
+        t = compress_target
+
+        invoke("compress", t.source, "-o", t.dest, *t.args, *flags, "-q")
+
+        assert t.dest.is_file()
+        assert t.source.exists() != removes
+
+    def test_a_failed_run_keeps_the_input(
+        self, compress_target: CompressTarget
+    ) -> None:
+        """Test that an output refused by --on-conflict leaves the input."""
+        t = compress_target
+        t.dest.write_bytes(b"stale")
+
+        invoke(
+            "compress",
+            t.source,
+            "-o",
+            t.dest,
+            *t.args,
+            "--on-conflict",
+            "error",
+            "--rm",
+            expect=EXIT_FAILED,
+        )
+
+        assert t.source.exists()
+
+    def test_skip_is_refused(self, payload: Path) -> None:
+        """Test that --rm can't lose an input to an output that was skipped."""
+        result = invoke(
+            "compress", payload, "--on-conflict", "skip", "--rm", expect=EXIT_USAGE
+        )
+
+        assert "--rm contradicts --on-conflict skip" in result.output
+        assert payload.exists()
+
+    def test_undeletable_file_follows_the_summary(
+        self, locked: Path, tmp_path: Path
+    ) -> None:
+        """Test that an input that won't go is a warning after a normal summary."""
+        source = locked / "a.txt"
+        source.write_text("a")
+        locked.chmod(0o555)
+        out = tmp_path / "a.gz"
+
+        result = invoke("compress", source, "-o", out, "--rm", expect=EXIT_FAILED)
+
+        assert out.is_file()
+        assert source.exists()
+        warning = f"! {source}: not removed: Permission denied"
+        assert result.output.index("→") < result.output.index(warning)
+
+    @pytest.mark.parametrize("flags", [(), ("-q",)], ids=["default", "quiet"])
+    def test_undeletable_archive_source_names_what_was_written(
+        self,
+        locked: Path,
+        source_tree: Path,
+        tmp_path: Path,
+        flags: tuple[str, ...],
+    ) -> None:
+        """Test that the archive isn't called failed, and a rename is reported."""
+        stuck = locked / "a.txt"
+        stuck.write_text("a")
+        locked.chmod(0o555)
+        out = tmp_path / "out.tar"
+        out.write_bytes(b"stale")
+
+        result = invoke(
+            "compress",
+            source_tree,
+            locked,
+            "-o",
+            out,
+            "--rm",
+            *flags,
+            expect=EXIT_FAILED,
+        )
+
+        written = tmp_path / renamed("out.tar")
+        assert tarfile.is_tarfile(written)
+        assert out.read_bytes() == b"stale"
+        assert not source_tree.exists()
+        assert stuck.exists()
+        assert f"! {stuck}: not removed: Permission denied" in result.output
+        assert "Archive failed" not in result.output
+        assert (written.name in result.output) != bool(flags)
 
 
 class TestSmartCompress:

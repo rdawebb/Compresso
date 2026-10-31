@@ -149,6 +149,7 @@ struct CompErrors {
   PyObject *corrupt_data;
   PyObject *extraction_policy;
   PyObject *incomplete_extraction;
+  PyObject *source_removal;
   PyObject *cancelled;
   PyObject *trailing_data_warning;
 };

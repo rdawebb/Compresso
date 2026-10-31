@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import os
 import sys
 import tarfile
 from collections.abc import Callable
@@ -19,7 +20,7 @@ from compresso.cli._render import (
 )
 from compresso.frontend.dispatch import ExtractRequest
 
-from ..helpers import file_entry, link_entry, make_tar, renamed, umask
+from ..helpers import file_entry, link_entry, make_tar, node_entry, renamed, umask
 from .conftest import CONFLICT_MODES, invoke
 
 
@@ -481,3 +482,115 @@ class TestExtractOptions:
 
         assert (dest / "a").read_bytes() == payload.read_bytes()
         assert (dest / "tree").is_dir()
+
+
+class TestRemoveInput:
+    """Test what `--rm` and `-k` do to the input."""
+
+    @pytest.mark.parametrize(
+        "flags,removes",
+        [((), False), (("--rm",), True), (("--rm", "-k"), False)],
+        ids=["default", "rm", "rm-then-keep"],
+    )
+    @pytest.mark.parametrize("kind", ["file", "archive"])
+    def test_flags(
+        self,
+        tmp_path: Path,
+        make_archive: Callable[[str], Path],
+        kind: str,
+        flags: tuple[str, ...],
+        removes: bool,
+    ) -> None:
+        """Test that a fully unpacked input goes only with --rm."""
+        if kind == "file":
+            source = tmp_path / "a.gz"
+            source.write_bytes(gzip.compress(b"data"))
+        else:
+            source = make_archive("tar")
+        dest = tmp_path / "dest"
+
+        invoke("extract", source, "-C", dest, *flags, "-q")
+
+        assert source.exists() != removes
+        assert any(dest.iterdir())
+
+    def test_a_failed_decompression_keeps_the_input(self, tmp_path: Path) -> None:
+        """Test that a corrupt single-file input isn't deleted."""
+        source = tmp_path / "a.gz"
+        source.write_bytes(gzip.compress(b"data")[:-4])
+
+        invoke(
+            "extract", source, "-C", tmp_path / "out", "--rm", "-q", expect=EXIT_FAILED
+        )
+
+        assert source.exists()
+
+    def test_entry_written_over_the_archive_stays(self, tmp_path: Path) -> None:
+        """Test that --rm doesn't delete what replaced the archive at its path."""
+        archive = tmp_path / "self.tar"
+        make_tar(archive, file_entry("self.tar", size=3))
+
+        invoke("extract", archive, "-f", "--rm", "-q")
+
+        assert archive.stat().st_size == 3
+
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            ("-e", "x"),
+            ("--include", "x"),
+            ("--exclude", "x"),
+            ("--on-conflict", "skip"),
+        ],
+        ids=["entry", "include", "exclude", "skip"],
+    )
+    def test_partial_extraction_is_refused(
+        self, make_archive: Callable[[str], Path], flags: tuple[str, ...]
+    ) -> None:
+        """Test that --rm can't take entries that were never extracted with it."""
+        archive = make_archive("tar")
+
+        result = invoke("extract", archive, *flags, "--rm", expect=EXIT_USAGE)
+
+        assert "--rm contradicts" in result.output
+        assert archive.exists()
+
+    @pytest.mark.parametrize("kind", ["archive", "single"])
+    def test_undeletable_input_follows_the_summary(
+        self,
+        make_archive: Callable[[str], Path],
+        locked: Path,
+        tmp_path: Path,
+        kind: str,
+    ) -> None:
+        """Test that an input that won't go is a warning after a normal summary."""
+        if kind == "archive":
+            source = make_archive("tar").rename(locked / "a.tar")
+        else:
+            source = locked / "a.gz"
+            source.write_bytes(gzip.compress(b"a"))
+        locked.chmod(0o555)
+
+        result = invoke(
+            "extract", source, "-C", tmp_path / "unpacked", "--rm", expect=EXIT_FAILED
+        )
+
+        assert any((tmp_path / "unpacked").iterdir())
+        assert source.exists()
+        warning = f"! {source}: not removed: Permission denied"
+        assert result.output.index("→") < result.output.index(warning)
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX, not root"
+    )
+    def test_uncreatable_node_keeps_the_archive(self, tmp_path: Path) -> None:
+        """Test that a device fails the input, so --rm can't take it with the archive."""
+        archive = tmp_path / "nodes.tar"
+        make_tar(archive, file_entry("a"), node_entry("char", tarfile.CHRTYPE))
+        out = tmp_path / "out"
+
+        result = invoke("extract", archive, "-C", out, "--rm", expect=EXIT_FAILED)
+
+        assert "Skipped, the rest was extracted: char" in result.output
+        assert (out / "a").is_file()
+        assert archive.exists()

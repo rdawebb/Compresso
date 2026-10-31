@@ -27,6 +27,19 @@ class IncompleteExtractionError(Error):
     Raises on completion, anything extracted is kept.
     """
 
+class SourceRemovalError(Error):
+    """An archive was written, but some of its sources could not be deleted.
+
+    The archive is complete, and every other source is deleted.
+
+    Attributes:
+        output: The path the archive was written to.
+        failures: Each path left behind, with the reason.
+    """
+
+    output: str
+    failures: list[tuple[str, str]]
+
 class CorruptDataError(Error):
     """The input is corrupt, truncated, or not the format it claims to be."""
 
@@ -155,11 +168,13 @@ def create_archive(
     cancel: CancelToken | None = ...,
     include: Sequence[str] = ...,
     exclude: Sequence[str] = ...,
+    remove_sources: bool = ...,
 ) -> str:
     """Create an archive from the given input paths in the given format.
 
     `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
-    applied to the single destination archive.
+    applied to the single destination archive; `remove_sources` with skip
+    raises ValueError.
 
     Returns the path actually written, which RENAME may have changed from
     `output_path`; SKIP returns `output_path` unchanged and writes nothing.
