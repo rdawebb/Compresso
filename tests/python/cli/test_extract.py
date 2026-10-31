@@ -309,7 +309,85 @@ class TestEntry:
 
         result = invoke("extract", packed, "--entry", "x", expect=EXIT_FAILED)
 
-        assert f"{packed}: --entry applies only to archives" in result.output
+        assert (
+            f"{packed}: --entry, --include and --exclude apply only to archives"
+            in result.output
+        )
+        assert not (tmp_path / "a").exists()
+
+
+class TestFilter:
+    """Test that --include and --exclude select entries."""
+
+    def test_include_adds_to_entry_and_exclude_overrides(
+        self, source_tree: Path, tmp_path: Path, make_archive: Callable[[str], Path]
+    ) -> None:
+        """Test bsdtar's union, with the exclude winning over both."""
+        dest = tmp_path / "dest"
+        top = source_tree.name
+
+        invoke(
+            "extract",
+            make_archive("tar"),
+            "-C",
+            dest,
+            "-e",
+            f"{top}/f0.bin",
+            "--include",
+            "f[12].bin",
+            "--exclude",
+            "f2.bin",
+            "-q",
+        )
+
+        assert sorted(p.name for p in (dest / top).iterdir()) == ["f0.bin", "f1.bin"]
+
+    @pytest.mark.parametrize("flags", [(), ("-e", "tree/f0.bin")])
+    def test_excluding_everything_warns_and_succeeds(
+        self,
+        tmp_path: Path,
+        make_archive: Callable[[str], Path],
+        flags: tuple[str, ...],
+    ) -> None:
+        """Test that a filter leaving nothing exits 0 as tar does, but says so."""
+        archive = make_archive("tar")
+
+        result = invoke(
+            "extract", archive, "-C", tmp_path / "d", *flags, "--exclude", "*"
+        )
+
+        assert f"{archive}: nothing left to extract" in result.output
+        assert not list((tmp_path / "d").iterdir())
+
+    def test_quiet_silences_the_warning(
+        self, make_archive: Callable[[str], Path]
+    ) -> None:
+        """Test that -q suppresses even the warning."""
+        result = invoke("extract", make_archive("tar"), "--exclude", "*", "-q")
+
+        assert result.output == ""
+
+    def test_a_partly_excluded_run_does_not_warn(
+        self, tmp_path: Path, make_archive: Callable[[str], Path]
+    ) -> None:
+        """Test that the warning needs every entry gone."""
+        result = invoke(
+            "extract", make_archive("tar"), "-C", tmp_path / "d", "--exclude", "f0.bin"
+        )
+
+        assert "nothing left" not in result.output
+
+    @pytest.mark.parametrize("flag", ["--include", "--exclude"])
+    def test_a_single_file_input_fails(
+        self, payload: Path, tmp_path: Path, flag: str
+    ) -> None:
+        """Test that a glob on an input that isn't an archive fails it."""
+        packed = tmp_path / "a.gz"
+        packed.write_bytes(gzip.compress(payload.read_bytes()))
+
+        result = invoke("extract", packed, flag, "x", expect=EXIT_FAILED)
+
+        assert "apply only to archives" in result.output
         assert not (tmp_path / "a").exists()
 
 

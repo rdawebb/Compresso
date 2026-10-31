@@ -17,7 +17,7 @@ from ..frontend.archive_api import (
 )
 from ..frontend.dispatch import ExtractRequest, plan_extract
 from ._app import app
-from ._render import EXIT_USAGE, cancelled, fail
+from ._render import EXIT_USAGE, cancelled, fail, report_warning
 from ._render.jobs import (
     decompress_plan,
     decompress_result,
@@ -76,6 +76,10 @@ def _extract_archive(job: ExtractJob, quiet: bool, verbose: bool) -> None:
     elapsed: float = run_job(
         job, plan.archive, "Extracting", total, quiet=quiet, what="Extraction"
     )
+
+    # Names and includes the filter dropped still count as found
+    if plan.options.exclude and not plan.entries and not quiet:
+        report_warning(f"{plan.archive}: nothing left to extract")
 
     if verbose:
         extract_result(plan, elapsed)
@@ -170,6 +174,22 @@ def extract(
             "repeatable",
         ),
     ] = None,
+    include: Annotated[
+        list[str] | None,
+        app.Option(
+            "--include",
+            help="Extract entries matching this glob, as well as any --entry; "
+            "repeatable",
+        ),
+    ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        app.Option(
+            "--exclude",
+            help="Skip entries matching this glob, overriding --entry and "
+            "--include; repeatable",
+        ),
+    ] = None,
     on_conflict: Annotated[
         OverwriteMode | None,
         app.Option(
@@ -228,9 +248,8 @@ def extract(
         app.Option(
             "--symlinks",
             case_sensitive=False,
-            help="Refuse symlinks, create those staying inside the output, "
-            "or write each as a file holding its target "
-            "(default: file for zip, deny otherwise)",
+            help="Refuse, create (non-escaping), or write as a file",
+            show_default="file for zip, deny otherwise",
         ),
     ] = None,
     threads: Annotated[
@@ -286,6 +305,10 @@ def extract(
         entry: Entry paths to extract from each archive (default: all); a
             path matching no entry fails that archive after the rest is
             extracted.
+        include: Globs selecting entries as well as any `entry` names; one
+            matching no entry fails that archive likewise.
+        exclude: Globs dropping entries, overriding `entry` and `include`; a
+            run left with nothing to extract warns, but still succeeds.
         on_conflict: What to do when a file exists (default: rename).
         force: If True, replace files that already exist.
         max_size: Cap on total extracted bytes (default: no cap).
@@ -332,6 +355,8 @@ def extract(
         overwrite_dir_metadata=overwrite_dir,
         symlinks=symlinks,
         threads=threads,
+        include=include or (),
+        exclude=exclude or (),
     )
 
     request = ExtractRequest(

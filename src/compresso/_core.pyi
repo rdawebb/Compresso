@@ -221,6 +221,12 @@ def gzip_stored_name(file_path: StrOrBytesPath) -> bytes | None:
 def format_is_archive(format: str) -> bool:
     """Return whether a format's container can hold more than one entry."""
 
+def format_stores_hardlinks(format: str) -> bool:
+    """Return whether an archive format stores a file's later names as links."""
+
+def path_matches(path: str, patterns: Sequence[str]) -> bool:
+    """Return whether any glob matches an entry path, as `include` and `exclude` do."""
+
 class _StandaloneFormatDict(TypedDict):
     """One single file container format, as defined by `standalone_formats`."""
 

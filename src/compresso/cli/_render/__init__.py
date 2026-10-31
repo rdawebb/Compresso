@@ -77,6 +77,16 @@ def report_error(message: str) -> None:
     app.echo(message=app.style(text=f"✗ {message}", fg="red"), err=True)
 
 
+def report_warning(message: str) -> None:
+    """Print a warning to stderr.
+
+    Args:
+        message: Text to show, without the leading marker.
+    """
+    sys.stdout.flush()
+    app.echo(message=app.style(text=f"! {message}", fg="yellow"), err=True)
+
+
 def fail(message: str, code: int = EXIT_FAILED) -> NoReturn:
     """Print an error to stderr and exit.
 

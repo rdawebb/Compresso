@@ -20,6 +20,8 @@ from compresso import (
     BackendError,
     CorruptDataError,
     ExtractionPolicyError,
+    ExtractJob,
+    ExtractOptions,
     IncompleteExtractionError,
     _core,
 )
@@ -212,6 +214,38 @@ class TestSelectByPrefix:
         )
 
         assert not [p for p in out.rglob("*") if p.is_file()]
+
+    @pytest.mark.parametrize(
+        ("files", "include", "exclude"),
+        [
+            ([], [], ["sub"]),
+            ([], ["*.txt"], ["d/x.txt"]),
+            (["d/sub"], ["e.txt"], []),
+            (["d"], ["e.txt"], ["*x.txt"]),
+            (["d/x.txt"], [], ["*"]),
+        ],
+    )
+    def test_plan_lists_what_is_extracted(
+        self,
+        archive: Path,
+        tmp_path: Path,
+        files: list[str],
+        include: list[str],
+        exclude: list[str],
+    ) -> None:
+        """Test that the plan's entries, and so the bar's total, match the run."""
+        out = tmp_path / "out"
+        options = ExtractOptions(include=include, exclude=exclude)
+        job = ExtractJob.from_archive(archive, out, files, options)
+
+        result = job.run()
+
+        assert result.ok, result.error
+        written = sorted(
+            p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()
+        )
+        planned = sorted(e.path for e in job.plan.entries if not e.is_dir)
+        assert planned == written
 
 
 class TestRecognisedButUnsupportedArchive:

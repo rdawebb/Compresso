@@ -121,7 +121,7 @@ def compress(
     output: Annotated[
         Path | None,
         app.Option(
-            "--output", "-o", help="Output path (default: named after the input)"
+            "--output", "-o", help="Output path", show_default="named after the input"
         ),
     ] = None,
     format: Annotated[
@@ -159,6 +159,21 @@ def compress(
             "--level",
             "-l",
             help="Compression level; each algorithm's range is shown by `list`",
+        ),
+    ] = None,
+    include: Annotated[
+        list[str] | None,
+        app.Option(
+            "--include",
+            help="Archive only what matches this, and the dirs holding it; repeatable",
+        ),
+    ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        app.Option(
+            "--exclude",
+            help="Leave out what matches this glob and all below it, overriding "
+            "--include; repeatable",
         ),
     ] = None,
     on_conflict: Annotated[
@@ -216,6 +231,10 @@ def compress(
         strategy: Strategy for the Compresso container (default: balanced);
             any other format refuses it, as does `-a`.
         level: Compression level (default: the format's own).
+        include: Globs an archive's entries must match (default: all);
+            a single-file output refuses it.
+        exclude: Globs an archive's entries must not match; a single-file
+            output refuses it.
         on_conflict: What to do when the output exists (default: rename).
         force: If True, replace an existing output.
         threads: Worker threads for zstd and xz (default: one per core).
@@ -247,6 +266,8 @@ def compress(
             level=level,
             overwrite=overwrite_mode,
             threads=threads,
+            include=include or (),
+            exclude=exclude or (),
         )
 
         try:

@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include "archives/select.h"
 #include "codec/crc32c.h"
 #include "common.h"
 #include "fsutil.h"
@@ -457,10 +458,9 @@ static PyObject *py_create_archive(PyObject *self, PyObject *args,
   }
 
   char actual_path[FS_PATH_MAX];
-  result = create_archive(PyBytes_AS_STRING(output_path_bytes), &pipe,
-                          inputs.paths, inputs.count, &filter,
-                          overwrite_existing, actual_path, sizeof(actual_path),
-                          &ctx);
+  result = create_archive(
+      PyBytes_AS_STRING(output_path_bytes), &pipe, inputs.paths, inputs.count,
+      &filter, overwrite_existing, actual_path, sizeof(actual_path), &ctx);
 
 done:
   Py_DECREF(output_path_bytes);
@@ -508,14 +508,13 @@ static PyObject *py_extract_archive(PyObject *self, PyObject *args,
   unsigned int max_depth = (unsigned int)policy.max_depth;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "O&O&O|$iKIpppipiOOO&O&", kwlist,
-          PyUnicode_FSConverter, &archive_path_bytes, PyUnicode_FSConverter,
-          &output_dir_bytes, &files_obj, &policy.overwrite_existing,
-          &max_total_size, &max_depth, &policy.preserve_permissions,
-          &policy.exact_permissions, &policy.preserve_timestamps,
-          &policy.allow_symlinks, &policy.overwrite_dir_metadata, &threads,
-          &progress, &cancel, pattern_list_converter, &include,
-          pattern_list_converter, &exclude)) {
+          args, kwargs, "O&O&O|$iKIpppipiOOO&O&", kwlist, PyUnicode_FSConverter,
+          &archive_path_bytes, PyUnicode_FSConverter, &output_dir_bytes,
+          &files_obj, &policy.overwrite_existing, &max_total_size, &max_depth,
+          &policy.preserve_permissions, &policy.exact_permissions,
+          &policy.preserve_timestamps, &policy.allow_symlinks,
+          &policy.overwrite_dir_metadata, &threads, &progress, &cancel,
+          pattern_list_converter, &include, pattern_list_converter, &exclude)) {
     return NULL; // Error already set
   }
   PathFilter filter = {include.paths, include.count, exclude.paths,
@@ -820,6 +819,43 @@ static PyObject *py_format_is_archive(PyObject *Py_UNUSED(self),
                          pipe.archive != ARCHIVE_NONE);
 }
 
+static PyObject *py_format_stores_hardlinks(PyObject *Py_UNUSED(self),
+                                            PyObject *args) {
+  const char *format_name = NULL;
+
+  if (!PyArg_ParseTuple(args, "s", &format_name)) {
+    return NULL; // Error already set
+  }
+
+  CompressionPipeline pipe = pipeline_from_name(format_name, -1);
+  const CArchive *archive =
+      pipeline_is_valid(&pipe) ? find_archive_by_id(pipe.archive) : NULL;
+
+  return PyBool_FromLong(archive && archive->stores_hardlinks);
+}
+
+static PyObject *py_path_matches(PyObject *Py_UNUSED(self), PyObject *args) {
+  PyObject *path = NULL;
+  PathList patterns = {0};
+
+  if (!PyArg_ParseTuple(args, "UO&", &path, pattern_list_converter,
+                        &patterns)) {
+    return NULL; // Error already set
+  }
+
+  // The inverse of decode_entry_name, so a non-UTF-8 name keeps its bytes
+  PyObject *encoded =
+      PyUnicode_AsEncodedString(path, "utf-8", "surrogateescape");
+  PyObject *result =
+      encoded ? PyBool_FromLong(path_matches_any(
+                    PyBytes_AS_STRING(encoded), patterns.paths, patterns.count))
+              : NULL;
+
+  Py_XDECREF(encoded);
+  pattern_list_converter(NULL, &patterns);
+  return result;
+}
+
 // The set entries of a FormatDesc name slot, which fill from the front
 static PyObject *names_to_py(const char *const names[2]) {
   if (!names[0])
@@ -959,6 +995,12 @@ static PyMethodDef CoreMethods[] = {
      "Detect the format of a file."},
     {"gzip_stored_name", (PyCFunction)py_gzip_stored_name, METH_VARARGS,
      "Return the name a gzip header stores (FNAME), or None."},
+    {"format_stores_hardlinks", (PyCFunction)py_format_stores_hardlinks,
+     METH_VARARGS,
+     "Return whether an archive format stores a file's later names as links."},
+    {"path_matches", (PyCFunction)py_path_matches, METH_VARARGS,
+     "Return whether any glob matches an entry path, as the archive filters "
+     "match it."},
     {"format_is_archive", (PyCFunction)py_format_is_archive, METH_VARARGS,
      "Check if a format is an archive format."},
     {"standalone_formats", (PyCFunction)py_standalone_formats, METH_NOARGS,

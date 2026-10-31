@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import os
+import stat
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -15,7 +17,9 @@ from .._core import (
     create_archive,
     extract_archive,
     format_is_archive,
+    format_stores_hardlinks,
     list_archive_contents,
+    path_matches,
 )
 from .._levels import to_core_level
 from ._formats import DEFAULT_ARCHIVE_FORMAT, infer_format
@@ -117,12 +121,18 @@ class ArchiveOptions:
         overwrite: What to do when the destination archive already exists.
         threads: Worker threads for tar.zst and tar.xz, or 0 for one per core;
             the output is the same for any count.
+        include: Globs on entry names; with any, only what matches is stored,
+            plus the directories holding it.
+        exclude: Globs on entry names that aren't stored or descended into,
+            overriding `include`.
     """
 
     format: str | None = None
     compression_level: int | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
     threads: int = 0
+    include: Sequence[str] = ()
+    exclude: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -168,6 +178,9 @@ class ExtractOptions:
         symlinks: What to do with a symlink entry; by default a zip's are
             written as files and any other archive's are refused.
         threads: Worker threads for tar.xz, or 0 for one per core.
+        include: Globs selecting entries as well as any named by `files`; one
+            that matches nothing fails the run as a missing name does.
+        exclude: Globs dropping entries, overriding `files` and `include`.
     """
 
     overwrite: OverwriteMode = OverwriteMode.RENAME
@@ -179,6 +192,8 @@ class ExtractOptions:
     overwrite_dir_metadata: bool = False
     symlinks: SymlinkMode | None = None
     threads: int = 0
+    include: Sequence[str] = ()
+    exclude: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -190,7 +205,8 @@ class ExtractPlan:
         output_dir: Directory to extract into.
         files: Optional subset of entry paths to extract (None = all).
         options: Extraction policy to apply.
-        entries: The archive's entries that `files` selects.
+        entries: The archive's entries that `files` and the options' globs
+            select.
         can_run: Whether the extract operation can proceed.
         reason_if_unavailable: Reason the operation cannot proceed, if any.
     """
@@ -297,9 +313,7 @@ def plan_archive(
                 reason_if_unavailable=str(e),
             )
 
-    total_input_size: int = sum(
-        f.stat().st_size for f in _iter_files(source_paths) if f.is_file()
-    )
+    total_input_size: int = _stored_size(source_paths, options)
 
     return ArchivePlan(
         sources=source_paths,
@@ -312,21 +326,84 @@ def plan_archive(
     )
 
 
-def _iter_files(paths: list[Path]):
-    """Yield every file under the given paths, recursing into directories.
+def _stored_size(sources: list[Path], options: ArchiveOptions) -> int:
+    """Return the bytes the C walk would store from the sources.
 
     Args:
-        paths: List of paths to iterate over.
+        sources: The source paths; hardlinks can span them.
+        options: Archive options, with the format set.
+
+    Returns:
+        The total size of the regular files kept, a hardlinked file counting
+        once if the format stores its later names as links.
+    """
+    links_once = format_stores_hardlinks(options.format or DEFAULT_ARCHIVE_FORMAT)
+    seen: set[tuple[int, int]] = set()
+    total = 0
+
+    for info in (i for s in sources for i in _stored_files(s, options)):
+        if links_once and info.st_nlink > 1 and info.st_ino:
+            identity = (info.st_dev, info.st_ino)
+            if identity in seen:
+                continue
+            seen.add(identity)
+
+        total += info.st_size
+
+    return total
+
+
+def _stored_files(source: Path, options: ArchiveOptions) -> Iterator[os.stat_result]:
+    """Yield the lstat of each regular file the C walk keeps from a source.
+
+    Only `exclude` prunes: a directory no include matches can still hold files
+    that one does.
+
+    Args:
+        source: The source path; a symlink stays a link, not its target.
+        options: Archive options.
 
     Yields:
-        Each file under the given paths.
+        Each kept regular file's lstat.
     """
-    for p in paths:
-        if p.is_dir():
-            yield from (f for f in p.rglob("*"))
+    name = source.relative_to(source.parent).as_posix()
 
-        else:
-            yield p
+    if source.is_symlink() or not source.is_dir():
+        candidates = [(source, name)]
+
+    elif path_matches(name, options.exclude):
+        return
+
+    else:
+        candidates = _walk_files(source, options)
+
+    for path, entry in candidates:
+        if path_matches(entry, options.exclude):
+            continue
+
+        if options.include and not path_matches(entry, options.include):
+            continue
+
+        info = os.lstat(path)
+        if stat.S_ISREG(info.st_mode):
+            yield info
+
+
+def _walk_files(source: Path, options: ArchiveOptions) -> Iterator[tuple[str, str]]:
+    """Yield each non-directory under a source, pruning excluded directories.
+
+    Args:
+        source: The directory to walk.
+        options: Archive options.
+
+    Yields:
+        Each path on disk with its entry name.
+    """
+    for top, dirs, files in os.walk(source):
+        rel = Path(top).relative_to(source.parent).as_posix()
+        dirs[:] = [d for d in dirs if not path_matches(f"{rel}/{d}", options.exclude)]
+        for f in files:
+            yield os.path.join(top, f), f"{rel}/{f}"
 
 
 def plan_extraction(
@@ -416,14 +493,21 @@ def plan_extraction(
             reason_if_unavailable=f"Cannot read archive: {e}",
         )
 
-    # As the extractor matches: a name selects that entry and anything below it
-    if files:
-        names: set[str] = {name.rstrip("/") for name in files} - {""}
-        entries = [
-            e
-            for e in entries
-            if any(e.path == n or e.path.startswith(f"{n}/") for n in names)
-        ]
+    # As the extractor matches: a name selects that entry and anything below it,
+    # an include adds to those, and an exclude overrides both
+    names: set[str] = {name.rstrip("/") for name in files or ()} - {""}
+
+    def selected(path: str) -> bool:
+        if path_matches(path, opts.exclude):
+            return False
+
+        return (
+            not (files or opts.include)
+            or any(path == n or path.startswith(f"{n}/") for n in names)
+            or path_matches(path, opts.include)
+        )
+
+    entries = [e for e in entries if selected(e.path)]
 
     return ExtractPlan(
         archive=archive_path,
@@ -507,6 +591,8 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
                 to_core_level(self.plan.options.compression_level),
                 overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
                 threads=self.plan.options.threads,
+                include=self.plan.options.include,
+                exclude=self.plan.options.exclude,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )
@@ -604,6 +690,8 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
                     -1 if options.symlinks is None else _SYMLINK_CODES[options.symlinks]
                 ),
                 threads=options.threads,
+                include=options.include,
+                exclude=options.exclude,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )

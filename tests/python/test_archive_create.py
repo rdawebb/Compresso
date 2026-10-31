@@ -14,7 +14,7 @@ from pathlib import Path
 import orjson
 import pytest
 
-from compresso import BackendError, _core
+from compresso import ArchiveJob, ArchiveOptions, BackendError, _core
 
 from .helpers import ARCHIVE_AND_LIST, run_child
 
@@ -324,6 +324,72 @@ class TestArchiveFilter:
                 str(tmp_path / "out.tar"), "tar", [str(tree)], include="*.txt"
             )
 
+    @pytest.mark.parametrize(
+        ("include", "exclude"),
+        [([], ["node_modules", "*.log"]), (["*.txt"], []), (["t/a"], ["*.log"])],
+    )
+    def test_plan_totals_what_the_filter_keeps(
+        self, tree: Path, tmp_path: Path, include: list[str], exclude: list[str]
+    ) -> None:
+        """Test that the plan's total matches the bytes the walk stores."""
+        options = ArchiveOptions(format="tar", include=include, exclude=exclude)
+        job = ArchiveJob.from_paths([tree], tmp_path / "out.tar", options)
+
+        result = job.run()
+
+        assert result.ok, result.error
+        stored = _core.list_archive_contents(str(job.plan.output))
+        assert job.plan.total_input_size == sum(e["size"] for e in stored)
+
+    def test_plan_does_not_walk_an_excluded_tree(
+        self, tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that the plan prunes excluded directories, as the C walk does."""
+        scanned: list[str] = []
+        real_scandir = os.scandir
+
+        def spy(path):
+            scanned.append(os.fspath(path))
+            return real_scandir(path)
+
+        monkeypatch.setattr(os, "scandir", spy)
+
+        ArchiveJob.from_paths(
+            [tree],
+            tmp_path / "out.tar",
+            ArchiveOptions(format="tar", exclude=["node_modules"]),
+        )
+
+        assert str(tree / "a") in scanned
+        assert not any("node_modules" in path for path in scanned)
+
+    def test_plan_counts_only_a_kept_source(self, tree: Path, tmp_path: Path) -> None:
+        """Test that an excluded source adds nothing to the plan's total."""
+        keep = tree / "a" / "keep.txt"
+        options = ArchiveOptions(format="tar", exclude=["drop.log", "b"])
+
+        job = ArchiveJob.from_paths(
+            [keep, tree / "a" / "drop.log", tree / "b"], tmp_path / "out.tar", options
+        )
+
+        assert job.plan.total_input_size == keep.stat().st_size
+
+    @pytest.mark.usefixtures("needs_symlinks")
+    def test_plan_counts_a_symlink_as_a_link(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a link adds no bytes, wherever it is, like the walk."""
+        target = tree / "a" / "keep.txt"
+        (tree / "b" / "link").symlink_to(target)
+        source_link = tmp_path / "source-link"
+        source_link.symlink_to(tree)
+
+        def total(*sources: Path) -> int:
+            options = ArchiveOptions(format="tar")
+            job = ArchiveJob.from_paths(list(sources), tmp_path / "o.tar", options)
+            return job.plan.total_input_size
+
+        assert total(tree / "b") == (tree / "b" / "n").stat().st_size
+        assert total(source_link) == 0
+
 
 class TestSizeChange:
     """Test a file whose size changes between the walk and its copy."""
@@ -496,6 +562,38 @@ class TestHardlinkCreation:
 
         with zipfile.ZipFile(archive) as zf:
             assert zf.read("src/b") == b"x"
+
+    @pytest.mark.parametrize(
+        ("name", "expected"), [("a.tar.gz", 1), ("a.tar", 1), ("a.zip", 2)]
+    )
+    def test_plan_counts_a_file_as_the_format_stores_it(
+        self, tmp_path: Path, name: str, expected: int
+    ) -> None:
+        """Test that a link adds no bytes where it's stored as one, across sources."""
+        first = tmp_path / "x"
+        second = tmp_path / "y"
+        first.mkdir()
+        second.mkdir()
+        (first / "a").write_text("data")
+        os.link(first / "a", second / "b")
+
+        job = ArchiveJob.from_paths([first, second], tmp_path / name)
+
+        assert job.plan.total_input_size == 4 * expected
+
+    def test_plan_counts_a_link_whose_first_name_is_excluded(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that a name the filter drops doesn't hide the one it keeps."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.log").write_text("data")
+        os.link(src / "a.log", src / "b.txt")
+        options = ArchiveOptions(format="tar", exclude=["*.log"])
+
+        job = ArchiveJob.from_paths([src], tmp_path / "out.tar", options)
+
+        assert job.plan.total_input_size == 4
 
 
 class TestZipModesAndSymlinks:

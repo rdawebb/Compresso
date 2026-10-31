@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -148,6 +149,36 @@ class TestSmartCompress:
         )
 
         assert "single file" in result.output
+
+    def test_filters_narrow_an_archive(self, source_tree: Path, tmp_path: Path) -> None:
+        """Test that repeated --include and --exclude reach the archive."""
+        output = tmp_path / "o.tar"
+
+        invoke(
+            "compress",
+            source_tree,
+            "-o",
+            output,
+            "--include",
+            "f0.bin",
+            "--include",
+            "f1.bin",
+            "--exclude",
+            "f1.bin",
+            "-q",
+        )
+
+        with tarfile.open(output) as tar:
+            assert sorted(tar.getnames()) == ["tree", "tree/f0.bin"]
+
+    @pytest.mark.parametrize("flag", ["--include", "--exclude"])
+    def test_filters_are_refused_for_a_single_file(
+        self, payload: Path, flag: str
+    ) -> None:
+        """Test that a glob has nothing to select in a one-file container."""
+        result = invoke("compress", payload, flag, "x", expect=EXIT_USAGE)
+
+        assert "apply only to archives" in result.output
 
     def test_unknown_format_is_refused(self, payload: Path) -> None:
         """Test that an unrecognised -F names neither container."""

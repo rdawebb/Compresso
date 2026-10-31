@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -92,6 +93,8 @@ class CompressRequest:
         level: The compression level, or None for the format's own.
         overwrite: What to do when the output already exists.
         threads: Worker threads, or 0 for one per core.
+        include: Globs an archive's entries must match; see `ArchiveOptions`.
+        exclude: Globs an archive's entries must not match.
     """
 
     inputs: list[Path]
@@ -102,6 +105,8 @@ class CompressRequest:
     level: int | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
     threads: int = 0
+    include: Sequence[str] = ()
+    exclude: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -143,7 +148,7 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
 
     Raises:
         ValueError: If a single-file format was asked for with several inputs
-            or a directory.
+            or a directory, or globs were given for a single-file output.
     """
     fmt: str | None = request.format or infer_format(request.output)
     many: bool = len(request.inputs) > 1 or any(p.is_dir() for p in request.inputs)
@@ -165,6 +170,8 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
             compression_level=request.level,
             overwrite=request.overwrite,
             threads=request.threads,
+            include=request.include,
+            exclude=request.exclude,
         )
 
         archive_job = ArchiveJob.from_paths(
@@ -178,6 +185,9 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
             )
 
         return archive_job
+
+    if request.include or request.exclude:
+        raise ValueError("--include and --exclude apply only to archives")
 
     source: Path = request.inputs[0]
     options = CompressionOptions(
@@ -246,11 +256,13 @@ def plan_extract(request: ExtractRequest) -> list[ExtractJob | DecompressionJob]
             # Planned once to learn the default name, then moved into `-C`
             job = plan(dest=request.directory / plan(dest=None).plan.dest.name)
 
-        if request.files:
+        if request.files or request.options.include or request.options.exclude:
             job.plan = replace(
                 job.plan,
                 can_run=False,
-                reason_if_unavailable="--entry applies only to archives",
+                reason_if_unavailable=(
+                    "--entry, --include and --exclude apply only to archives"
+                ),
             )
 
         jobs.append(job)
