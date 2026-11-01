@@ -129,6 +129,9 @@ class ArchiveOptions:
         remove_sources: Whether to delete what was stored once the archive is
             written; anything else stays, including parent directories; running
             with `OverwriteMode.SKIP` fails, as a skipped archive holds nothing.
+        dereference: Whether to store what symlinks lead to; one that's
+            dangling, or that leads to a directory above it, stays a link;
+            `remove_sources` then deletes the links, not what they lead to.
     """
 
     format: str | None = None
@@ -138,6 +141,7 @@ class ArchiveOptions:
     include: Sequence[str] = ()
     exclude: Sequence[str] = ()
     remove_sources: bool = False
+    dereference: bool = False
 
 
 @dataclass(frozen=True)
@@ -279,7 +283,7 @@ def plan_archive(
             reason_if_unavailable="No source paths provided",
         )
 
-    missing: list[Path] = [p for p in source_paths if not p.exists()]
+    missing: list[Path] = [p for p in source_paths if not os.path.lexists(p)]
     if missing:
         return ArchivePlan(
             sources=source_paths,
@@ -359,21 +363,23 @@ def _stored_size(sources: list[Path], options: ArchiveOptions) -> int:
 
 
 def _stored_files(source: Path, options: ArchiveOptions) -> Iterator[os.stat_result]:
-    """Yield the lstat of each regular file the C walk keeps from a source.
+    """Yield the stat of each regular file the C walk keeps from a source.
 
     Only `exclude` prunes: a directory no include matches can still hold files
     that one does.
 
     Args:
-        source: The source path; a symlink stays a link, not its target.
+        source: The source path; a symlink stays a link, not its target,
+            unless `options.dereference` is set.
         options: Archive options.
 
     Yields:
-        Each kept regular file's lstat.
+        Each kept regular file's stat.
     """
+    follow = options.dereference
     name = source.relative_to(source.parent).as_posix()
 
-    if source.is_symlink() or not source.is_dir():
+    if not source.is_dir() or (source.is_symlink() and not follow):
         candidates = [(source, name)]
 
     elif path_matches(name, options.exclude):
@@ -389,9 +395,35 @@ def _stored_files(source: Path, options: ArchiveOptions) -> Iterator[os.stat_res
         if options.include and not path_matches(entry, options.include):
             continue
 
-        info = os.lstat(path)
+        # A dangling link stays a link, which holds no bytes
+        if follow and not os.path.exists(path):
+            continue
+
+        info = os.stat(path, follow_symlinks=follow)
         if stat.S_ISREG(info.st_mode):
             yield info
+
+
+def _leads_above(path: Path, source: Path) -> bool:
+    """Return whether a symlink leads to a directory between it and a source.
+
+    Args:
+        path: The path found below `source`.
+        source: The directory being walked.
+
+    Returns:
+        True if `path` is a link the C walk wouldn't follow.
+    """
+    if not path.is_symlink():
+        return False
+
+    above = path.parent
+    while not os.path.samefile(path, above):
+        if above == source:
+            return False
+        above = above.parent
+
+    return True
 
 
 def _walk_files(source: Path, options: ArchiveOptions) -> Iterator[tuple[str, str]]:
@@ -404,9 +436,15 @@ def _walk_files(source: Path, options: ArchiveOptions) -> Iterator[tuple[str, st
     Yields:
         Each path on disk with its entry name.
     """
-    for top, dirs, files in os.walk(source):
+    follow = options.dereference
+    for top, dirs, files in os.walk(source, followlinks=follow):
         rel = Path(top).relative_to(source.parent).as_posix()
-        dirs[:] = [d for d in dirs if not path_matches(f"{rel}/{d}", options.exclude)]
+        dirs[:] = [
+            d
+            for d in dirs
+            if not path_matches(f"{rel}/{d}", options.exclude)
+            and not (follow and _leads_above(Path(top, d), source))
+        ]
         for f in files:
             yield os.path.join(top, f), f"{rel}/{f}"
 
@@ -599,6 +637,7 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
                 include=self.plan.options.include,
                 exclude=self.plan.options.exclude,
                 remove_sources=self.plan.options.remove_sources,
+                dereference=self.plan.options.dereference,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )

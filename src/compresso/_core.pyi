@@ -169,6 +169,7 @@ def create_archive(
     include: Sequence[str] = ...,
     exclude: Sequence[str] = ...,
     remove_sources: bool = ...,
+    dereference: bool = ...,
 ) -> str:
     """Create an archive from the given input paths in the given format.
 
@@ -182,6 +183,10 @@ def create_archive(
     `include` and `exclude` are globs matched against entry names; an exclude
     wins and isn't descended into, and with any includes, only matching entries
     and the directories holding them are stored.
+
+    `dereference` stores what symlinks lead to; one that's dangling, or that
+    leads to a directory above it, stays a link; `remove_sources` then deletes
+    the links, and not their targets.
     """
 
 def extract_archive(

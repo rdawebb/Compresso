@@ -67,8 +67,36 @@ static int is_skipped(const WalkItem *item, const OwnFiles *own,
   return 0;
 }
 
-// Pushes the children of `dir` so they pop in the order readdir gave them
-static int push_children(WalkList *pending, const WalkItem *dir) {
+static void follow_link(WalkItem *item, const WalkList *walked) {
+  fs_stat target;
+  if (fs_stat_target(item->path, &target) != 0)
+    return;
+
+  for (size_t i = item->parent; i > 0; i = walked->items[i - 1].parent)
+    if (fs_same_file(&target, &walked->items[i - 1].st))
+      return;
+
+  item->st = target;
+  item->followed = 1;
+}
+
+// Only where the link was meant to give data: left in a tree it's a faithful
+// copy, and such links are routine
+static void warn_if_dangling(const WalkItem *item, int follow_links,
+                             CoreContext *ctx) {
+  fs_stat target;
+  if (item->st.type != FS_TYPE_SYMLINK || !(follow_links || item->parent == 0))
+    return;
+
+  if (fs_stat_target(item->path, &target) != 0)
+    ctx_log(ctx, CTX_LOG_WARNING,
+            "Stored %s as a link: its target can't be reached", item->path);
+}
+
+// Pushes the children of `dir`, whose index is `parent`, so they pop in the
+// order readdir gave them
+static int push_children(WalkList *pending, const WalkItem *dir,
+                         size_t parent) {
   fs_dir *d = fs_opendir(dir->path);
   if (!d) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir->path);
@@ -89,6 +117,9 @@ static int push_children(WalkList *pending, const WalkItem *dir) {
       ret = -1;
       break;
     }
+    pending->items[pending->count - 1].parent = parent;
+    pending->items[pending->count - 1].via_link =
+        dir->followed || dir->via_link;
   }
 
   // A conversion failure also ends fs_readdir; unchecked, files would silently
@@ -208,8 +239,8 @@ static void prune_provisional(WalkList *list) {
 
 int walk_sources(const char **input_paths, size_t num_paths,
                  const PathFilter *filter, const OwnFiles *own,
-                 int keep_specials, int link_hardlinks, CoreContext *ctx,
-                 WalkList *out) {
+                 int keep_specials, int link_hardlinks, int follow_links,
+                 CoreContext *ctx, WalkList *out) {
   // Depth-first like the archive's order, on a heap stack rather than the C one
   WalkList pending = {0};
   int ret = 0;
@@ -256,20 +287,23 @@ int walk_sources(const char **input_paths, size_t num_paths,
       ret = -1;
       break;
     }
+    if (follow_links && item.st.type == FS_TYPE_SYMLINK)
+      follow_link(&item, out);
     if ((!included && item.st.type != FS_TYPE_DIR) ||
         is_skipped(&item, own, keep_specials, ctx)) {
       free(item.path);
       continue;
     }
+    warn_if_dangling(&item, follow_links, ctx);
 
     ret = push(out, item.path, item.prefix_len);
     if (ret != 0)
       break;
-    out->items[out->count - 1].st = item.st;
-    out->items[out->count - 1].provisional = !included;
+    item.provisional = !included;
+    out->items[out->count - 1] = item;
 
     if (item.st.type == FS_TYPE_DIR)
-      ret = push_children(&pending, &item);
+      ret = push_children(&pending, &item, out->count);
     else if (item.st.type == FS_TYPE_FILE)
       out->file_bytes += item.st.size;
   }

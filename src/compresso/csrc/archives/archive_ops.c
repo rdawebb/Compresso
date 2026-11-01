@@ -184,11 +184,14 @@ static int add_walked_entries(const CArchive *archive, void *writer,
 }
 
 // Deepest first; a directory holding something unstored stays, and so does ".";
-// a path that won't go lands in `failed`, and the rest still go
+// a followed link goes, but not its target; a path that won't go lands in
+// `failed`, and the rest still go
 static int remove_walked(const WalkList *walked, PyObject *failed) {
   for (size_t i = walked->count; i-- > 0;) {
     const WalkItem *item = &walked->items[i];
-    int is_dir = item->st.type == FS_TYPE_DIR;
+    if (item->via_link)
+      continue;
+    int is_dir = item->st.type == FS_TYPE_DIR && !item->followed;
     if ((is_dir ? fs_rmdir(item->path) : fs_unlink(item->path)) == 0)
       continue;
     if (is_dir && (errno == ENOTEMPTY || errno == EEXIST || errno == EINVAL))
@@ -233,7 +236,7 @@ static int remove_stored(const WalkList *walked, const char *output,
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths,
                    const PathFilter *filter, int overwrite_existing,
-                   int remove_sources, char *out_actual_path,
+                   int remove_sources, int follow_links, char *out_actual_path,
                    size_t out_actual_path_size, CoreContext *ctx) {
   if (remove_sources && overwrite_existing == 1) {
     PyErr_SetString(PyExc_ValueError,
@@ -307,7 +310,7 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   WalkList walked = {0};
   int ret = walk_sources(input_paths, num_paths, filter, &own,
                          archive->stores_specials, archive->stores_hardlinks,
-                         ctx, &walked);
+                         follow_links, ctx, &walked);
   if (ret == 0) {
     ctx_begin_stage(ctx, walked.file_bytes);
     ret = add_walked_entries(archive, writer, &walked, ctx);

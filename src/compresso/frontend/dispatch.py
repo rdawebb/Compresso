@@ -97,6 +97,8 @@ class CompressRequest:
         exclude: Globs an archive's entries must not match.
         remove_sources: Whether an archive deletes what it stored once written;
             see `ArchiveOptions`.
+        dereference: Whether an archive stores what symlinks lead to; see
+            `ArchiveOptions`.
     """
 
     inputs: list[Path]
@@ -110,6 +112,7 @@ class CompressRequest:
     include: Sequence[str] = ()
     exclude: Sequence[str] = ()
     remove_sources: bool = False
+    dereference: bool = False
 
 
 @dataclass(frozen=True)
@@ -176,6 +179,7 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
             include=request.include,
             exclude=request.exclude,
             remove_sources=request.remove_sources,
+            dereference=request.dereference,
         )
 
         archive_job = ArchiveJob.from_paths(

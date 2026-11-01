@@ -113,6 +113,25 @@ class TestCompressConflicts:
         assert (f"{t.dest}  skipped" in result.output) == ("skip" in flags)
 
 
+class TestDereference:
+    """Test `-h`."""
+
+    @pytest.mark.usefixtures("needs_symlinks")
+    @pytest.mark.parametrize("flag", ["-h", "--dereference"])
+    def test_archive_holds_the_target(self, tmp_path: Path, flag: str) -> None:
+        """Test that the flag reaches the archive."""
+        tree = tmp_path / "tree"
+        tree.mkdir()
+        (tree / "a").write_text("hello")
+        (tree / "link").symlink_to("a")
+        output = tmp_path / "out.tar"
+
+        invoke("compress", tree, "-o", output, flag, "-q")
+
+        with tarfile.open(output) as tar:
+            assert tar.getmember("tree/link").isfile()
+
+
 class TestRemoveInput:
     """Test what `--rm` and `-k` do to the input."""
 

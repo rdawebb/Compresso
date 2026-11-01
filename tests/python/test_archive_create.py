@@ -398,6 +398,195 @@ class TestArchiveFilter:
         assert total(source_link) == 0
 
 
+@pytest.mark.usefixtures("needs_symlinks")
+class TestDereference:
+    """Test that `dereference` stores what symlinks lead to, as bsdtar `-h`."""
+
+    @pytest.fixture
+    def tree(self, tmp_path: Path) -> Path:
+        """A tree with links to a file, and to a directory outside it."""
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / "f.txt").write_text("other")
+
+        root = tmp_path / "tree"
+        root.mkdir()
+        (root / "a.txt").write_text("hello")
+        (root / "flink").symlink_to("a.txt")
+        (root / "dlink").symlink_to(other, target_is_directory=True)
+
+        return root
+
+    @staticmethod
+    def entries(output: Path) -> dict[str, "_core.ArchiveEntryDict"]:
+        return {e["path"].rstrip("/"): e for e in _core.list_archive_contents(output)}
+
+    @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
+    def test_links_become_their_targets(
+        self, tree: Path, tmp_path: Path, fmt: str
+    ) -> None:
+        """Test that a link to a file or a directory holds what it leads to."""
+        output = tmp_path / f"out.{fmt}"
+
+        _core.create_archive(str(output), fmt, [str(tree)], dereference=True)
+
+        entries = self.entries(output)
+        assert entries["tree/flink"]["type"] == "file"
+        assert entries["tree/flink"]["size"] == 5
+        assert entries["tree/dlink"]["type"] == "dir"
+        assert entries["tree/dlink/f.txt"]["size"] == 5
+
+    def test_links_stay_links_by_default(self, tree: Path, tmp_path: Path) -> None:
+        """Test that nothing is followed unless asked."""
+        output = tmp_path / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(tree)])
+
+        entries = self.entries(output)
+        assert entries["tree/dlink"]["type"] == "symlink"
+        assert "tree/dlink/f.txt" not in entries
+
+    def test_source_link_is_followed(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a link given as a source is stored under its own name."""
+        link = tmp_path / "top"
+        link.symlink_to(tree, target_is_directory=True)
+        output = tmp_path / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(link)], dereference=True)
+
+        entries = self.entries(output)
+        assert entries["top"]["type"] == "dir"
+        assert entries["top/a.txt"]["size"] == 5
+
+    def test_dangling_link_stays_a_link(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a link leading nowhere, or to itself, is stored as a link."""
+        (tree / "dangling").symlink_to("missing")
+        (tree / "self").symlink_to("self")
+        output = tmp_path / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(tree)], dereference=True)
+
+        entries = self.entries(output)
+        assert entries["tree/dangling"]["type"] == "symlink"
+        assert entries["tree/dangling"]["link_target"] == "missing"
+        assert entries["tree/self"]["type"] == "symlink"
+
+    @pytest.mark.parametrize(
+        ("as_source", "dereference", "warns"),
+        [
+            (True, False, True),
+            (True, True, True),
+            (False, True, True),
+            (False, False, False),
+        ],
+    )
+    def test_dangling_link_warns_where_data_was_expected(
+        self,
+        tree: Path,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        as_source: bool,
+        dereference: bool,
+        warns: bool,
+    ) -> None:
+        """Test that only a named or followed dangling link is reported."""
+        link = tree / "dangling"
+        link.symlink_to("missing")
+        source = link if as_source else tree
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            _core.create_archive(
+                str(tmp_path / "out.tar"), "tar", [str(source)], dereference=dereference
+            )
+
+        expected = f"Stored {link} as a link: its target can't be reached"
+        assert (expected in caplog.text) is warns
+
+    def test_link_to_an_ancestor_stays_a_link(
+        self, tree: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that a loop, even through another directory, ends the walk quietly."""
+        (tree / "up").symlink_to(".", target_is_directory=True)
+        (tree / "sub").mkdir()
+        (tree / "sub" / "up").symlink_to("..", target_is_directory=True)
+        (tmp_path / "other" / "back").symlink_to(tree, target_is_directory=True)
+        output = tmp_path / "out.tar"
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            _core.create_archive(str(output), "tar", [str(tree)], dereference=True)
+
+        entries = self.entries(output)
+        for name in ("tree/up", "tree/sub/up", "tree/dlink/back"):
+            assert entries[name]["type"] == "symlink"
+        assert "as a link" not in caplog.text
+
+    def test_link_to_the_output_is_skipped(self, tree: Path, tmp_path: Path) -> None:
+        """Test that the archive being written isn't stored through a link."""
+        output = tmp_path / "out.tar"
+        output.write_text("old")
+        (tree / "own").symlink_to(output)
+
+        _core.create_archive(
+            str(output), "tar", [str(tree)], overwrite=2, dereference=True
+        )
+
+        assert "tree/own" not in self.entries(output)
+
+    def test_excluded_link_is_not_walked(self, tree: Path, tmp_path: Path) -> None:
+        """Test that an exclude still prunes what a link leads to."""
+        output = tmp_path / "out.tar"
+
+        _core.create_archive(
+            str(output), "tar", [str(tree)], exclude=["*/dlink"], dereference=True
+        )
+
+        assert not any(name.startswith("tree/dlink") for name in self.entries(output))
+
+    def test_rm_deletes_links_but_not_targets(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a link goes, source or not; its target stays, unlike GNU tar's."""
+        other = tmp_path / "other"
+        top = tmp_path / "top"
+        top.symlink_to(other, target_is_directory=True)
+
+        _core.create_archive(
+            str(tmp_path / "out.tar"),
+            "tar",
+            [str(tree), str(top)],
+            dereference=True,
+            remove_sources=True,
+        )
+
+        assert not os.path.lexists(tree)
+        assert not os.path.lexists(top)
+        assert (other / "f.txt").read_text() == "other"
+
+    def test_plan_counts_what_the_walk_stores(self, tree: Path, tmp_path: Path) -> None:
+        """Test that the planned total follows links, loops and dangling ones."""
+        (tree / "dangling").symlink_to("missing")
+        (tree / "up").symlink_to(".", target_is_directory=True)
+        (tmp_path / "other" / "back").symlink_to(tree, target_is_directory=True)
+
+        def total(dereference: bool) -> int:
+            options = ArchiveOptions(format="tar", dereference=dereference)
+            job = ArchiveJob.from_paths([tree], tmp_path / "o.tar", options)
+            assert job.plan.can_run
+            return job.plan.total_input_size
+
+        assert total(False) == 5
+        assert total(True) == 15
+
+    def test_plan_keeps_a_dangling_source(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a dangling link exists as a source, as it does to the walk."""
+        link = tree / "dangling"
+        link.symlink_to("missing")
+        output = tmp_path / "o.tar"
+
+        job = ArchiveJob.from_paths([link], output, ArchiveOptions(format="tar"))
+        assert job.run().ok
+
+        assert self.entries(output)["dangling"]["type"] == "symlink"
+
+
 class TestRemoveSources:
     """Test that `remove_sources` deletes exactly what the archive stored."""
 

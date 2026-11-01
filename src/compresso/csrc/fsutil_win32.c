@@ -72,6 +72,51 @@ static HANDLE fs_open_for_metadata(const wchar_t *wpath) {
                      NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
 }
 
+static int fs_stat_wide(const wchar_t *wpath, fs_stat *out) {
+  struct __stat64 st;
+  if (_wstat64(wpath, &st) != 0)
+    return -1;
+
+  out->size = (uint64_t)st.st_size;
+  out->mtime = (int64_t)st.st_mtime;
+  out->mode = (uint32_t)(st.st_mode & 0777);
+  out->special = 0;
+  out->rdev = 0;
+  out->dev = 0;
+  out->ino = 0;
+  out->nlink = 0;
+
+  if (st.st_mode & _S_IFDIR)
+    out->type = FS_TYPE_DIR;
+  else if (st.st_mode & _S_IFREG)
+    out->type = FS_TYPE_FILE;
+  else
+    out->type = FS_TYPE_OTHER;
+
+  // _wstat64 leaves st_ino 0, so the identity needs a handle
+  if (out->type == FS_TYPE_FILE || out->type == FS_TYPE_DIR) {
+    HANDLE h = fs_open_for_metadata(wpath);
+    BY_HANDLE_FILE_INFORMATION info;
+    if (h != INVALID_HANDLE_VALUE) {
+      if (GetFileInformationByHandle(h, &info)) {
+        out->dev = info.dwVolumeSerialNumber;
+        out->ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow;
+        out->nlink = info.nNumberOfLinks;
+      }
+      CloseHandle(h);
+    }
+  }
+
+  return 0;
+}
+
+int fs_stat_target(const char *path, fs_stat *out) {
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+  return fs_stat_wide(wpath, out);
+}
+
 int fs_stat_path(const char *path, fs_stat *out) {
   wchar_t wpath[FS_PATH_MAX];
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
@@ -83,47 +128,18 @@ int fs_stat_path(const char *path, fs_stat *out) {
   int is_reparse = attrs != INVALID_FILE_ATTRIBUTES &&
                    (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 
-  struct __stat64 st;
-  if (_wstat64(wpath, &st) != 0) {
+  if (fs_stat_wide(wpath, out) != 0) {
     // A link is still a real entry when its target is missing
     if (!is_reparse)
       return -1;
     memset(out, 0, sizeof(*out));
-    out->type = FS_TYPE_SYMLINK;
-    return 0;
   }
 
-  out->size = (uint64_t)st.st_size;
-  out->mtime = (int64_t)st.st_mtime;
-  out->mode = (uint32_t)(st.st_mode & 0777);
-  out->special = 0;
-  out->rdev = 0;
-  out->dev = 0;
-  out->ino = 0;
-  out->nlink = 0;
-
-  if (is_reparse)
+  if (is_reparse) {
     out->type = FS_TYPE_SYMLINK;
-  else if (st.st_mode & _S_IFDIR)
-    out->type = FS_TYPE_DIR;
-  else if (st.st_mode & _S_IFREG)
-    out->type = FS_TYPE_FILE;
-  else
-    out->type = FS_TYPE_OTHER;
-
-  // _wstat64 leaves st_ino 0, so the identity needs a handle; only regular
-  // files get one, as nothing compares directories
-  if (out->type == FS_TYPE_FILE) {
-    HANDLE h = fs_open_for_metadata(wpath);
-    BY_HANDLE_FILE_INFORMATION info;
-    if (h != INVALID_HANDLE_VALUE) {
-      if (GetFileInformationByHandle(h, &info)) {
-        out->dev = info.dwVolumeSerialNumber;
-        out->ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow;
-        out->nlink = info.nNumberOfLinks;
-      }
-      CloseHandle(h);
-    }
+    out->dev = 0;
+    out->ino = 0;
+    out->nlink = 0;
   }
 
   return 0;

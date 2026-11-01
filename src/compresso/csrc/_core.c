@@ -413,10 +413,11 @@ done:
 
 static PyObject *py_create_archive(PyObject *self, PyObject *args,
                                    PyObject *kwargs) {
-  static char *kwlist[] = {"output_path",       "format",    "input_paths",
-                           "compression_level", "overwrite", "threads",
-                           "progress",          "cancel",    "include",
-                           "exclude",           "remove_sources", NULL};
+  static char *kwlist[] = {
+      "output_path", "format",  "input_paths",    "compression_level",
+      "overwrite",   "threads", "progress",       "cancel",
+      "include",     "exclude", "remove_sources", "dereference",
+      NULL};
 
   PyObject *output_path_bytes = NULL;
   const char *format_name = NULL;
@@ -429,13 +430,14 @@ static PyObject *py_create_archive(PyObject *self, PyObject *args,
   PathList include = {0};
   PathList exclude = {0};
   int remove_sources = 0;
+  int dereference = 0;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "O&sO&|i$iiOOO&O&p", kwlist, PyUnicode_FSConverter,
+          args, kwargs, "O&sO&|i$iiOOO&O&pp", kwlist, PyUnicode_FSConverter,
           &output_path_bytes, &format_name, path_list_converter, &inputs,
           &compression_level, &overwrite_existing, &threads, &progress, &cancel,
           pattern_list_converter, &include, pattern_list_converter, &exclude,
-          &remove_sources)) {
+          &remove_sources, &dereference)) {
     return NULL; // Error already set
   }
   PathFilter filter = {include.paths, include.count, exclude.paths,
@@ -460,10 +462,10 @@ static PyObject *py_create_archive(PyObject *self, PyObject *args,
   }
 
   char actual_path[FS_PATH_MAX];
-  result = create_archive(
-      PyBytes_AS_STRING(output_path_bytes), &pipe, inputs.paths, inputs.count,
-      &filter, overwrite_existing, remove_sources, actual_path,
-      sizeof(actual_path), &ctx);
+  result =
+      create_archive(PyBytes_AS_STRING(output_path_bytes), &pipe, inputs.paths,
+                     inputs.count, &filter, overwrite_existing, remove_sources,
+                     dereference, actual_path, sizeof(actual_path), &ctx);
 
 done:
   Py_DECREF(output_path_bytes);

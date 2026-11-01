@@ -201,6 +201,14 @@ def compress(
             help="Delete the input once the output is written, or keep it",
         ),
     ] = False,
+    dereference: Annotated[
+        bool,
+        app.Option(
+            "--dereference",
+            "-h",
+            help="Archive what symlinks lead to, rather than the links",
+        ),
+    ] = False,
     threads: Annotated[
         int,
         app.Option(
@@ -252,6 +260,10 @@ def compress(
         remove: If True, delete the input once the output is written; an
             archive deletes only what it stored, leaving anything else and
             the directories holding it.
+        dereference: If True, an archive stores symlink targets, and `remove`
+            deletes the links, not targets; a dangling link, or one leading to
+            a directory above it, stays a link; single-file output always reads
+            through a link.
         threads: Worker threads for zstd and xz (default: one per core).
         verbose: If True, show the plan and full stats.
         quiet: If True, suppress all output.
@@ -284,6 +296,7 @@ def compress(
             include=include or (),
             exclude=exclude or (),
             remove_sources=remove,
+            dereference=dereference,
         )
 
         try:
