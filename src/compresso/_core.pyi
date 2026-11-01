@@ -229,6 +229,19 @@ def extract_archive(
     as a name in `files` does, after the rest is extracted.
     """
 
+def verify_file(
+    path: StrOrBytesPath,
+    *,
+    threads: int = ...,
+    progress: ProgressFn | None = ...,
+    cancel: CancelToken | None = ...,
+) -> None:
+    """Decode all of an archive or compressed file, writing nothing.
+
+    Raises what extracting it would for damaged data, so it proves only what
+    the format checks: a plain tar's file data carries no checksum.
+    """
+
 def detect_format(file_path: StrOrBytesPath) -> str:
     """Name a file's format, from its magic bytes and then its extension."""
 

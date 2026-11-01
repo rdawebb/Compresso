@@ -814,7 +814,8 @@ int extract_archive(const char *archive_path, const char *output_dir,
       reader = archive->create_reader(archive_path, ctx);
     }
     if (!reader) {
-      ret = -1;
+      // A cancel while opening fails the open, which can only return NULL
+      ret = ctx_cancelled(ctx) ? COMP_CANCELLED : -1;
       break;
     }
 

@@ -8,8 +8,11 @@ from .api import (
     CompressionPlan,
     DecompressionJob,
     DecompressionPlan,
+    VerificationJob,
+    VerificationPlan,
     plan_compression,
     plan_decompression,
+    plan_verification,
 )
 from .archive_api import (
     ArchiveEntry,
@@ -45,8 +48,11 @@ __all__ = [
     "OverwriteMode",
     "ProgressCallback",
     "SymlinkMode",
+    "VerificationJob",
+    "VerificationPlan",
     "plan_archive",
     "plan_compression",
     "plan_decompression",
     "plan_extraction",
+    "plan_verification",
 ]

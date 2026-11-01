@@ -14,6 +14,7 @@
 // so prefix comparisons must test both
 #if defined(_WIN32) || defined(_WIN64)
 #define FS_IS_SEP(c) ((c) == '/' || (c) == '\\')
+#define FS_NULL_DEVICE "NUL"
 
 #include <wchar.h>
 
@@ -22,6 +23,7 @@
 int fs_widen(const char *utf8, wchar_t *out, int out_count);
 #else
 #define FS_IS_SEP(c) ((c) == '/')
+#define FS_NULL_DEVICE "/dev/null"
 #endif
 
 typedef enum {
@@ -155,8 +157,8 @@ int fs_commit_temp(const char *temp, const char *dst, int overwrite_existing,
 
 // A file output, written to a temp beside `path` and committed on success
 typedef struct {
-  const char *path;
-  int overwrite; // The 0-3 scheme above
+  const char *path; // NULL discards the output, leaving only its failures
+  int overwrite;    // The 0-3 scheme above
   char *actual;  // Optional; receives the path written, or skipped
   size_t actual_size;
   int owner_only; // 0600, for an intermediate that holds a whole archive

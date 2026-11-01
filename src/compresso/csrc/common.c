@@ -198,6 +198,10 @@ static void report_actual(const OutputTarget *out, const char *path) {
 }
 
 int output_check(const char *src_path, const OutputTarget *out) {
+  if (!out->path) {
+    return 0;
+  }
+
   char resolved[FS_PATH_MAX];
   int rc = fs_resolve_conflict(out->path, out->overwrite, resolved,
                                sizeof(resolved));
@@ -222,6 +226,14 @@ int output_check(const char *src_path, const OutputTarget *out) {
 }
 
 FILE *output_open(const OutputTarget *out, char *temp) {
+  if (!out->path) {
+    FILE *sink = fs_fopen(FS_NULL_DEVICE, "wb");
+    if (!sink) {
+      PyErr_SetFromErrnoWithFilename(PyExc_OSError, FS_NULL_DEVICE);
+    }
+    return sink;
+  }
+
   static const char SUFFIX[] = ".compresso-XXXXXX";
   const char *slash = fs_last_sep(out->path);
   size_t dir_len = slash ? (size_t)(slash - out->path + 1) : 0;
@@ -275,15 +287,16 @@ int output_finish(int err, FILE *input, FILE *output, const char *temp,
   // Flushed first, as a later write would move the mtime again; a failed flush
   // is left for codec_finish_file to report; best-effort, as in extraction
   fs_stat src;
-  if (err == 0 && out->keep_source_metadata && input && output &&
+  int writes = output && out->path;
+  if (err == 0 && out->keep_source_metadata && input && writes &&
       fflush(output) == 0 && fs_fstat(input, &src) == 0) {
     fs_futimens(output, src.mtime);
     fs_fchmod(output, src.mode);
   }
 
-  err = codec_finish_file(err, input, output, output ? temp : NULL, errors,
+  err = codec_finish_file(err, input, output, writes ? temp : NULL, errors,
                           failure_message);
-  if (err != 0 || !output) {
+  if (err != 0 || !writes) {
     return err;
   }
   return output_commit(temp, out);

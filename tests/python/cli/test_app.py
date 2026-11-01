@@ -23,7 +23,7 @@ from compresso.cli._render import (
     format_size,
     format_time,
 )
-from compresso.frontend.api import CompressionJob, DecompressionJob
+from compresso.frontend.api import CompressionJob, DecompressionJob, VerificationJob
 from compresso.frontend.archive_api import (
     ArchiveJob,
     ExtractJob,
@@ -88,6 +88,7 @@ class TestAppStructure:
             for aliases in [
                 "(c)",
                 "(x)",
+                "(t)",
                 "(l)",
                 "(i)",
                 "List the available",
@@ -101,6 +102,7 @@ class TestAppStructure:
         [
             ("c", "compress"),
             ("x", "extract"),
+            ("t", "test"),
             ("l", "list"),
             ("i", "info"),
             ("b", "benchmark"),
@@ -301,6 +303,7 @@ class TestExitCodes:
             ("info", "nope.comp"),
             ("extract", "nope.gz"),
             ("list", "nope.zip"),
+            ("test", "nope.gz"),
         ],
     )
     def test_bad_input_is_usage(self, payload: Path, command: str, name: str) -> None:
@@ -402,6 +405,7 @@ class TestInterruption:
             (["compress"], "Compression cancelled"),
             (["info"], "Inspection cancelled"),
             (["list"], "Listing cancelled"),
+            (["test"], "Test cancelled"),
             (["formats"], "Format listing cancelled"),
         ],
     )
@@ -419,6 +423,7 @@ class TestInterruption:
             raise KeyboardInterrupt
 
         monkeypatch.setattr(CompressionJob, "from_file", interrupt)
+        monkeypatch.setattr(VerificationJob, "from_file", interrupt)
         monkeypatch.setattr(info_cmd, "detect_format", interrupt)
         monkeypatch.setattr(list_cmd, "detect_format", interrupt)
         monkeypatch.setattr(formats_cmd, "list_capabilities", interrupt)
@@ -442,7 +447,7 @@ class TestThreads:
         make_archive: Callable[[str], Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Test that compress and extract pass -T on, one file or many."""
+        """Test that compress, extract and test pass -T on, one file or many."""
         archive = make_archive("tar")
         seen: list[int] = []
 
@@ -456,18 +461,20 @@ class TestThreads:
         monkeypatch.setattr(ArchiveJob, "from_paths", record)
         monkeypatch.setattr(DecompressionJob, "from_file", record)
         monkeypatch.setattr(ExtractJob, "from_archive", record)
+        monkeypatch.setattr(VerificationJob, "from_file", record)
 
         for command, source in [
             ("compress", payload),
             ("compress", source_tree),
             ("extract", payload),
             ("extract", archive),
+            ("test", archive),
         ]:
             invoke(command, source, "-T", "3", expect=EXIT_CANCELLED)
 
-        assert seen == [3, 3, 3, 3]
+        assert seen == [3, 3, 3, 3, 3]
 
-    @pytest.mark.parametrize("command", ["compress", "extract"])
+    @pytest.mark.parametrize("command", ["compress", "extract", "test"])
     def test_negative_threads_is_usage(self, payload: Path, command: str) -> None:
         """Test that a count below 0 is refused before any work starts."""
         invoke(command, payload, "-T", "-1", expect=EXIT_USAGE)

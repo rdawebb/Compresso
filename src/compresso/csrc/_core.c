@@ -765,6 +765,31 @@ done:
   return finish_call(self, rc, &ctx, actual_path);
 }
 
+static PyObject *py_verify_file(PyObject *self, PyObject *args,
+                                PyObject *kwargs) {
+  static char *kwlist[] = {"path", "threads", "progress", "cancel", NULL};
+
+  PyObject *path_bytes = NULL;
+  int threads = 0; // One per core
+  PyObject *progress = NULL;
+  PyObject *cancel = NULL;
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O&|$iOO", kwlist,
+                                   PyUnicode_FSConverter, &path_bytes, &threads,
+                                   &progress, &cancel)) {
+    return NULL; // Error already set
+  }
+
+  CoreContext ctx;
+  int result = -1;
+  if (core_context_init(&ctx, self, progress, cancel, threads) == 0) {
+    result = verify_file(PyBytes_AS_STRING(path_bytes), &ctx);
+  }
+
+  Py_DECREF(path_bytes);
+  return finish_call(self, result, &ctx, NULL);
+}
+
 // ---- Format Detection Methods ----
 
 static PyObject *py_detect_format(PyObject *Py_UNUSED(self), PyObject *args) {
@@ -995,6 +1020,9 @@ static PyMethodDef CoreMethods[] = {
     {"decompress_standalone",
      (PyCFunction)(void (*)(void))py_decompress_standalone,
      METH_VARARGS | METH_KEYWORDS, "Decompress a standalone format file."},
+    {"verify_file", (PyCFunction)(void (*)(void))py_verify_file,
+     METH_VARARGS | METH_KEYWORDS,
+     "Decode an archive or compressed file, writing nothing."},
 
     {"detect_format", (PyCFunction)py_detect_format, METH_VARARGS,
      "Detect the format of a file."},

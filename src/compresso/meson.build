@@ -59,6 +59,7 @@ py.install_sources(
   'cli/formats.py',
   'cli/info.py',
   'cli/list.py',
+  'cli/verify.py',
   subdir: 'compresso/cli',
 )
 

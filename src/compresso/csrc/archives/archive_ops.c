@@ -505,12 +505,19 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader,
   return list;
 }
 
-PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
+// One read of an archive; `data_ctx` takes the progress of its entries' data,
+// and is NULL when a codec stage already counts the input; returns 0 or a
+// negative code with an exception set
+typedef int (*ReaderPass)(const CArchive *archive, void *reader, void *state,
+                          CoreContext *data_ctx, CoreContext *ctx);
+
+static int run_reader_pass(const char *archive_path, ReaderPass pass,
+                           void *state, CoreContext *ctx) {
   const CArchive *archive;
   CompressionPipeline pipe;
   FILE *src = open_archive_source(archive_path, &archive, &pipe, ctx);
   if (!src)
-    return NULL;
+    return -1;
 
   // Decoded as libarchive reads
   CodecStream *stream = NULL;
@@ -527,22 +534,109 @@ PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
     reader = archive->create_reader(archive_path, ctx);
   }
 
-  PyObject *list = reader ? read_archive_entries(archive, reader, ctx) : NULL;
-  int failed = list == NULL;
-  // A close failure after a full listing would otherwise return the list
-  if (reader && archive->close_reader(reader, failed) != 0)
-    failed = 1;
+  // A cancel while opening fails the open, which can only return NULL
+  int ret = reader ? pass(archive, reader, state, stream ? NULL : ctx, ctx)
+            : ctx_cancelled(ctx) ? COMP_CANCELLED
+                                 : -1;
 
-  if (stream && close_codec_source(stream, src, !failed) != 0)
-    failed = 1;
-  else if (!stream && src)
+  // A close failure after a full pass would otherwise go unreported
+  if (reader && archive->close_reader(reader, ret != 0) != 0 && ret == 0)
+    ret = -1;
+
+  if (stream) {
+    int rc = close_codec_source(stream, src, ret == 0);
+    if (ret == 0)
+      ret = rc;
+  } else if (src) {
     fclose(src);
+  }
+  return ret;
+}
 
-  if (failed) {
+static int list_pass(const CArchive *archive, void *reader, void *state,
+                     CoreContext *data_ctx, CoreContext *ctx) {
+  (void)data_ctx;
+  PyObject **list = state;
+  *list = read_archive_entries(archive, reader, ctx);
+  return *list ? 0 : -1;
+}
+
+PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
+  PyObject *list = NULL;
+  if (run_reader_pass(archive_path, list_pass, &list, ctx) != 0) {
     Py_XDECREF(list);
     return NULL;
   }
   return list;
+}
+
+typedef struct {
+  FILE *sink; // Takes each file's data; NULL to only add up `declared`
+  uint64_t declared;
+} VerifyState;
+
+static int verify_pass(const CArchive *archive, void *reader, void *state,
+                       CoreContext *data_ctx, CoreContext *ctx) {
+  VerifyState *verify = state;
+  ArchiveEntry entry = {0};
+  int ret;
+
+  // NULL: the data pass reads the same headers again, and warns once there
+  while ((ret = archive->get_next_entry(reader, &entry,
+                                        verify->sink ? ctx : NULL)) == 1) {
+    int rc = ctx_advance(ctx, 0);
+    if (rc == 0 && entry.type == ENTRY_FILE) {
+      uint64_t written;
+      if (verify->sink)
+        rc = archive->extract_entry_data(reader, verify->sink, UINT64_MAX,
+                                         &written, data_ctx);
+      else
+        verify->declared += entry.size;
+    }
+    entry_reset(&entry);
+    if (rc != 0)
+      return rc;
+  }
+  return ret;
+}
+
+static int verify_archive(const char *archive_path,
+                          const CompressionPipeline *pipeline,
+                          CoreContext *ctx) {
+  FILE *sink = fs_fopen(FS_NULL_DEVICE, "wb");
+  if (!sink) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, FS_NULL_DEVICE);
+    return -1;
+  }
+
+  // A codec stream is decoded once, counting its compressed bytes; a plain file
+  // gets a headers pass first, for the total its data counts towards
+  VerifyState state = {NULL, 0};
+  int ret = 0;
+  if (pipeline->codec == FORMAT_UNKNOWN) {
+    ret = run_reader_pass(archive_path, verify_pass, &state, ctx);
+    ctx_begin_stage(ctx, state.declared);
+  }
+  if (ret == 0) {
+    state.sink = sink;
+    ret = run_reader_pass(archive_path, verify_pass, &state, ctx);
+  }
+
+  fclose(sink);
+  return ret;
+}
+
+int verify_file(const char *path, CoreContext *ctx) {
+  Format format;
+  FILE *src = open_source(path, &format);
+  if (!src)
+    return -1;
+  fclose(src);
+
+  CompressionPipeline pipe = pipeline_from_format(format, path);
+  if (pipe.archive != ARCHIVE_NONE)
+    return verify_archive(path, &pipe, ctx);
+  return decompress_file(path, NULL, ALGO_NONE, 0, NULL, 0, ctx);
 }
 
 // ---- Archive Capabilities ----

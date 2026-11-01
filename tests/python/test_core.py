@@ -85,6 +85,22 @@ class TestCoreExceptions:
             fresh.compress_file(source, tmp_path / "out.comp", cancel=token)
 
 
+class TestCancelledBeforeReading:
+    """Test a cancel landing while a compressed archive's reader opens."""
+
+    def test_extract_reports_the_cancel(self, tmp_path: Path) -> None:
+        """Test that the cancel is raised, not lost with the failed open."""
+        source = tmp_path / "f"
+        source.write_bytes(b"data")
+        archive = tmp_path / "a.tar.gz"
+        _core.create_archive(archive, "tar.gz", [source])
+        token = _core.CancelToken()
+        token.cancel()
+
+        with pytest.raises(Cancelled):
+            _core.extract_archive(archive, tmp_path / "out", [], cancel=token)
+
+
 class TestCapabilities:
     """Test the get_capabilities function."""
 

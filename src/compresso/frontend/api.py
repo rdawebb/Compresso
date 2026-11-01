@@ -18,6 +18,7 @@ from .._core import (
     detect_format,
     format_is_archive,
     gzip_stored_name,
+    verify_file,
 )
 from .._core import get_default_backend_for_strategy as default_backend
 from .._levels import to_core_level
@@ -118,6 +119,23 @@ class DecompressionPlan:
     overwrite: OverwriteMode = OverwriteMode.RENAME
     threads: int = 0
     mtime: int | None = None
+
+
+@dataclass(frozen=True)
+class VerificationPlan:
+    """Holds an integrity check of an archive or compressed file.
+
+    Attributes:
+        src: Source file path.
+        can_run: Whether the check can proceed.
+        reason_if_unavailable: Reason it cannot, if applicable.
+        threads: Worker threads for xz/lzma, or 0 for one per core.
+    """
+
+    src: Path
+    can_run: bool = True
+    reason_if_unavailable: str | None = None
+    threads: int = 0
 
 
 def plan_compression(
@@ -395,6 +413,32 @@ def plan_decompression(
     return plan(None, True)
 
 
+def plan_verification(src: str | Path, threads: int = 0) -> VerificationPlan:
+    """Plan an integrity check of an archive or compressed file.
+
+    Args:
+        src: Source file path.
+        threads: Worker threads for xz/lzma, or 0 for one per core.
+
+    Returns:
+        VerificationPlan: The resulting plan.
+    """
+    src_path = Path(src)
+
+    try:
+        recognised: bool = detect_format(src_path) != "unknown"
+
+    # The caller names the file with the error
+    except OSError as e:
+        return VerificationPlan(src_path, False, e.strerror or str(e), threads)
+
+    if not recognised:
+        reason = "not a recognised archive or compressed file"
+        return VerificationPlan(src_path, False, reason, threads)
+
+    return VerificationPlan(src_path, threads=threads)
+
+
 class CompressionJob(ThreadedJob[CompressionPlan]):
     """Compression job high-level wrapper."""
 
@@ -648,3 +692,70 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
                 error=e,
                 plan=self.plan,
             )
+
+
+class VerificationJob(ThreadedJob[VerificationPlan]):
+    """Integrity check high-level wrapper."""
+
+    def __init__(self, plan: VerificationPlan) -> None:
+        """Initialise the verification job.
+
+        Args:
+            plan: The verification plan to execute.
+        """
+        self.plan: VerificationPlan = plan
+
+    @classmethod
+    def from_file(cls, src: str | Path, threads: int = 0) -> Self:
+        """Create a VerificationJob from a file path.
+
+        Args:
+            src: Source file path.
+            threads: Worker threads for xz/lzma, or 0 for one per core.
+
+        Returns:
+            VerificationJob: The created job.
+        """
+        return cls(plan=plan_verification(src, threads))
+
+    def run(
+        self,
+        progress: ProgressCallback | None = None,
+        cancel: CancelToken | None = None,
+    ) -> JobResult:
+        """Decode the whole file, writing nothing.
+
+        Args:
+            progress: Optional progress callback, invoked with
+                `(fraction, done_bytes, total_bytes)`; counts the bytes a plain
+                archive's entries hold, or else the compressed bytes consumed.
+            cancel: Optional `CancelToken`.
+
+        Returns:
+            JobResult: The result, whose `error` says what is damaged.
+        """
+        if not self.plan.can_run:
+            return JobResult(
+                ok=False,
+                error=RuntimeError(self.plan.reason_if_unavailable or "Cannot test"),
+                plan=self.plan,
+            )
+
+        try:
+            verify_file(
+                self.plan.src,
+                threads=self.plan.threads,
+                progress=to_core_progress(progress, 0),
+                cancel=cancel,
+            )
+
+            return JobResult(ok=True, error=None, plan=self.plan)
+
+        # Cancellation is a deliberate stop, not a failure; see
+        # `CompressionJob.run`.
+        except Cancelled:
+            return JobResult(ok=False, error=None, plan=self.plan, cancelled=True)
+
+        # `run` reports failure through JobResult rather than raising
+        except Exception as e:  # noqa: BLE001
+            return JobResult(ok=False, error=e, plan=self.plan)

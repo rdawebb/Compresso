@@ -21,8 +21,11 @@ from .frontend.api import (
     CompressionPlan,
     DecompressionJob,
     DecompressionPlan,
+    VerificationJob,
+    VerificationPlan,
     plan_compression,
     plan_decompression,
+    plan_verification,
 )
 from .frontend.archive_api import (
     ArchiveEntry,
@@ -71,6 +74,8 @@ __all__: list[str] = [
     "SourceRemovalError",
     "SymlinkMode",
     "TrailingDataWarning",
+    "VerificationJob",
+    "VerificationPlan",
     "benchmark_file",
     "compress_file",
     "decompress_file",
@@ -81,4 +86,5 @@ __all__: list[str] = [
     "plan_compression",
     "plan_decompression",
     "plan_extraction",
+    "plan_verification",
 ]
