@@ -203,6 +203,9 @@ int fs_mknod(const char *path, uint32_t type, uint32_t mode, uint64_t rdev);
 // platform (plain ftell() is 32-bit on Windows); returns -1 on failure
 int64_t fs_ftell(FILE *stream);
 
+// fseek() with a 64-bit offset on every platform; returns 0 on success
+int fs_fseek(FILE *stream, int64_t offset, int whence);
+
 // Size of an open stream in bytes, leaving the offset where it found it;
 // returns -1 on failure
 int64_t fs_stream_size(FILE *stream);

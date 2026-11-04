@@ -65,3 +65,17 @@ def infer_format(output: Path | None) -> str | None:
         return suffix
 
     return None
+
+
+def gzip_stored_mtime(path: Path) -> int | None:
+    """Return the modification time a gzip header stores.
+
+    Args:
+        path: A gzip file.
+
+    Returns:
+        Its MTIME, in seconds since the epoch, or None if none is stored.
+    """
+    with path.open("rb") as f:
+        # MTIME, bytes 4-7; zero means none was stored
+        return int.from_bytes(f.read(8)[4:], "little") or None

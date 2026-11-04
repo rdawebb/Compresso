@@ -15,30 +15,21 @@ int64_t fs_ftell(FILE *stream) {
 #endif
 }
 
+int fs_fseek(FILE *stream, int64_t offset, int whence) {
+#if defined(_WIN32) || defined(_WIN64)
+  return _fseeki64(stream, offset, whence);
+#else
+  return fseeko(stream, (off_t)offset, whence);
+#endif
+}
+
 int64_t fs_stream_size(FILE *stream) {
   int64_t original = fs_ftell(stream);
-  if (original < 0)
+  if (original < 0 || fs_fseek(stream, 0, SEEK_END) != 0)
     return -1;
-
-#if defined(_WIN32) || defined(_WIN64)
-  if (_fseeki64(stream, 0, SEEK_END) != 0)
-    return -1;
-#else
-  if (fseeko(stream, 0, SEEK_END) != 0)
-    return -1;
-#endif
 
   int64_t size = fs_ftell(stream);
-
-#if defined(_WIN32) || defined(_WIN64)
-  if (_fseeki64(stream, original, SEEK_SET) != 0)
-    return -1;
-#else
-  if (fseeko(stream, (off_t)original, SEEK_SET) != 0)
-    return -1;
-#endif
-
-  return size;
+  return fs_fseek(stream, original, SEEK_SET) == 0 ? size : -1;
 }
 
 int fs_is_absolute(const char *path) {

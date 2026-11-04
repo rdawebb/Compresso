@@ -8,7 +8,8 @@ from functools import partial
 from pathlib import Path
 from typing import Annotated
 
-from .._core import detect_format
+from .._core import detect_format, gzip_stored_name, stored_content_size
+from ..frontend._formats import gzip_stored_mtime
 from ..frontend.archive_api import plan_extraction as plan_archive_extraction
 from ..frontend.dispatch import is_archive_format
 from ..introspect.file_inspect import inspect as inspect_file
@@ -50,7 +51,17 @@ def _describer(path: Path) -> Callable[..., dict[str, object]]:
     if fmt == "unknown":
         raise InputFailed(f"{path}: not a recognised archive or compressed file")
 
-    return partial(codec_info, path, fmt)
+    stored: bytes | None = gzip_stored_name(path)
+
+    return partial(
+        codec_info,
+        path,
+        fmt,
+        # Only for display, so a name that isn't UTF-8 can stay approximate
+        stored_name=stored.decode(errors="replace") if stored else None,
+        mtime=gzip_stored_mtime(path) if fmt == "gzip" else None,
+        orig_size=stored_content_size(path),
+    )
 
 
 def info(
@@ -66,7 +77,9 @@ def info(
 
     An archive reports its format, entry count, and total size; `list` shows
     its entries. A Compresso `.comp` reports its algorithm and decompression
-    info, and a standalone codec file its format and size.
+    info, and a standalone codec file its format and size, with whatever its
+    header stores: a gzip's name and mtime, an xz, zstd, lz4 or snappy file's
+    original size.
 
     Args:
         inputs: The archives or compressed files to describe.

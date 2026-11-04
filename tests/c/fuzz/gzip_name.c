@@ -1,4 +1,4 @@
-// libFuzzer target for the gzip header's stored name, which is read by path
+// libFuzzer target for what `info` reads from a header without decoding
 
 #include "standalone.h"
 #include <stdint.h>
@@ -31,5 +31,15 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   fwrite(data, 1, size, f);
   fclose(f);
   free(gzip_original_name(path));
+
+  f = fopen(path, "rb");
+  if (f) {
+    uint64_t content_size;
+    standalone_content_size(f, FORMAT_XZ, &content_size);
+    standalone_content_size(f, FORMAT_ZSTD, &content_size);
+    standalone_content_size(f, FORMAT_LZ4, &content_size);
+    standalone_content_size(f, FORMAT_SNAPPY, &content_size);
+    fclose(f);
+  }
   return 0;
 }

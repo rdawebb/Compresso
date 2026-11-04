@@ -1,5 +1,6 @@
 """Tests for the core compression/decompression functionality."""
 
+import gzip
 import importlib.util
 import lzma
 import os
@@ -708,3 +709,225 @@ class TestCodecThreads:
                 str(sample_text_file), str(tmp_path / "out.zst"), "zstd", threads=-1
             )
         assert not (tmp_path / "out.zst").exists()
+
+
+def _zstd_frame(*blocks: bytes, size: int | None = None) -> bytes:
+    """Build a zstd frame from its encoded blocks, stating `size` if given."""
+    magic = b"\x28\xb5\x2f\xfd"
+    if size is None:
+        return magic + b"\x00\x50" + b"".join(blocks)  # Descriptor, then window
+
+    return magic + b"\xe0" + size.to_bytes(8, "little") + b"".join(blocks)
+
+
+def _zstd_block(payload: bytes, *, last: bool = True) -> bytes:
+    """Encode a raw zstd block."""
+    return ((len(payload) << 3) | last).to_bytes(3, "little") + payload
+
+
+def _lz4_frame(
+    *blocks: bytes, size: int | None = 3, flg: int = 0, extra: bytes = b""
+) -> bytes:
+    """Build an lz4 frame of stored blocks, stating `size` if given.
+
+    `extra` follows the content size, for a dictionary ID; every checksum `flg`
+    asks for is left as zero, as nothing here checks one.
+    """
+    flg |= 0x60 | (0x08 if size is not None else 0)  # Version 01, independent
+    header = bytes([flg, 0x40])
+    if size is not None:
+        header += size.to_bytes(8, "little")
+    block_checksum = b"\0" * 4 if flg & 0x10 else b""
+    stored = b"".join(
+        (len(block) | 0x8000_0000).to_bytes(4, "little") + block + block_checksum
+        for block in blocks
+    )
+    content_checksum = b"\0" * 4 if flg & 0x04 else b""
+    return (
+        b"\x04\x22\x4d\x18"
+        + header
+        + extra
+        + b"\x00"
+        + stored
+        + b"\0" * 4
+        + content_checksum
+    )
+
+
+def _snappy_chunk(kind: int, body: bytes) -> bytes:
+    """Frame a snappy chunk, its checksum left as zero."""
+    return bytes([kind]) + (4 + len(body)).to_bytes(3, "little") + b"\0" * 4 + body
+
+
+SNAPPY_ID = b"\xff\x06\x00\x00sNaPpY"
+# A block of one literal, which opens with its decoded length
+SNAPPY_ABC = _snappy_chunk(0x00, b"\x03\x08abc")
+SNAPPY_DE = _snappy_chunk(0x01, b"de")
+
+
+class TestStoredContentSize:
+    """Test the size read from a file's metadata, which nothing decodes."""
+
+    FRAME = _zstd_frame(_zstd_block(b"abc"), size=3)
+    SKIPPABLE = b"\x50\x2a\x4d\x18" + (2).to_bytes(4, "little") + b"xx"
+    LZ4 = _lz4_frame(b"abc")
+
+    @pytest.mark.parametrize(
+        ("data", "size"),
+        [
+            (LZ4, 3),
+            (LZ4 + LZ4, 6),
+            (SKIPPABLE + LZ4 + SKIPPABLE, 3),
+            (_lz4_frame(b"ab", b"c"), 3),
+            # Block and content checksums, and a dictionary ID
+            (_lz4_frame(b"ab", b"c", flg=0x15, extra=b"\x01\0\0\0"), 3),
+        ],
+    )
+    def test_lz4_frames_are_walked(
+        self, tmp_path: Path, data: bytes, size: int
+    ) -> None:
+        """Test the sum over every frame, whatever each one's layout."""
+        path = tmp_path / "f.lz4"
+        path.write_bytes(data)
+
+        assert _core.stored_content_size(path) == size
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            _lz4_frame(b"abc", size=None),  # Written from a stream
+            LZ4 + _lz4_frame(b"abc", size=None),
+            LZ4[:-1],
+            LZ4 + b"junk",
+            LZ4 + LZ4[:10],
+        ],
+    )
+    def test_lz4_states_no_size_unless_fully_described(
+        self, tmp_path: Path, data: bytes
+    ) -> None:
+        """Test that a partial sum is never reported as the size."""
+        path = tmp_path / "f.lz4"
+        path.write_bytes(data)
+
+        assert _core.stored_content_size(path) is None
+
+    @pytest.mark.parametrize(
+        ("data", "size"),
+        [
+            (SNAPPY_ID + SNAPPY_ABC, 3),
+            (SNAPPY_ID + SNAPPY_ABC + SNAPPY_DE, 5),
+            (SNAPPY_ID + b"\xfe\x02\x00\x00xx" + SNAPPY_DE, 2),  # Padding
+            (SNAPPY_ID + SNAPPY_ABC + SNAPPY_ID + SNAPPY_DE, 5),  # Concatenated
+            (SNAPPY_ID, 0),
+        ],
+    )
+    def test_snappy_chunks_are_walked(
+        self, tmp_path: Path, data: bytes, size: int
+    ) -> None:
+        """Test the sum over every data chunk, skipping the rest."""
+        path = tmp_path / "f.sz"
+        path.write_bytes(data)
+
+        assert _core.stored_content_size(path) == size
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            SNAPPY_ID + SNAPPY_ABC[:-1],
+            SNAPPY_ID + SNAPPY_ABC + b"j",
+            SNAPPY_ID + _snappy_chunk(0x02, b""),  # Reserved unskippable
+            SNAPPY_ID + _snappy_chunk(0x00, b"\x81\x80\x04"),  # States 65537
+            SNAPPY_ID + _snappy_chunk(0x01, b"x" * 65537),
+        ],
+    )
+    def test_snappy_states_no_size_unless_fully_described(
+        self, tmp_path: Path, data: bytes
+    ) -> None:
+        """Test that a partial sum, or one no decoder accepts, is never stated."""
+        path = tmp_path / "f.sz"
+        path.write_bytes(data)
+
+        assert _core.stored_content_size(path) is None
+
+    @pytest.mark.parametrize(
+        ("data", "size"),
+        [
+            (FRAME, 3),
+            (FRAME + FRAME, 6),
+            (SKIPPABLE + FRAME + SKIPPABLE, 3),
+            (_zstd_frame(_zstd_block(b"ab", last=False), _zstd_block(b"c"), size=3), 3),
+            (_zstd_frame(b"\x0b\x00\x00a", size=1), 1),  # RLE, stores one byte
+            # Single segment with a one-byte size field
+            (b"\x28\xb5\x2f\xfd\x20\x03" + _zstd_block(b"abc"), 3),
+            # Content checksum follows the blocks
+            (
+                b"\x28\xb5\x2f\xfd\x24\x03" + _zstd_block(b"abc") + b"\xaa" * 4,
+                3,
+            ),
+            # Window byte, then a one-byte dictionary ID, then an eight-byte size
+            (
+                b"\x28\xb5\x2f\xfd\xc1\x50\x07"
+                + (3).to_bytes(8, "little")
+                + _zstd_block(b"abc"),
+                3,
+            ),
+        ],
+    )
+    def test_zstd_frames_are_walked(
+        self, tmp_path: Path, data: bytes, size: int | None
+    ) -> None:
+        """Test the sum over every frame, whatever each one's layout."""
+        path = tmp_path / "f.zst"
+        path.write_bytes(data)
+
+        assert _core.stored_content_size(path) == size
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            _zstd_frame(_zstd_block(b"abc")),  # Written from a stream
+            FRAME + _zstd_frame(_zstd_block(b"abc")),
+            FRAME[:-1],
+            FRAME + b"junk",
+            FRAME + FRAME[:6],
+            FRAME + SKIPPABLE[:-1],
+        ],
+    )
+    def test_zstd_states_no_size_unless_fully_described(
+        self, tmp_path: Path, data: bytes
+    ) -> None:
+        """Test that a partial sum is never reported as the size."""
+        path = tmp_path / "f.zst"
+        path.write_bytes(data)
+
+        assert _core.stored_content_size(path) is None
+
+    def test_xz_sums_every_stream(self, tmp_path: Path) -> None:
+        """Test concatenated streams and the padding allowed between them."""
+        path = tmp_path / "f.xz"
+        path.write_bytes(
+            lzma.compress(b"a" * 100) + b"\0" * 4 + lzma.compress(b"b" * 200)
+        )
+
+        assert _core.stored_content_size(path) == 300
+
+    @pytest.mark.parametrize(
+        "damage",
+        [lambda d: d[:-1], lambda d: d + b"junk"],
+        ids=["truncated", "trailing"],
+    )
+    def test_xz_states_no_size_unless_fully_described(
+        self, tmp_path: Path, damage: Callable[[bytes], bytes]
+    ) -> None:
+        """Test that a cut or extended file has no footer where it should be."""
+        path = tmp_path / "f.xz"
+        path.write_bytes(damage(lzma.compress(b"a" * 100)))
+
+        assert _core.stored_content_size(path) is None
+
+    def test_other_formats_state_nothing(self, tmp_path: Path) -> None:
+        """Test that a format with no such metadata gets no answer."""
+        path = tmp_path / "f.gz"
+        path.write_bytes(gzip.compress(b"data"))
+
+        assert _core.stored_content_size(path) is None

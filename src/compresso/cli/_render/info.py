@@ -14,6 +14,18 @@ from .._app import app
 from . import format_size, format_time, succeed
 
 
+def _format_mtime(mtime: float) -> str:
+    """Format a modification time for display.
+
+    Args:
+        mtime: Seconds since the epoch.
+
+    Returns:
+        The local date and time, to the minute.
+    """
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
+
+
 def list_entries(entries: list[ArchiveEntry], *, long: bool = False) -> None:
     """Print one line per entry: its size, then its path.
 
@@ -69,7 +81,7 @@ def _entry_detail_line(entry: ArchiveEntry) -> str:
         type_bit = stat.S_IFREG
 
     mode = stat.filemode(type_bit | entry.mode)
-    mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry.mtime))
+    mtime = _format_mtime(entry.mtime)
     has_no_data = entry.is_dir or entry.is_symlink or entry.is_hardlink
     size = "" if has_no_data else format_size(size_bytes=entry.size)
 
@@ -152,30 +164,62 @@ def archive_info(
     return data
 
 
-def codec_info(file: Path, fmt: str, *, as_json: bool) -> dict[str, object]:
+def codec_info(
+    file: Path,
+    fmt: str,
+    *,
+    stored_name: str | None = None,
+    mtime: int | None = None,
+    orig_size: int | None = None,
+    as_json: bool,
+) -> dict[str, object]:
     """Describe a standalone codec file, e.g. a `.gz`, by its format and size.
 
     Args:
         file: The file's path.
         fmt: The file's detected format.
+        stored_name: The name its header stores, if any.
+        mtime: The modification time its header stores, if any.
+        orig_size: The uncompressed size its metadata states, if any.
         as_json: If True, print nothing; the caller prints the returned item.
 
     Returns:
         The file's JSON item.
     """
     size: int = file.stat().st_size
-    data: dict[str, object] = {"path": str(file), "format": fmt, "size": size}
+    data: dict[str, object] = {
+        "path": str(file),
+        "format": fmt,
+        "size": size,
+        "stored_name": stored_name,
+        "mtime": mtime,
+        "orig_size": orig_size,
+    }
+
+    if as_json:
+        return data
 
     lines: list[str] = [
         "",
         f"File:          {file}",
         f"Format:        {fmt}",
         f"Size:          {format_size(size_bytes=size)}",
-        "",
     ]
 
-    if not as_json:
-        print("\n".join(lines))
+    if stored_name is not None:
+        lines.append(f"Stored name:   {stored_name}")
+
+    if mtime is not None:
+        lines.append(f"Modified:      {_format_mtime(mtime)}")
+
+    if orig_size is not None:
+        lines.append(f"Original size: {format_size(size_bytes=orig_size)}")
+
+    if orig_size:
+        lines.append(f"Compression:   {size / orig_size * 100:.1f}% of original")
+
+    print("\n".join(lines))
+    print()
 
     return data
 

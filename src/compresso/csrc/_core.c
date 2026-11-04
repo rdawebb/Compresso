@@ -835,6 +835,30 @@ static PyObject *py_gzip_stored_name(PyObject *Py_UNUSED(self),
   return result;
 }
 
+static PyObject *py_stored_content_size(PyObject *Py_UNUSED(self),
+                                        PyObject *args) {
+  PyObject *file_path_bytes = NULL;
+
+  if (!PyArg_ParseTuple(args, "O&", PyUnicode_FSConverter, &file_path_bytes)) {
+    return NULL; // Error already set
+  }
+
+  Format format;
+  FILE *f = open_source(PyBytes_AS_STRING(file_path_bytes), &format);
+  Py_DECREF(file_path_bytes);
+  if (!f) {
+    return NULL;
+  }
+
+  uint64_t size;
+  int stated = standalone_content_size(f, format, &size) == 0;
+  fclose(f);
+  if (!stated) {
+    Py_RETURN_NONE;
+  }
+  return PyLong_FromUnsignedLongLong(size);
+}
+
 static PyObject *py_format_is_archive(PyObject *Py_UNUSED(self),
                                       PyObject *args) {
   const char *format_name = NULL;
@@ -1028,6 +1052,9 @@ static PyMethodDef CoreMethods[] = {
      "Detect the format of a file."},
     {"gzip_stored_name", (PyCFunction)py_gzip_stored_name, METH_VARARGS,
      "Return the name a gzip header stores (FNAME), or None."},
+    {"stored_content_size", (PyCFunction)py_stored_content_size, METH_VARARGS,
+     "Return the uncompressed size an xz, zstd, lz4 or snappy file's own "
+     "metadata states, or None."},
     {"format_stores_hardlinks", (PyCFunction)py_format_stores_hardlinks,
      METH_VARARGS,
      "Return whether an archive format stores a file's later names as links."},

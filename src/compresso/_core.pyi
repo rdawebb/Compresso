@@ -251,6 +251,13 @@ def gzip_stored_name(file_path: StrOrBytesPath) -> bytes | None:
     Always None for a non-gzip file.
     """
 
+def stored_content_size(file_path: StrOrBytesPath) -> int | None:
+    """Return the uncompressed size an xz, zstd, lz4 or snappy file states, or None.
+
+    Reads no compressed data, so a damaged file can still state a size; None for
+    any other format, a zstd or lz4 frame written from a stream, or trailing data.
+    """
+
 def format_is_archive(format: str) -> bool:
     """Return whether a format's container can hold more than one entry."""
 

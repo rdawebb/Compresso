@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import gzip
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 import orjson
+import pytest
 
 from compresso.cli._render import EXIT_FAILED
 
@@ -42,6 +45,55 @@ class TestInfo:
 
         assert "Format:        gzip" in output
         assert "Size:" in output
+
+    def test_gzip_shows_its_stored_name_and_mtime(self, tmp_path: Path) -> None:
+        """Test that a gzip's header detail is shown, and is in the JSON."""
+        packed = tmp_path / "p.gz"
+        with (
+            packed.open("wb") as raw,
+            gzip.GzipFile("stored.txt", "wb", fileobj=raw, mtime=86400 * 365) as f,
+        ):
+            f.write(b"data")
+
+        output = invoke("info", packed).output
+        item = orjson.loads(invoke("info", packed, "--json").output)[0]
+
+        assert "Stored name:   stored.txt" in output
+        assert (
+            f"Modified:      {time.strftime('%Y-%m-%d', time.localtime(item['mtime']))}"
+            in output
+        )
+        assert "Original size" not in output
+        assert item["stored_name"] == "stored.txt"
+        assert item["mtime"] == 86400 * 365
+        assert item["orig_size"] is None
+
+    def test_gzip_name_need_not_be_utf8(self, tmp_path: Path) -> None:
+        """Test that a name of raw bytes can still be printed and put in JSON."""
+        packed = tmp_path / "p.gz"
+        flagged = bytearray(gzip.compress(b"data", mtime=0))
+        flagged[3] |= 0x08  # FNAME
+        packed.write_bytes(flagged[:10] + b"caf\xe9.txt\0" + flagged[10:])
+
+        items = orjson.loads(invoke("info", packed, "--json").output)
+
+        assert items[0]["stored_name"] == "caf\ufffd.txt"
+
+    @pytest.mark.parametrize("suffix", [".xz", ".zst", ".lz4", ".sz"])
+    def test_stated_original_size_is_shown(
+        self, payload: Path, tmp_path: Path, suffix: str
+    ) -> None:
+        """Test that the size comes from the file, for the ratio to use too."""
+        packed = tmp_path / f"p{suffix}"
+        invoke("compress", payload, "-o", packed, "-q")
+
+        output = invoke("info", packed).output
+        item = orjson.loads(invoke("info", packed, "--json").output)[0]
+
+        assert "Original size:" in output
+        assert "Compression:" in output
+        assert item["orig_size"] == payload.stat().st_size
+        assert item["stored_name"] is None
 
     def test_several_inputs_carry_on_past_an_unrecognised_one(
         self, payload: Path, tmp_path: Path, make_archive: Callable[[str], Path]

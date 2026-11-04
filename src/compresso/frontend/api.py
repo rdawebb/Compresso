@@ -29,6 +29,7 @@ from ._formats import (
     STANDALONE_FORMATS,
     STANDALONE_SUFFIXES,
     canonical_standalone_format,
+    gzip_stored_mtime,
 )
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 from .archive_api import _OVERWRITE_CODES, OverwriteMode
@@ -380,11 +381,8 @@ def plan_decompression(
             if name not in ("", ".."):
                 dest_path = src_path.parent / name
 
-        mtime: int | None = None
-        if restore_name and detected == "gzip":
-            with src_path.open("rb") as f:
-                # MTIME, bytes 4-7; zero means none was stored
-                mtime = int.from_bytes(f.read(8)[4:], "little") or None
+        restores_mtime: bool = restore_name and detected == "gzip"
+        mtime: int | None = gzip_stored_mtime(src_path) if restores_mtime else None
 
         return replace(plan(detected, True), mtime=mtime)
 
