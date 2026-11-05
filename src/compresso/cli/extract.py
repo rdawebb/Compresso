@@ -83,7 +83,13 @@ def _extract_archive(job: ExtractJob, quiet: bool, verbose: bool, remove: bool) 
     total: int = sum(entry.size for entry in plan.entries)
     before = plan.archive.stat()
     elapsed, _ = run_job(
-        job, plan.archive, "Extracting", total, quiet=quiet, what="Extraction"
+        job,
+        plan.archive,
+        "Extracting",
+        total,
+        quiet=quiet,
+        what="Extraction",
+        verbose=verbose,
     )
 
     # Names and includes the filter dropped still count as found
@@ -132,6 +138,7 @@ def _decompress_one_file(
         compressed_size,
         quiet=quiet,
         what="Decompression",
+        verbose=verbose,
     )
 
     # RENAME may have written somewhere other than `plan.dest`; job.plan is
@@ -406,9 +413,6 @@ def extract(
                 directory.mkdir(parents=True, exist_ok=True)
 
             _decompress_one_file(job, quiet, verbose, remove)
-
-    if not (quiet or verbose):
-        print()
 
     try:
         sys.exit(run_all(plan_extract(request), run_one, "Extraction"))

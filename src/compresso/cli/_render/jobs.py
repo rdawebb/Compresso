@@ -55,6 +55,7 @@ def compress_plan(plan: CompressionPlan) -> None:
         f"Compressing: {plan.src}",
         f"Output:      {plan.dest}",
         f"Algorithm:   {plan.backend_name}",
+        f"Input size:  {format_size(size_bytes=plan.input_size)}",
     ]
 
     if not plan.options.format:
@@ -78,22 +79,14 @@ def compress_result(plan: CompressionPlan, written: Path, elapsed: float) -> Non
     ratio: int | float = (
         (compressed_size / plan.input_size) * 100 if plan.input_size > 0 else 0
     )
-    speed_mbs: int | float = (
-        (plan.input_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-    )
 
-    print()
     succeed("Compression successful!\n")
     if written != plan.dest:
         print(f"  Renamed to:      {written}")
 
     print(
-        f"  Original size:   {format_size(size_bytes=plan.input_size)}\n"
-        f"  Compressed size: {format_size(size_bytes=compressed_size)}\n"
-        f"  Ratio:           {ratio:.1f}% of original\n"
-        f"  Time:            {format_time(seconds=elapsed)}\n"
-        f"  Speed:           {speed_mbs:.2f} MB/s\n"
-        f"  Saved:           {format_size(size_bytes=plan.input_size - compressed_size)}\n"
+        f"  Output size: {format_size(size_bytes=compressed_size)} ({ratio:.1f}%)\n"
+        f"  Time:        {format_time(seconds=elapsed)}\n"
     )
 
 
@@ -119,14 +112,20 @@ def archive_result(plan: ArchivePlan, written: Path, elapsed: float) -> None:
         written: The path actually written, which a rename may have moved.
         elapsed: Seconds the job took.
     """
+    compressed_size: int = written.stat().st_size
+    ratio: int | float = (
+        (compressed_size / plan.total_input_size) * 100
+        if plan.total_input_size > 0
+        else 0
+    )
+
     succeed("Archive created!\n")
     if written != plan.output:
         print(f"  Renamed to:   {written}")
 
     print(
-        f"  Input size:   {format_size(size_bytes=plan.total_input_size)}\n"
-        f"  Archive size: {format_size(size_bytes=written.stat().st_size)}\n"
-        f"  Time:         {format_time(seconds=elapsed)}\n"
+        f"  Archive size: {format_size(size_bytes=written.stat().st_size)} ({ratio:.1f}%)\n"
+        f"  Time:         {format_time(seconds=elapsed)}\n",
     )
 
 

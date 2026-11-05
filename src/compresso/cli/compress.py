@@ -51,7 +51,13 @@ def _compress_one_file(
     before = plan.src.stat()
 
     elapsed, _ = run_job(
-        job, plan.src, "Compressing", plan.input_size, quiet=quiet, what="Compression"
+        job,
+        plan.src,
+        "Compressing",
+        plan.input_size,
+        quiet=quiet,
+        what="Compression",
+        verbose=verbose,
     )
 
     # RENAME may have written somewhere other than `plan.dest`; job.plan is
@@ -98,6 +104,7 @@ def _archive_many(job: ArchiveJob, quiet: bool, verbose: bool) -> None:
         plan.total_input_size,
         quiet=quiet,
         what="Archive",
+        verbose=verbose,
     )
 
     # RENAME may have written somewhere other than `plan.output`; job.plan is
@@ -313,9 +320,6 @@ def compress(
                 _archive_many(job, quiet, verbose)
             else:
                 _compress_one_file(job, quiet, verbose, remove)
-
-        if not (quiet or verbose):
-            print()
 
         sys.exit(run_all([job], run_one, "Compression"))
 

@@ -104,6 +104,7 @@ def run_job(
     *,
     quiet: bool,
     what: str,
+    verbose: bool = False,
 ) -> tuple[float, JobResult]:
     """Run `job` under a progress bar.
 
@@ -114,6 +115,8 @@ def run_job(
         total: Expected byte count; small jobs get no bar.
         quiet: Whether to suppress the bar.
         what: Operation name for messages, e.g. "Compression".
+        verbose: Whether a blank line follows the bar, to set it apart from
+            the stats block.
 
     Returns:
         Seconds the job took, and its result; a `SourceRemovalError` in that
@@ -124,10 +127,12 @@ def run_job(
     """
     start_time: float = time.time()
 
-    with progress_bar(
-        label, total, enabled=not quiet and total > BAR_THRESHOLD
-    ) as on_progress:
+    bar: bool = not quiet and total > BAR_THRESHOLD
+    with progress_bar(label, total, enabled=bar) as on_progress:
         result = job.run(progress=on_progress)
+
+    if bar and verbose:
+        print()
 
     elapsed: float = time.time() - start_time
 

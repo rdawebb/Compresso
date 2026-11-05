@@ -146,7 +146,6 @@ def archive_info(
         return data
 
     lines: list[str] = [
-        "",
         f"File:          {file}",
         f"Format:        {fmt}",
         f"Entries:       {len(entries)}",
@@ -159,7 +158,6 @@ def archive_info(
         lines.append(f"Compression:   {ratio:.1f}% of original")
 
     print("\n".join(lines))
-    print()
 
     return data
 
@@ -200,7 +198,6 @@ def codec_info(
         return data
 
     lines: list[str] = [
-        "",
         f"File:          {file}",
         f"Format:        {fmt}",
         f"Size:          {format_size(size_bytes=size)}",
@@ -219,7 +216,6 @@ def codec_info(
         lines.append(f"Compression:   {size / orig_size * 100:.1f}% of original")
 
     print("\n".join(lines))
-    print()
 
     return data
 

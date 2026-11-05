@@ -113,23 +113,22 @@ def benchmark(
         )
 
         if not results:
-            fail("No benchmark results generated\n")
+            fail("No benchmark results generated")
 
         benchmark_results(results)
 
         if update_cache:
             print()
-            succeed("Speed cache updated\n")
-            print()
+            succeed("Speed cache updated")
 
     except KeyboardInterrupt:
         cancelled("Benchmark")
 
     except FileNotFoundError as e:
-        fail(f"File not found: {e}\n", EXIT_USAGE)
+        fail(f"File not found: {e}", EXIT_USAGE)
 
     except Exception as e:
-        fail(f"Benchmark error: {e}\n")
+        fail(f"Benchmark error: {e}")
 
 
 def register() -> None:

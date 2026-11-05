@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import io
 import os
 import re
 import subprocess
@@ -16,6 +17,7 @@ import pytest
 import compresso.cli.formats as formats_cmd
 import compresso.cli.info as info_cmd
 import compresso.cli.list as list_cmd
+from compresso import cli
 from compresso.cli._render import (
     EXIT_CANCELLED,
     EXIT_FAILED,
@@ -227,14 +229,14 @@ class TestOutput:
         ratio = r"\(\d+%\) " if args[0] == "compress" else ""
 
         assert re.fullmatch(
-            rf"\n{re.escape(str(name))}  \S+ \S+ → \S+ \S+ {ratio}in \S+\n\n", output
+            rf"{re.escape(str(name))}  \S+ \S+ → \S+ \S+ {ratio}in \S+\n\n", output
         ), output
 
     def test_inputs_are_one_blank_line_apart(
         self, payload: Path, tmp_path: Path
     ) -> None:
-        """Test that several inputs' lines have one blank line before, between
-        and after them."""
+        """Test that several inputs' lines have one blank line between and
+        after them."""
         inputs = [tmp_path / "a.gz", tmp_path / "b.gz"]
         for path in inputs:
             path.write_bytes(gzip.compress(payload.read_bytes()))
@@ -242,7 +244,7 @@ class TestOutput:
         output = invoke("extract", *inputs, "-C", tmp_path / "dest").output
 
         assert re.fullmatch(
-            "".join(rf"\n{re.escape(str(path))}  [^\n]+\n" for path in inputs) + "\n",
+            "".join(rf"{re.escape(str(path))}  [^\n]+\n\n" for path in inputs),
             output,
         ), output
 
@@ -291,6 +293,35 @@ class TestOutput:
 
         assert result.returncode == EXIT_FAILED
         assert result.stdout.index(str(good)) < result.stdout.index(str(bad))
+
+    @pytest.mark.parametrize(
+        "argv",
+        [["formats"], ["--help"], ["info", "missing"]],
+        ids=["unpadded", "already-padded", "stderr"],
+    )
+    def test_a_terminal_gets_one_blank_line_around_output(
+        self, monkeypatch: pytest.MonkeyPatch, argv: list[str]
+    ) -> None:
+        """Test that main() pads terminal output to exactly one blank line
+        before and after, whether or not it already had one."""
+
+        class Terminal(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        # One stream for both, so the order they were written in shows
+        terminal = Terminal()
+        monkeypatch.setattr(sys, "stdout", terminal)
+        monkeypatch.setattr(sys, "stderr", terminal)
+        monkeypatch.setattr(sys, "argv", ["compresso", *argv])
+        monkeypatch.setattr(cli._Padded, "tail", None)
+        monkeypatch.setattr(cli._Padded, "last", None)
+
+        with pytest.raises(SystemExit):
+            cli.main()
+
+        visible = re.sub(r"\x1b\[[0-9;]*m| ", "", terminal.getvalue())
+        assert re.fullmatch(r"\n[^\n].*[^\n]\n\n", visible, re.DOTALL), visible
 
 
 class TestExitCodes:
