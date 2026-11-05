@@ -18,6 +18,7 @@ import compresso.cli.formats as formats_cmd
 import compresso.cli.info as info_cmd
 import compresso.cli.list as list_cmd
 from compresso import cli
+from compresso._core import Error
 from compresso.cli._render import (
     EXIT_CANCELLED,
     EXIT_FAILED,
@@ -466,6 +467,19 @@ class TestInterruption:
         result = invoke(*args, expect=EXIT_CANCELLED)
 
         assert expected in result.output
+
+
+def test_core_error_names_the_operation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that an error from the core is reported as the command's, not unexpected."""
+
+    def boom() -> None:
+        raise Error("boom")
+
+    monkeypatch.setattr(formats_cmd, "list_capabilities", boom)
+
+    result = invoke("formats", expect=EXIT_FAILED)
+
+    assert "Format listing error: boom" in result.output
 
 
 class TestThreads:

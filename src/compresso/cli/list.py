@@ -11,7 +11,7 @@ from ..frontend.archive_api import ArchiveEntry
 from ..frontend.archive_api import plan_extraction as plan_archive_extraction
 from ..frontend.dispatch import is_archive_format
 from ._app import app
-from ._render import cancelled, fail, input_header
+from ._render import handles_errors, input_header
 from ._render.info import list_entries, print_json
 from ._run import InputFailed, require_files, run_all
 
@@ -44,6 +44,7 @@ def _read_entries(path: Path) -> tuple[str, list[ArchiveEntry]]:
     return fmt, plan.entries
 
 
+@handles_errors("Listing")
 def list_archives(
     inputs: Annotated[
         list[Path], app.Argument(help="Archives to list", readable=False)
@@ -83,19 +84,12 @@ def list_archives(
 
         listings.append({"path": str(path), "format": fmt, "entries": entries})
 
-    try:
-        code = run_all(inputs, run_one, "Listing")
+    code = run_all(inputs, run_one, "Listing")
 
-        if output_json:
-            print_json(listings)
+    if output_json:
+        print_json(listings)
 
-        sys.exit(code)
-
-    except KeyboardInterrupt:
-        cancelled("Listing")
-
-    except Exception as e:
-        fail(f"Unexpected error: {e}")
+    sys.exit(code)
 
 
 def register() -> None:

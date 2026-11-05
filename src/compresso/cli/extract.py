@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 from typing import Annotated
 
-from .._core import BackendError, Error, HeaderError
 from ..frontend.api import DecompressionJob
 from ..frontend.archive_api import (
     ExtractJob,
@@ -17,7 +16,7 @@ from ..frontend.archive_api import (
 )
 from ..frontend.dispatch import ExtractRequest, plan_extract
 from ._app import app
-from ._render import EXIT_USAGE, cancelled, fail, report_warning
+from ._render import EXIT_USAGE, fail, handles_errors, report_warning
 from ._render.jobs import (
     decompress_plan,
     decompress_result,
@@ -165,6 +164,7 @@ def _decompress_one_file(
         remove_source(plan.src, before)
 
 
+@handles_errors("Extraction")
 def extract(
     inputs: Annotated[
         list[Path],
@@ -414,17 +414,7 @@ def extract(
 
             _decompress_one_file(job, quiet, verbose, remove)
 
-    try:
-        sys.exit(run_all(plan_extract(request), run_one, "Extraction"))
-
-    except KeyboardInterrupt:
-        cancelled("Extraction")
-
-    except (Error, HeaderError, BackendError) as e:
-        fail(f"Extraction error: {e}")
-
-    except Exception as e:
-        fail(f"Unexpected error: {e}")
+    sys.exit(run_all(plan_extract(request), run_one, "Extraction"))
 
 
 def register() -> None:

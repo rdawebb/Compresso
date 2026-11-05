@@ -7,13 +7,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
-from .._core import BackendError, Error, HeaderError, SourceRemovalError
+from .._core import SourceRemovalError
 from ..frontend.api import CompressionJob, Strategy
 from ..frontend.archive_api import ArchiveJob, OverwriteMode
 from ..frontend.dispatch import CompressRequest, plan_compress
 from ..introspect.capabilities import list_capabilities
 from ._app import app
-from ._render import EXIT_USAGE, cancelled, fail
+from ._render import EXIT_USAGE, fail, handles_errors
 from ._render.jobs import (
     archive_plan,
     archive_result,
@@ -130,6 +130,7 @@ def _archive_many(job: ArchiveJob, quiet: bool, verbose: bool) -> None:
         raise NotRemoved(*result.error.failures)
 
 
+@handles_errors("Compression")
 def compress(
     inputs: Annotated[
         list[Path], app.Argument(help="Files and directories to compress")
@@ -284,53 +285,43 @@ def compress(
     if verbose and quiet:
         fail("Error: -v contradicts -q", EXIT_USAGE)
 
+    if not inputs:
+        fail("Error: No input paths given", EXIT_USAGE)
+
+    algo_name: str | None = None if algo == "auto" else algo
+
+    # -a names the algorithm that -s would otherwise pick
+    if algo_name and strategy:
+        fail("Error: -a contradicts -s", EXIT_USAGE)
+
+    request = CompressRequest(
+        inputs=inputs,
+        output=output,
+        format=format,
+        algo=algo_name,
+        strategy=strategy,
+        level=level,
+        overwrite=overwrite_mode,
+        threads=threads,
+        include=include or (),
+        exclude=exclude or (),
+        remove_sources=remove,
+        dereference=dereference,
+    )
+
     try:
-        if not inputs:
-            fail("Error: No input paths given", EXIT_USAGE)
+        job = plan_compress(request)
 
-        algo_name: str | None = None if algo == "auto" else algo
+    except ValueError as e:
+        fail(f"Error: {e}", EXIT_USAGE)
 
-        # -a names the algorithm that -s would otherwise pick
-        if algo_name and strategy:
-            fail("Error: -a contradicts -s", EXIT_USAGE)
+    def run_one(job: CompressionJob | ArchiveJob) -> None:
+        if isinstance(job, ArchiveJob):
+            _archive_many(job, quiet, verbose)
+        else:
+            _compress_one_file(job, quiet, verbose, remove)
 
-        request = CompressRequest(
-            inputs=inputs,
-            output=output,
-            format=format,
-            algo=algo_name,
-            strategy=strategy,
-            level=level,
-            overwrite=overwrite_mode,
-            threads=threads,
-            include=include or (),
-            exclude=exclude or (),
-            remove_sources=remove,
-            dereference=dereference,
-        )
-
-        try:
-            job = plan_compress(request)
-
-        except ValueError as e:
-            fail(f"Error: {e}", EXIT_USAGE)
-
-        def run_one(job: CompressionJob | ArchiveJob) -> None:
-            if isinstance(job, ArchiveJob):
-                _archive_many(job, quiet, verbose)
-            else:
-                _compress_one_file(job, quiet, verbose, remove)
-
-        sys.exit(run_all([job], run_one, "Compression"))
-
-    except KeyboardInterrupt:
-        cancelled("Compression")
-
-    except (Error, HeaderError, BackendError) as e:
-        fail(f"Compression error: {e}")
-
-    except Exception as e:
-        fail(f"Unexpected error: {e}")
+    sys.exit(run_all([job], run_one, "Compression"))
 
 
 def register() -> None:

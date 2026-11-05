@@ -10,7 +10,7 @@ from typing import Annotated
 from .._core import TrailingDataWarning
 from ..frontend.api import VerificationJob
 from ._app import app
-from ._render import cancelled, fail, succeed
+from ._render import handles_errors, succeed
 from ._run import InputFailed, require_files, run_all, run_job
 
 
@@ -33,6 +33,7 @@ def _verify_one(job: VerificationJob, quiet: bool) -> None:
         succeed(f"OK: {plan.src}")
 
 
+@handles_errors("Test")
 def verify(
     inputs: Annotated[
         list[Path],
@@ -67,20 +68,13 @@ def verify(
     """
     require_files(inputs)
 
-    try:
-        jobs = (VerificationJob.from_file(src=path, threads=threads) for path in inputs)
+    jobs = (VerificationJob.from_file(src=path, threads=threads) for path in inputs)
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", TrailingDataWarning)
-            code = run_all(jobs, lambda job: _verify_one(job, quiet), "Test")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", TrailingDataWarning)
+        code = run_all(jobs, lambda job: _verify_one(job, quiet), "Test")
 
-        sys.exit(code)
-
-    except KeyboardInterrupt:
-        cancelled("Test")
-
-    except Exception as e:
-        fail(f"Unexpected error: {e}")
+    sys.exit(code)
 
 
 def register() -> None:

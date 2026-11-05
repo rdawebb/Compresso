@@ -10,7 +10,7 @@ from ..frontend.api import Strategy
 from ..introspect.benchmark import benchmark_file
 from ..introspect.capabilities import list_capabilities
 from ._app import app
-from ._render import EXIT_USAGE, cancelled, fail, succeed
+from ._render import EXIT_USAGE, fail, handles_errors, succeed
 from ._render.benchmark import benchmark_header, benchmark_results
 
 # Built from the core so `--help` lists only what this build compiled in
@@ -36,6 +36,7 @@ def _parse_level(value: str) -> int | None:
         fail(f"Error: Invalid level {value!r}; use an integer or 'auto'", EXIT_USAGE)
 
 
+@handles_errors("Benchmark")
 def benchmark(
     file: Annotated[Path, app.Argument(help="File to benchmark")],
     algo: Annotated[
@@ -121,14 +122,8 @@ def benchmark(
             print()
             succeed("Speed cache updated")
 
-    except KeyboardInterrupt:
-        cancelled("Benchmark")
-
     except FileNotFoundError as e:
         fail(f"File not found: {e}", EXIT_USAGE)
-
-    except Exception as e:
-        fail(f"Benchmark error: {e}")
 
 
 def register() -> None:

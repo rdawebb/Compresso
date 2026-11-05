@@ -6,12 +6,14 @@ each command's reports.
 
 from __future__ import annotations
 
+import functools
 import sys
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, ParamSpec
 
+from ..._core import Error
 from ...frontend._job import ProgressCallback
 from .._app import app
 
@@ -128,6 +130,39 @@ def cancelled(what: str) -> NoReturn:
     """
     app.echo(message=app.style(text=f"\n✗ {what} cancelled", fg="yellow"), err=True)
     sys.exit(EXIT_CANCELLED)
+
+
+P = ParamSpec("P")
+
+
+def handles_errors(what: str) -> Callable[[Callable[P, None]], Callable[P, None]]:
+    """Give a command the standard Ctrl-C and error exits.
+
+    Args:
+        what: Operation name for the messages, e.g. "Compression".
+
+    Returns:
+        A decorator wrapping the command.
+    """
+
+    def decorate(fn: Callable[P, None]) -> Callable[P, None]:
+        @functools.wraps(fn)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> None:
+            try:
+                fn(*args, **kwargs)
+
+            except KeyboardInterrupt:
+                cancelled(what)
+
+            except Error as e:
+                fail(f"{what} error: {e}")
+
+            except Exception as e:
+                fail(f"Unexpected error: {e}")
+
+        return wrapper
+
+    return decorate
 
 
 @contextmanager

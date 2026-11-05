@@ -14,7 +14,7 @@ from ..frontend.archive_api import plan_extraction as plan_archive_extraction
 from ..frontend.dispatch import is_archive_format
 from ..introspect.file_inspect import inspect as inspect_file
 from ._app import app
-from ._render import cancelled, fail, input_header
+from ._render import handles_errors, input_header
 from ._render.info import archive_info, codec_info, file_info, print_json
 from ._run import InputFailed, require_files, run_all
 
@@ -64,6 +64,7 @@ def _describer(path: Path) -> Callable[..., dict[str, object]]:
     )
 
 
+@handles_errors("Inspection")
 def info(
     inputs: Annotated[
         list[Path], app.Argument(help="Files to describe", readable=False)
@@ -97,19 +98,12 @@ def info(
 
         items.append(describe(as_json=output_json))
 
-    try:
-        code = run_all(inputs, run_one, "Inspection")
+    code = run_all(inputs, run_one, "Inspection")
 
-        if output_json:
-            print_json(items)
+    if output_json:
+        print_json(items)
 
-        sys.exit(code)
-
-    except KeyboardInterrupt:
-        cancelled("Inspection")
-
-    except Exception as e:
-        fail(f"Unexpected error: {e}")
+    sys.exit(code)
 
 
 def register() -> None:
