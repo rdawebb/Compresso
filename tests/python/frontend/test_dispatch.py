@@ -45,7 +45,7 @@ class TestInferFormat:
             ("x.7z", "7z"),
             ("x.gz", "gz"),
             ("x.zst", "zst"),
-            ("x.comp", None),
+            ("x.COMP", "comp"),
             ("x.txt", None),
             ("x", None),
             ("x.foo.lz4", "lz4"),
@@ -222,12 +222,42 @@ class TestPlanCompress:
         with pytest.raises(ValueError, match="tar.gz"):
             plan_compress(CompressRequest([tree], format="gz"))
 
+    def test_comp_format_is_the_compresso_container(
+        self, small_file: Path, tmp_path: Path
+    ) -> None:
+        """Test that naming comp writes the default container, whatever the output."""
+        output = tmp_path / "misleading.gz"
+
+        job = plan_compress(CompressRequest([small_file], output=output, format="COMP"))
+
+        assert isinstance(job, CompressionJob)
+        assert job.plan.can_compress
+        assert job.plan.options.format is None
+        assert job.plan.dest == output
+
+    @pytest.mark.parametrize(
+        ("fmt", "output"), [("comp", None), (None, Path("out.comp"))], ids=["-F", "-o"]
+    )
+    def test_comp_format_refuses_several_inputs(
+        self, tree: Path, fmt: str | None, output: Path | None
+    ) -> None:
+        """Test that comp on a directory errors, suggesting zip, not tar.comp."""
+        with pytest.raises(ValueError, match="such as zip"):
+            plan_compress(CompressRequest([tree], output=output, format=fmt))
+
     def test_unknown_format_cannot_run(self, small_file: Path) -> None:
-        """Test that an unknown format plans a job that refuses to run."""
+        """Test that an unknown format plans a job that refuses to run, naming
+        the archive formats as well as the single-file ones."""
         job = plan_compress(CompressRequest([small_file], format="bogus"))
 
         assert isinstance(job, CompressionJob)
         assert not job.plan.can_compress
+        assert job.plan.reason_if_unavailable is not None
+        assert job.plan.reason_if_unavailable.startswith("Unknown format: bogus")
+        assert all(
+            f" {fmt}," in job.plan.reason_if_unavailable
+            for fmt in ("gz", "zip", "tar", "tar.gz")
+        )
 
 
 class TestPlanExtract:

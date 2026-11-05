@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
+from ..frontend.api import Strategy
 from ..introspect.benchmark import benchmark_file
+from ..introspect.capabilities import list_capabilities
 from ._app import app
 from ._render import EXIT_USAGE, cancelled, fail, succeed
 from ._render.benchmark import benchmark_header, benchmark_results
+
+# Built from the core so `--help` lists only what this build compiled in
+Algo = StrEnum("Algo", [c.name for c in list_capabilities()])
 
 
 def _parse_level(value: str) -> int | None:
@@ -33,13 +39,21 @@ def _parse_level(value: str) -> int | None:
 def benchmark(
     file: Annotated[Path, app.Argument(help="File to benchmark")],
     algo: Annotated[
-        list[str] | None,
-        app.Option("--algo", "-a", help="Algorithm to run; repeatable (default: all)"),
+        list[Algo] | None,
+        app.Option(
+            "--algo",
+            "-a",
+            case_sensitive=False,
+            help="Algorithm to run; repeatable (default: all)",
+        ),
     ] = None,
     strategy: Annotated[
-        list[str] | None,
+        list[Strategy] | None,
         app.Option(
-            "--strategy", "-s", help="Strategy to run; repeatable (default: all)"
+            "--strategy",
+            "-s",
+            case_sensitive=False,
+            help="Strategy to run; repeatable (default: all)",
         ),
     ] = None,
     level: Annotated[

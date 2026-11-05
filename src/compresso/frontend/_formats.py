@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .._core import format_is_archive, standalone_formats
+from .._core import archive_capabilities, format_is_archive, standalone_formats
 
 # What an archive is written as when neither the caller nor its name says
 DEFAULT_ARCHIVE_FORMAT = "zip"
@@ -22,6 +22,24 @@ STANDALONE_FORMATS: dict[str, str] = {
 STANDALONE_SUFFIXES: dict[str, str] = {
     f["name"]: "." + f["exts"][0] for f in _STANDALONE
 }
+
+
+def archive_formats() -> dict[str, list[str]]:
+    """Return each available archive format with its compressed variants.
+
+    Returns:
+        Each archive format (e.g. "tar") mapped to the variants the core
+        writes, named by the extension an output is given (e.g. "tar.gz").
+    """
+    # Asked of the core, which names a variant by any of the codec's names
+    return {
+        archive["name"]: [
+            f"{archive['name']}.{fmt['exts'][0]}"
+            for fmt in _STANDALONE
+            if format_is_archive(f"{archive['name']}.{fmt['exts'][0]}")
+        ]
+        for archive in archive_capabilities()
+    }
 
 
 def canonical_standalone_format(name: str | None) -> str | None:
@@ -47,8 +65,8 @@ def infer_format(output: Path | None) -> str | None:
         output: The path the user asked to write, or None.
 
     Returns:
-        The format named by the suffix, or None if it names none; includes
-        `.comp`, whose container is the default anyway.
+        The format named by the suffix, "comp" for the Compresso container,
+        or None if it names none.
     """
     if output is None:
         return None
@@ -61,7 +79,7 @@ def infer_format(output: Path | None) -> str | None:
     ):
         return f"tar.{suffix}"
 
-    if suffix in STANDALONE_FORMATS or format_is_archive(suffix):
+    if suffix == "comp" or suffix in STANDALONE_FORMATS or format_is_archive(suffix):
         return suffix
 
     return None

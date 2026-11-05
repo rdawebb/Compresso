@@ -32,8 +32,13 @@ class TestCompressRoundTrip:
     # The backends are covered in core and C tests; this checks the flags
     @pytest.mark.parametrize(
         "args",
-        [("-a", "bzip2"), ("-a", "zstd", "-l", "19"), ("-s", "fast")],
-        ids=["algo", "level", "strategy"],
+        [
+            ("-a", "bzip2"),
+            ("-a", "zstd", "-l", "19"),
+            ("-s", "fast"),
+            ("-s", "MAX_RATIO"),
+        ],
+        ids=["algo", "level", "strategy", "strategy-any-case"],
     )
     def test_algorithms_round_trip(
         self, payload: Path, tmp_path: Path, args: tuple[str, ...]
@@ -58,6 +63,19 @@ class TestCompOnlyFlags:
         )
 
         assert "-a contradicts -s" in result.output
+
+    @pytest.mark.parametrize(
+        ("args", "choices"),
+        [(("-s", "fsat"), ("fast", "max_ratio")), (("-a", "zsdt"), ("auto", "zstd"))],
+        ids=["strategy", "algo"],
+    )
+    def test_unknown_choice(
+        self, payload: Path, args: tuple[str, ...], choices: tuple[str, ...]
+    ) -> None:
+        """Test that a strategy or algorithm that isn't one is refused while parsing."""
+        result = invoke("compress", payload, *args, expect=EXIT_USAGE)
+
+        assert all(choice in result.output for choice in choices)
 
     @pytest.mark.parametrize(
         ("args", "message"),

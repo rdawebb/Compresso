@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
@@ -37,13 +38,27 @@ from .archive_api import _OVERWRITE_CODES, OverwriteMode
 MB = 1024 * 1024
 
 
+class Strategy(StrEnum):
+    """Which backend the Compresso container picks when no algorithm is given.
+
+    Attributes:
+        FAST: Favour speed.
+        BALANCED: Trade speed against ratio.
+        MAX_RATIO: Favour the smallest output.
+    """
+
+    FAST = "fast"
+    BALANCED = "balanced"
+    MAX_RATIO = "max_ratio"
+
+
 @dataclass(frozen=True)
 class CompressionOptions:
     """User-facing compression options.
 
     Attributes:
         algo: Compression algorithm name, or None for auto.
-        strategy: Compression strategy - "fast", "balanced", or "max_ratio".
+        strategy: Compression strategy; ignored when `algo` is given.
         level: Compression level, or None for the backend's default; the
             range depends on the backend (see `BackendCapabilities`).
         format: Single-file container to write, e.g. "gz". None writes the
@@ -56,7 +71,7 @@ class CompressionOptions:
     """
 
     algo: str | None = None
-    strategy: str = "balanced"
+    strategy: Strategy = Strategy.BALANCED
     level: int | None = None
     format: str | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
@@ -252,25 +267,26 @@ def plan_compression(
             reason_if_unavailable="No suitable backend found for the selected strategy",
         )
 
-    if options.level is not None:
-        try:
-            # The core's own check, so each backend's range lives in one place
-            if standalone:
-                check_level(options.level, format=standalone)
-            else:
-                check_level(options.level, algo=backend_name)
+    try:
+        # The core's own check, so each backend's range lives in one place;
+        # with no level it still refuses an unknown algorithm
+        level = to_core_level(options.level)
+        if standalone:
+            check_level(level, format=standalone)
+        else:
+            check_level(level, algo=backend_name)
 
-        except ValueError as e:
-            return CompressionPlan(
-                src=src_path,
-                dest=dest_path,
-                options=options,
-                input_size=input_size,
-                backend_name=backend_name,
-                estimated_seconds=None,
-                can_compress=False,
-                reason_if_unavailable=str(e),
-            )
+    except ValueError as e:
+        return CompressionPlan(
+            src=src_path,
+            dest=dest_path,
+            options=options,
+            input_size=input_size,
+            backend_name=backend_name,
+            estimated_seconds=None,
+            can_compress=False,
+            reason_if_unavailable=str(e),
+        )
 
     mb_s: int | float = get_estimated_speeds(algo=backend_name, operation="compress")
     estimated_seconds: int | float = (input_size / MB) / mb_s if input_size > 0 else 0.0

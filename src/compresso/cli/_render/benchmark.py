@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from ...introspect.benchmark import BenchmarkResult
@@ -14,8 +15,8 @@ def _level_name(level: int | None) -> str | int:
 def benchmark_header(
     file: Path,
     repeats: int,
-    algos: list[str] | None,
-    strategies: list[str] | None,
+    algos: Sequence[str] | None,
+    strategies: Sequence[str] | None,
     levels: list[int | None],
 ) -> None:
     """Print what the run covers, then a blank line.

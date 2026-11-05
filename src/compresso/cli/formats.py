@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from .._core import archive_capabilities, format_is_archive, standalone_formats
+from .._core import standalone_formats
+from ..frontend._formats import archive_formats
 from ..introspect.capabilities import list_capabilities
 from ._app import app
 from ._render import cancelled, fail
@@ -17,19 +18,7 @@ def formats() -> None:
         if not caps:
             fail("No compression backends available")
 
-        standalone = standalone_formats()
-        # Asked of the core, which names a variant by any of the codec's
-        # names; listed by the extension an output is given
-        archives = {
-            archive["name"]: [
-                f"{archive['name']}.{fmt['exts'][0]}"
-                for fmt in standalone
-                if format_is_archive(f"{archive['name']}.{fmt['exts'][0]}")
-            ]
-            for archive in archive_capabilities()
-        }
-
-        list_formats(caps, standalone, archives)
+        list_formats(caps, standalone_formats(), archive_formats())
 
     except KeyboardInterrupt:
         cancelled("Format listing")

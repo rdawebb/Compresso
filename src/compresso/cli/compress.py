@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import sys
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
 from .._core import BackendError, Error, HeaderError, SourceRemovalError
-from ..frontend.api import CompressionJob
+from ..frontend.api import CompressionJob, Strategy
 from ..frontend.archive_api import ArchiveJob, OverwriteMode
 from ..frontend.dispatch import CompressRequest, plan_compress
+from ..introspect.capabilities import list_capabilities
 from ._app import app
 from ._render import EXIT_USAGE, cancelled, fail
 from ._render.jobs import (
@@ -21,6 +23,9 @@ from ._render.jobs import (
     summary,
 )
 from ._run import NotRemoved, conflict_mode, remove_source, run_all, run_job
+
+# Built from the core so `--help` lists only what this build compiled in
+Algo = StrEnum("Algo", ["auto"] + [c.name for c in list_capabilities()])
 
 
 def _compress_one_file(
@@ -134,11 +139,11 @@ def compress(
             "--format",
             "-F",
             case_sensitive=False,
-            help="Container to write, e.g. gz, zst, tar.zst, zip",
+            help="Container to write, e.g. comp, gz, zst, tar.zst, zip",
         ),
     ] = None,
     algo: Annotated[
-        str | None,
+        Algo,
         app.Option(
             "--algo",
             "-a",
@@ -146,14 +151,14 @@ def compress(
             help="Compression algorithm to use",
             show_default=False,
         ),
-    ] = "auto",
+    ] = Algo.auto,
     strategy: Annotated[
-        str | None,
+        Strategy | None,
         app.Option(
             "--strategy",
             "-s",
             case_sensitive=False,
-            help="Compression strategy to use (fast/balanced/max_ratio)",
+            help="Compression strategy to use",
             show_default="balanced",
         ),
     ] = None,
@@ -276,20 +281,18 @@ def compress(
         if not inputs:
             fail("Error: No input paths given", EXIT_USAGE)
 
-        algo_lower: str | None = algo.lower() if algo else None
-        if algo_lower == "auto":
-            algo_lower = None
+        algo_name: str | None = None if algo == "auto" else algo
 
         # -a names the algorithm that -s would otherwise pick
-        if algo_lower and strategy:
+        if algo_name and strategy:
             fail("Error: -a contradicts -s", EXIT_USAGE)
 
         request = CompressRequest(
             inputs=inputs,
             output=output,
             format=format,
-            algo=algo_lower,
-            strategy=strategy.lower() if strategy else None,
+            algo=algo_name,
+            strategy=strategy,
             level=level,
             overwrite=overwrite_mode,
             threads=threads,

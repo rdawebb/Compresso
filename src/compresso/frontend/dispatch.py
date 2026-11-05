@@ -10,10 +10,12 @@ from pathlib import Path
 from .._core import detect_format, format_is_archive
 from ._formats import (
     DEFAULT_ARCHIVE_FORMAT,
+    STANDALONE_SUFFIXES,
+    archive_formats,
     canonical_standalone_format,
     infer_format,
 )
-from .api import CompressionJob, CompressionOptions, DecompressionJob
+from .api import CompressionJob, CompressionOptions, DecompressionJob, Strategy
 from .archive_api import (
     ArchiveJob,
     ArchiveOptions,
@@ -105,7 +107,7 @@ class CompressRequest:
     output: Path | None = None
     format: str | None = None
     algo: str | None = None
-    strategy: str | None = None
+    strategy: Strategy | None = None
     level: int | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
     threads: int = 0
@@ -162,6 +164,16 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
     # Only the .comp container records its codec; the others fix their own
     comp_flag: str | None = "-a" if request.algo else "-s" if request.strategy else None
 
+    # The Compresso container is what no format writes, so naming it is the same
+    if fmt and fmt.lower() == "comp":
+        if many:
+            raise ValueError(
+                "comp holds a single file; "
+                f"use an archive format such as {DEFAULT_ARCHIVE_FORMAT} for several"
+            )
+
+        fmt = None
+
     if format_is_single_file(fmt) and many:
         raise ValueError(
             f"{fmt} holds a single file; "
@@ -214,6 +226,21 @@ def plan_compress(request: CompressRequest) -> CompressionJob | ArchiveJob:
             job.plan,
             can_compress=False,
             reason_if_unavailable=f"{comp_flag} applies only to .comp, not {fmt}",
+        )
+
+    # Archive formats returned above, so this is one the core doesn't know;
+    # the plan's own message lists only the single-file formats
+    elif fmt and not format_is_single_file(fmt):
+        known = ["comp", *(s.lstrip(".") for s in STANDALONE_SUFFIXES.values())]
+        for archive, variants in archive_formats().items():
+            known += [archive, *variants]
+
+        job.plan = replace(
+            job.plan,
+            can_compress=False,
+            reason_if_unavailable=(
+                f"Unknown format: {fmt} (expected one of {', '.join(known)})"
+            ),
         )
 
     return job
