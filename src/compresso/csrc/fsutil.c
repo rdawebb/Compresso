@@ -70,7 +70,7 @@ int fs_join(char *out, size_t out_size, const char *dir, const char *name) {
 
   memcpy(out, dir, dir_len);
   if (sep_len)
-    out[dir_len] = '/';
+    out[dir_len] = FS_SEP;
   memcpy(out + dir_len + sep_len, name, name_len + 1);
   return 0;
 }

@@ -14,6 +14,7 @@
 // so prefix comparisons must test both
 #if defined(_WIN32) || defined(_WIN64)
 #define FS_IS_SEP(c) ((c) == '/' || (c) == '\\')
+#define FS_SEP '\\'
 #define FS_NULL_DEVICE "NUL"
 
 #include <wchar.h>
@@ -23,6 +24,7 @@
 int fs_widen(const char *utf8, wchar_t *out, int out_count);
 #else
 #define FS_IS_SEP(c) ((c) == '/')
+#define FS_SEP '/'
 #define FS_NULL_DEVICE "/dev/null"
 #endif
 
