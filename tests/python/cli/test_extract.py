@@ -525,6 +525,10 @@ class TestRemoveInput:
 
         assert source.exists()
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows can't replace the archive while libarchive has it open",
+    )
     def test_entry_written_over_the_archive_stays(self, tmp_path: Path) -> None:
         """Test that --rm doesn't delete what replaced the archive at its path."""
         archive = tmp_path / "self.tar"

@@ -51,6 +51,8 @@ int fs_widen(const char *utf8, wchar_t *out, int out_count) {
   return 0;
 }
 
+static void set_errno_from_win32(int fallback);
+
 static int fs_narrow(const wchar_t *wide, char *out, int out_size) {
   if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, out,
                           out_size, NULL, NULL) == 0) {
@@ -93,18 +95,33 @@ static int fs_stat_wide(const wchar_t *wpath, fs_stat *out) {
   else
     out->type = FS_TYPE_OTHER;
 
-  // _wstat64 leaves st_ino 0, so the identity needs a handle
+  // _wstat64 describes a symlink itself, and leaves st_ino 0; the handle
+  // follows links and supplies the rest; failing to open means dangling link
   if (out->type == FS_TYPE_FILE || out->type == FS_TYPE_DIR) {
     HANDLE h = fs_open_for_metadata(wpath);
-    BY_HANDLE_FILE_INFORMATION info;
-    if (h != INVALID_HANDLE_VALUE) {
-      if (GetFileInformationByHandle(h, &info)) {
-        out->dev = info.dwVolumeSerialNumber;
-        out->ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow;
-        out->nlink = info.nNumberOfLinks;
-      }
-      CloseHandle(h);
+    if (h == INVALID_HANDLE_VALUE) {
+      set_errno_from_win32(ENOENT);
+      return -1;
     }
+    BY_HANDLE_FILE_INFORMATION info;
+    BOOL ok = GetFileInformationByHandle(h, &info);
+    CloseHandle(h);
+    if (!ok) {
+      set_errno_from_win32(EIO);
+      return -1;
+    }
+
+    int is_dir = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    out->type = is_dir ? FS_TYPE_DIR : FS_TYPE_FILE;
+    out->size =
+        is_dir ? 0 : ((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow;
+    // FILETIME counts 100ns intervals since 1601-01-01
+    ULONGLONG ticks = ((ULONGLONG)info.ftLastWriteTime.dwHighDateTime << 32) |
+                      info.ftLastWriteTime.dwLowDateTime;
+    out->mtime = (int64_t)(ticks / 10000000ULL) - 11644473600LL;
+    out->dev = info.dwVolumeSerialNumber;
+    out->ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow;
+    out->nlink = info.nNumberOfLinks;
   }
 
   return 0;

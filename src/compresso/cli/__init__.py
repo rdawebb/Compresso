@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import re
 import sys
 from typing import Any, TextIO
@@ -84,6 +85,11 @@ class _Padded:
 
 def main() -> None:
     """Entry point for the CLI."""
+    # A pipe on Windows takes the locale code page, which can't encode markers
+    # like '→'; escape rather than raise
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(errors="backslashreplace")
+
     # Not when piped, as tar and gzip don't pad what a script reads
     if sys.stdout.isatty():
         sys.stdout = _Padded(sys.stdout)

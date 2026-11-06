@@ -839,6 +839,8 @@ class TestStoredContentSize:
             SNAPPY_ID + _snappy_chunk(0x00, b"\x81\x80\x04"),  # States 65537
             SNAPPY_ID + _snappy_chunk(0x01, b"x" * 65537),
         ],
+        # The bytes as an ID overflow Windows' 32767-character PYTEST_CURRENT_TEST
+        ids=["truncated", "trailing", "reserved", "states-65537", "chunk-65537"],
     )
     def test_snappy_states_no_size_unless_fully_described(
         self, tmp_path: Path, data: bytes
