@@ -52,21 +52,33 @@ py.install_sources(
   'cli/__init__.py',
   'cli/__main__.py',
   'cli/_app.py',
-  'cli/_dispatch.py',
-  'cli/_render.py',
-  'cli/algos.py',
+  'cli/_run.py',
   'cli/benchmark.py',
   'cli/compress.py',
   'cli/extract.py',
-  'cli/inspect.py',
+  'cli/formats.py',
+  'cli/info.py',
+  'cli/list.py',
+  'cli/verify.py',
   subdir: 'compresso/cli',
 )
 
 py.install_sources(
+  'cli/_render/__init__.py',
+  'cli/_render/benchmark.py',
+  'cli/_render/formats.py',
+  'cli/_render/info.py',
+  'cli/_render/jobs.py',
+  subdir: 'compresso/cli/_render',
+)
+
+py.install_sources(
   'frontend/__init__.py',
+  'frontend/_formats.py',
   'frontend/_job.py',
   'frontend/api.py',
   'frontend/archive_api.py',
+  'frontend/dispatch.py',
   subdir: 'compresso/frontend',
 )
 

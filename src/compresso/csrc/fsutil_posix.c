@@ -47,6 +47,14 @@ int fs_stat_path(const char *path, fs_stat *out) {
   return 0;
 }
 
+int fs_stat_target(const char *path, fs_stat *out) {
+  struct stat st;
+  if (stat(path, &st) != 0)
+    return -1;
+  fs_fill_stat(&st, out);
+  return 0;
+}
+
 int fs_fstat(FILE *f, fs_stat *out) {
   struct stat st;
   if (fstat(fileno(f), &st) != 0)

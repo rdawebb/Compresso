@@ -1,10 +1,10 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include "archive_ops.h"
-#include "paths.h"
 #include "../common.h"
 #include "../fsutil.h"
 #include "../standalone.h"
+#include "paths.h"
 #include "walk.h"
 #include <archive_entry.h>
 #include <errno.h>
@@ -81,32 +81,9 @@ static int check_storable_entry_name(const char *name) {
 
 // A walked path's entry name, or NULL with an exception set
 static char *entry_name(const WalkItem *item) {
-  const char *rel_path = item->path + item->prefix_len;
-  while (FS_IS_SEP(*rel_path))
-    rel_path++;
-
-  char *name = strdup(rel_path);
-  if (!name) {
-    PyErr_NoMemory();
+  char *name = walk_entry_name(item->path, item->prefix_len);
+  if (!name)
     return NULL;
-  }
-
-  // Normalise to '/', collapsing runs and dropping a trailing one; writers add
-  // the trailing separator a directory needs
-  char *w = name;
-  for (const char *r = name; *r; r++) {
-    if (FS_IS_SEP(*r)) {
-      // Keep a leading separator so the absolute name is still rejected below
-      if (w > name && w[-1] == '/')
-        continue;
-      *w++ = '/';
-    } else {
-      *w++ = *r;
-    }
-  }
-  while (w > name + 1 && w[-1] == '/')
-    w--;
-  *w = '\0';
 
   if (check_storable_entry_name(name) != 0) {
     free(name);
@@ -206,12 +183,67 @@ static int add_walked_entries(const CArchive *archive, void *writer,
   return 0;
 }
 
+// Deepest first; a directory holding something unstored stays, and so does ".";
+// a followed link goes, but not its target; a path that won't go lands in
+// `failed`, and the rest still go
+static int remove_walked(const WalkList *walked, PyObject *failed) {
+  for (size_t i = walked->count; i-- > 0;) {
+    const WalkItem *item = &walked->items[i];
+    if (item->via_link)
+      continue;
+    int is_dir = item->st.type == FS_TYPE_DIR && !item->followed;
+    if ((is_dir ? fs_rmdir(item->path) : fs_unlink(item->path)) == 0)
+      continue;
+    if (is_dir && (errno == ENOTEMPTY || errno == EEXIST || errno == EINVAL))
+      continue;
+
+    const char *reason = strerror(errno);
+    PyObject *failure =
+        Py_BuildValue("(Ns)", PyUnicode_DecodeFSDefault(item->path), reason);
+    int rc = failure ? PyList_Append(failed, failure) : -1;
+    Py_XDECREF(failure);
+    if (rc != 0)
+      return -1;
+  }
+  return 0;
+}
+
+// The archive is committed by now, so what's raised also says where it went
+static int remove_stored(const WalkList *walked, const char *output,
+                         const CompErrors *errors) {
+  PyObject *failed = PyList_New(0);
+  int ret = failed ? remove_walked(walked, failed) : -1;
+
+  if (ret == 0 && PyList_GET_SIZE(failed) > 0) {
+    ret = -1;
+    PyObject *error = PyObject_CallFunction(
+        errors->source_removal, "s",
+        "Archive written, but some of its sources could not be deleted");
+    PyObject *path = PyUnicode_DecodeFSDefault(output);
+    if (error && path && PyObject_SetAttrString(error, "output", path) == 0 &&
+        PyObject_SetAttrString(error, "failures", failed) == 0)
+      PyErr_SetObject(errors->source_removal, error);
+    Py_XDECREF(path);
+    Py_XDECREF(error);
+  }
+
+  Py_XDECREF(failed);
+  return ret;
+}
+
 // ---- Archive Operations ----
 
 int create_archive(const char *output_path, const CompressionPipeline *pipeline,
                    const char **input_paths, size_t num_paths,
-                   int overwrite_existing, char *out_actual_path,
+                   const PathFilter *filter, int overwrite_existing,
+                   int remove_sources, int follow_links, char *out_actual_path,
                    size_t out_actual_path_size, CoreContext *ctx) {
+  if (remove_sources && overwrite_existing == 1) {
+    PyErr_SetString(PyExc_ValueError,
+                    "remove_sources can't be combined with skip");
+    return -1;
+  }
+
   if (!pipeline_is_valid(pipeline) || pipeline->archive == ARCHIVE_NONE) {
     char name[32];
     pipeline_display_name(pipeline, name, sizeof(name));
@@ -276,13 +308,13 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
   own_files_add(&own, output_path);
 
   WalkList walked = {0};
-  int ret = walk_sources(input_paths, num_paths, &own, archive->stores_specials,
-                         archive->stores_hardlinks, ctx, &walked);
+  int ret = walk_sources(input_paths, num_paths, filter, &own,
+                         archive->stores_specials, archive->stores_hardlinks,
+                         follow_links, ctx, &walked);
   if (ret == 0) {
     ctx_begin_stage(ctx, walked.file_bytes);
     ret = add_walked_entries(archive, writer, &walked, ctx);
   }
-  walk_list_free(&walked);
 
   // libzip does all its compression inside zip_close, so that is where its
   // progress comes from; a run that already failed is discarded instead
@@ -292,28 +324,33 @@ int create_archive(const char *output_path, const CompressionPipeline *pipeline,
 
   if (!stream) {
     if (ret == 0)
-      return output_commit(tmp_path, &out);
-    fs_unlink(tmp_path);
-    return ret;
-  }
-
-  // libarchive only knows its write callback failed; failed streams return
-  // a failure to every write; empty ones swap in the cause (e.g. cancelled)
-  if (ret != 0) {
-    int stream_ret = codec_write(stream, NULL, 0);
-    if (stream_ret != 0) {
-      PyErr_Clear();
-      ret = stream_ret;
+      ret = output_commit(tmp_path, &out);
+    else
+      fs_unlink(tmp_path);
+  } else {
+    // libarchive only knows its write callback failed; failed streams return
+    // a failure to every write; empty ones swap in the cause (e.g. cancelled)
+    if (ret != 0) {
+      int stream_ret = codec_write(stream, NULL, 0);
+      if (stream_ret != 0) {
+        PyErr_Clear();
+        ret = stream_ret;
+      }
     }
+
+    int codec_ret = codec_writer_close(stream, ret != 0);
+    if (ret == 0)
+      ret = codec_ret;
+
+    char failure[64];
+    snprintf(failure, sizeof(failure), "%s compression failed", fmt->name);
+    ret = output_finish(ret, NULL, tmp, tmp_path, &out, ctx->errors, failure);
   }
 
-  int codec_ret = codec_writer_close(stream, ret != 0);
-  if (ret == 0)
-    ret = codec_ret;
-
-  char failure[64];
-  snprintf(failure, sizeof(failure), "%s compression failed", fmt->name);
-  return output_finish(ret, NULL, tmp, tmp_path, &out, ctx->errors, failure);
+  if (ret == 0 && remove_sources)
+    ret = remove_stored(&walked, out_actual_path, ctx->errors);
+  walk_list_free(&walked);
+  return ret;
 }
 
 FILE *open_archive_source(const char *archive_path, const CArchive **archive,
@@ -468,12 +505,19 @@ static PyObject *read_archive_entries(const CArchive *archive, void *reader,
   return list;
 }
 
-PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
+// One read of an archive; `data_ctx` takes the progress of its entries' data,
+// and is NULL when a codec stage already counts the input; returns 0 or a
+// negative code with an exception set
+typedef int (*ReaderPass)(const CArchive *archive, void *reader, void *state,
+                          CoreContext *data_ctx, CoreContext *ctx);
+
+static int run_reader_pass(const char *archive_path, ReaderPass pass,
+                           void *state, CoreContext *ctx) {
   const CArchive *archive;
   CompressionPipeline pipe;
   FILE *src = open_archive_source(archive_path, &archive, &pipe, ctx);
   if (!src)
-    return NULL;
+    return -1;
 
   // Decoded as libarchive reads
   CodecStream *stream = NULL;
@@ -490,22 +534,109 @@ PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
     reader = archive->create_reader(archive_path, ctx);
   }
 
-  PyObject *list = reader ? read_archive_entries(archive, reader, ctx) : NULL;
-  int failed = list == NULL;
-  // A close failure after a full listing would otherwise return the list
-  if (reader && archive->close_reader(reader, failed) != 0)
-    failed = 1;
+  // A cancel while opening fails the open, which can only return NULL
+  int ret = reader ? pass(archive, reader, state, stream ? NULL : ctx, ctx)
+            : ctx_cancelled(ctx) ? COMP_CANCELLED
+                                 : -1;
 
-  if (stream && close_codec_source(stream, src, !failed) != 0)
-    failed = 1;
-  else if (!stream && src)
+  // A close failure after a full pass would otherwise go unreported
+  if (reader && archive->close_reader(reader, ret != 0) != 0 && ret == 0)
+    ret = -1;
+
+  if (stream) {
+    int rc = close_codec_source(stream, src, ret == 0);
+    if (ret == 0)
+      ret = rc;
+  } else if (src) {
     fclose(src);
+  }
+  return ret;
+}
 
-  if (failed) {
+static int list_pass(const CArchive *archive, void *reader, void *state,
+                     CoreContext *data_ctx, CoreContext *ctx) {
+  (void)data_ctx;
+  PyObject **list = state;
+  *list = read_archive_entries(archive, reader, ctx);
+  return *list ? 0 : -1;
+}
+
+PyObject *list_archive_contents(const char *archive_path, CoreContext *ctx) {
+  PyObject *list = NULL;
+  if (run_reader_pass(archive_path, list_pass, &list, ctx) != 0) {
     Py_XDECREF(list);
     return NULL;
   }
   return list;
+}
+
+typedef struct {
+  FILE *sink; // Takes each file's data; NULL to only add up `declared`
+  uint64_t declared;
+} VerifyState;
+
+static int verify_pass(const CArchive *archive, void *reader, void *state,
+                       CoreContext *data_ctx, CoreContext *ctx) {
+  VerifyState *verify = state;
+  ArchiveEntry entry = {0};
+  int ret;
+
+  // NULL: the data pass reads the same headers again, and warns once there
+  while ((ret = archive->get_next_entry(reader, &entry,
+                                        verify->sink ? ctx : NULL)) == 1) {
+    int rc = ctx_advance(ctx, 0);
+    if (rc == 0 && entry.type == ENTRY_FILE) {
+      uint64_t written;
+      if (verify->sink)
+        rc = archive->extract_entry_data(reader, verify->sink, UINT64_MAX,
+                                         &written, data_ctx);
+      else
+        verify->declared += entry.size;
+    }
+    entry_reset(&entry);
+    if (rc != 0)
+      return rc;
+  }
+  return ret;
+}
+
+static int verify_archive(const char *archive_path,
+                          const CompressionPipeline *pipeline,
+                          CoreContext *ctx) {
+  FILE *sink = fs_fopen(FS_NULL_DEVICE, "wb");
+  if (!sink) {
+    PyErr_SetFromErrnoWithFilename(PyExc_OSError, FS_NULL_DEVICE);
+    return -1;
+  }
+
+  // A codec stream is decoded once, counting its compressed bytes; a plain file
+  // gets a headers pass first, for the total its data counts towards
+  VerifyState state = {NULL, 0};
+  int ret = 0;
+  if (pipeline->codec == FORMAT_UNKNOWN) {
+    ret = run_reader_pass(archive_path, verify_pass, &state, ctx);
+    ctx_begin_stage(ctx, state.declared);
+  }
+  if (ret == 0) {
+    state.sink = sink;
+    ret = run_reader_pass(archive_path, verify_pass, &state, ctx);
+  }
+
+  fclose(sink);
+  return ret;
+}
+
+int verify_file(const char *path, CoreContext *ctx) {
+  Format format;
+  FILE *src = open_source(path, &format);
+  if (!src)
+    return -1;
+  fclose(src);
+
+  CompressionPipeline pipe = pipeline_from_format(format, path);
+  if (pipe.archive != ARCHIVE_NONE)
+    return verify_archive(path, &pipe, ctx);
+  return decompress_file(path, NULL, ALGO_NONE, 0, NULL, 0, ctx);
 }
 
 // ---- Archive Capabilities ----

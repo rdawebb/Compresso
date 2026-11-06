@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include "archives/select.h"
 #include "codec/crc32c.h"
 #include "common.h"
 #include "fsutil.h"
@@ -240,6 +241,54 @@ fail:
   return 0;
 }
 
+// Glob patterns for `include` and `exclude`, decoded as UTF-8 as archives store
+// entry names; `keepalive` holds the str objects that own that UTF-8
+static int pattern_list_converter(PyObject *obj, void *out) {
+  PathList *list = out;
+  if (!obj) {
+    Py_CLEAR(list->keepalive);
+    free(list->paths);
+    list->paths = NULL;
+    return 1;
+  }
+
+  if (PyUnicode_Check(obj) || PyBytes_Check(obj)) {
+    PyErr_Format(PyExc_TypeError, "patterns must be a sequence of str, not %s",
+                 Py_TYPE(obj)->tp_name);
+    return 0;
+  }
+
+  list->keepalive = PySequence_Tuple(obj);
+  if (!list->keepalive) {
+    return 0;
+  }
+
+  Py_ssize_t n = PyTuple_GET_SIZE(list->keepalive);
+  list->paths = n > 0 ? safe_malloc((size_t)n * sizeof(char *)) : NULL;
+  list->count = (size_t)n;
+  if (n > 0 && !list->paths) {
+    goto fail;
+  }
+
+  for (Py_ssize_t i = 0; i < n; i++) {
+    PyObject *item = PyTuple_GET_ITEM(list->keepalive, i);
+    if (!PyUnicode_Check(item)) {
+      PyErr_Format(PyExc_TypeError, "patterns must contain only str, not %s",
+                   Py_TYPE(item)->tp_name);
+      goto fail;
+    }
+    list->paths[i] = PyUnicode_AsUTF8(item);
+    if (!list->paths[i]) {
+      goto fail;
+    }
+  }
+  return Py_CLEANUP_SUPPORTED;
+
+fail:
+  pattern_list_converter(NULL, list);
+  return 0;
+}
+
 // ---- Argument Parsing ----
 
 // Raises ValueError for an unknown strategy name
@@ -364,9 +413,11 @@ done:
 
 static PyObject *py_create_archive(PyObject *self, PyObject *args,
                                    PyObject *kwargs) {
-  static char *kwlist[] = {"output_path",       "format",    "input_paths",
-                           "compression_level", "overwrite", "threads",
-                           "progress",          "cancel",    NULL};
+  static char *kwlist[] = {
+      "output_path", "format",  "input_paths",    "compression_level",
+      "overwrite",   "threads", "progress",       "cancel",
+      "include",     "exclude", "remove_sources", "dereference",
+      NULL};
 
   PyObject *output_path_bytes = NULL;
   const char *format_name = NULL;
@@ -376,14 +427,21 @@ static PyObject *py_create_archive(PyObject *self, PyObject *args,
   int threads = 0;            // One per core
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
+  PathList include = {0};
+  PathList exclude = {0};
+  int remove_sources = 0;
+  int dereference = 0;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O&sO&|i$iiOO", kwlist,
-                                   PyUnicode_FSConverter, &output_path_bytes,
-                                   &format_name, path_list_converter, &inputs,
-                                   &compression_level, &overwrite_existing,
-                                   &threads, &progress, &cancel)) {
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "O&sO&|i$iiOOO&O&pp", kwlist, PyUnicode_FSConverter,
+          &output_path_bytes, &format_name, path_list_converter, &inputs,
+          &compression_level, &overwrite_existing, &threads, &progress, &cancel,
+          pattern_list_converter, &include, pattern_list_converter, &exclude,
+          &remove_sources, &dereference)) {
     return NULL; // Error already set
   }
+  PathFilter filter = {include.paths, include.count, exclude.paths,
+                       exclude.count};
 
   CompressionPipeline pipe = pipeline_from_name(format_name, compression_level);
   CoreContext ctx;
@@ -404,13 +462,16 @@ static PyObject *py_create_archive(PyObject *self, PyObject *args,
   }
 
   char actual_path[FS_PATH_MAX];
-  result = create_archive(PyBytes_AS_STRING(output_path_bytes), &pipe,
-                          inputs.paths, inputs.count, overwrite_existing,
-                          actual_path, sizeof(actual_path), &ctx);
+  result =
+      create_archive(PyBytes_AS_STRING(output_path_bytes), &pipe, inputs.paths,
+                     inputs.count, &filter, overwrite_existing, remove_sources,
+                     dereference, actual_path, sizeof(actual_path), &ctx);
 
 done:
   Py_DECREF(output_path_bytes);
   path_list_converter(NULL, &inputs);
+  pattern_list_converter(NULL, &include);
+  pattern_list_converter(NULL, &exclude);
   return finish_call(self, result, &ctx, actual_path);
 }
 
@@ -430,6 +491,8 @@ static PyObject *py_extract_archive(PyObject *self, PyObject *args,
                            "threads",
                            "progress",
                            "cancel",
+                           "include",
+                           "exclude",
                            NULL};
 
   PyObject *archive_path_bytes = NULL;
@@ -438,6 +501,8 @@ static PyObject *py_extract_archive(PyObject *self, PyObject *args,
   int threads = 0; // One per core
   PyObject *progress = NULL;
   PyObject *cancel = NULL;
+  PathList include = {0};
+  PathList exclude = {0};
 
   // Anything the caller does not pass keeps its default
   ExtractionPolicy policy = extraction_policy_default();
@@ -448,14 +513,17 @@ static PyObject *py_extract_archive(PyObject *self, PyObject *args,
   unsigned int max_depth = (unsigned int)policy.max_depth;
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "O&O&O|$iKIpppipiOO", kwlist, PyUnicode_FSConverter,
+          args, kwargs, "O&O&O|$iKIpppipiOOO&O&", kwlist, PyUnicode_FSConverter,
           &archive_path_bytes, PyUnicode_FSConverter, &output_dir_bytes,
           &files_obj, &policy.overwrite_existing, &max_total_size, &max_depth,
           &policy.preserve_permissions, &policy.exact_permissions,
           &policy.preserve_timestamps, &policy.allow_symlinks,
-          &policy.overwrite_dir_metadata, &threads, &progress, &cancel)) {
+          &policy.overwrite_dir_metadata, &threads, &progress, &cancel,
+          pattern_list_converter, &include, pattern_list_converter, &exclude)) {
     return NULL; // Error already set
   }
+  PathFilter filter = {include.paths, include.count, exclude.paths,
+                       exclude.count};
 
   policy.max_total_size = (uint64_t)max_total_size;
   policy.max_depth = (uint32_t)max_depth;
@@ -521,11 +589,13 @@ static PyObject *py_extract_archive(PyObject *self, PyObject *args,
 
   result = extract_archive(PyBytes_AS_STRING(archive_path_bytes),
                            PyBytes_AS_STRING(output_dir_bytes), files,
-                           num_files, &policy, &ctx);
+                           num_files, &filter, &policy, &ctx);
 
 done:
   Py_DECREF(archive_path_bytes);
   Py_DECREF(output_dir_bytes);
+  pattern_list_converter(NULL, &include);
+  pattern_list_converter(NULL, &exclude);
   free(files);
   Py_XDECREF(files_tuple);
   return finish_call(self, result, &ctx, NULL);
@@ -695,6 +765,31 @@ done:
   return finish_call(self, rc, &ctx, actual_path);
 }
 
+static PyObject *py_verify_file(PyObject *self, PyObject *args,
+                                PyObject *kwargs) {
+  static char *kwlist[] = {"path", "threads", "progress", "cancel", NULL};
+
+  PyObject *path_bytes = NULL;
+  int threads = 0; // One per core
+  PyObject *progress = NULL;
+  PyObject *cancel = NULL;
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O&|$iOO", kwlist,
+                                   PyUnicode_FSConverter, &path_bytes, &threads,
+                                   &progress, &cancel)) {
+    return NULL; // Error already set
+  }
+
+  CoreContext ctx;
+  int result = -1;
+  if (core_context_init(&ctx, self, progress, cancel, threads) == 0) {
+    result = verify_file(PyBytes_AS_STRING(path_bytes), &ctx);
+  }
+
+  Py_DECREF(path_bytes);
+  return finish_call(self, result, &ctx, NULL);
+}
+
 // ---- Format Detection Methods ----
 
 static PyObject *py_detect_format(PyObject *Py_UNUSED(self), PyObject *args) {
@@ -740,6 +835,30 @@ static PyObject *py_gzip_stored_name(PyObject *Py_UNUSED(self),
   return result;
 }
 
+static PyObject *py_stored_content_size(PyObject *Py_UNUSED(self),
+                                        PyObject *args) {
+  PyObject *file_path_bytes = NULL;
+
+  if (!PyArg_ParseTuple(args, "O&", PyUnicode_FSConverter, &file_path_bytes)) {
+    return NULL; // Error already set
+  }
+
+  Format format;
+  FILE *f = open_source(PyBytes_AS_STRING(file_path_bytes), &format);
+  Py_DECREF(file_path_bytes);
+  if (!f) {
+    return NULL;
+  }
+
+  uint64_t size;
+  int stated = standalone_content_size(f, format, &size) == 0;
+  fclose(f);
+  if (!stated) {
+    Py_RETURN_NONE;
+  }
+  return PyLong_FromUnsignedLongLong(size);
+}
+
 static PyObject *py_format_is_archive(PyObject *Py_UNUSED(self),
                                       PyObject *args) {
   const char *format_name = NULL;
@@ -752,6 +871,43 @@ static PyObject *py_format_is_archive(PyObject *Py_UNUSED(self),
 
   return PyBool_FromLong(pipeline_is_valid(&pipe) &&
                          pipe.archive != ARCHIVE_NONE);
+}
+
+static PyObject *py_format_stores_hardlinks(PyObject *Py_UNUSED(self),
+                                            PyObject *args) {
+  const char *format_name = NULL;
+
+  if (!PyArg_ParseTuple(args, "s", &format_name)) {
+    return NULL; // Error already set
+  }
+
+  CompressionPipeline pipe = pipeline_from_name(format_name, -1);
+  const CArchive *archive =
+      pipeline_is_valid(&pipe) ? find_archive_by_id(pipe.archive) : NULL;
+
+  return PyBool_FromLong(archive && archive->stores_hardlinks);
+}
+
+static PyObject *py_path_matches(PyObject *Py_UNUSED(self), PyObject *args) {
+  PyObject *path = NULL;
+  PathList patterns = {0};
+
+  if (!PyArg_ParseTuple(args, "UO&", &path, pattern_list_converter,
+                        &patterns)) {
+    return NULL; // Error already set
+  }
+
+  // The inverse of decode_entry_name, so a non-UTF-8 name keeps its bytes
+  PyObject *encoded =
+      PyUnicode_AsEncodedString(path, "utf-8", "surrogateescape");
+  PyObject *result =
+      encoded ? PyBool_FromLong(path_matches_any(
+                    PyBytes_AS_STRING(encoded), patterns.paths, patterns.count))
+              : NULL;
+
+  Py_XDECREF(encoded);
+  pattern_list_converter(NULL, &patterns);
+  return result;
 }
 
 // The set entries of a FormatDesc name slot, which fill from the front
@@ -888,11 +1044,23 @@ static PyMethodDef CoreMethods[] = {
     {"decompress_standalone",
      (PyCFunction)(void (*)(void))py_decompress_standalone,
      METH_VARARGS | METH_KEYWORDS, "Decompress a standalone format file."},
+    {"verify_file", (PyCFunction)(void (*)(void))py_verify_file,
+     METH_VARARGS | METH_KEYWORDS,
+     "Decode an archive or compressed file, writing nothing."},
 
     {"detect_format", (PyCFunction)py_detect_format, METH_VARARGS,
      "Detect the format of a file."},
     {"gzip_stored_name", (PyCFunction)py_gzip_stored_name, METH_VARARGS,
      "Return the name a gzip header stores (FNAME), or None."},
+    {"stored_content_size", (PyCFunction)py_stored_content_size, METH_VARARGS,
+     "Return the uncompressed size an xz, zstd, lz4 or snappy file's own "
+     "metadata states, or None."},
+    {"format_stores_hardlinks", (PyCFunction)py_format_stores_hardlinks,
+     METH_VARARGS,
+     "Return whether an archive format stores a file's later names as links."},
+    {"path_matches", (PyCFunction)py_path_matches, METH_VARARGS,
+     "Return whether any glob matches an entry path, as the archive filters "
+     "match it."},
     {"format_is_archive", (PyCFunction)py_format_is_archive, METH_VARARGS,
      "Check if a format is an archive format."},
     {"standalone_formats", (PyCFunction)py_standalone_formats, METH_NOARGS,
@@ -938,6 +1106,7 @@ static int core_exec(PyObject *module) {
        &errors->error},
       {&errors->incomplete_extraction, "compresso.IncompleteExtractionError",
        &errors->error},
+      {&errors->source_removal, "compresso.SourceRemovalError", &errors->error},
       {&errors->trailing_data_warning, "compresso.TrailingDataWarning",
        &PyExc_UserWarning},
   };
@@ -963,6 +1132,7 @@ static int core_traverse(PyObject *module, visitproc visit, void *arg) {
   Py_VISIT(errors->corrupt_data);
   Py_VISIT(errors->extraction_policy);
   Py_VISIT(errors->incomplete_extraction);
+  Py_VISIT(errors->source_removal);
   Py_VISIT(errors->cancelled);
   Py_VISIT(errors->trailing_data_warning);
   return 0;
@@ -976,6 +1146,7 @@ static int core_clear(PyObject *module) {
   Py_CLEAR(errors->corrupt_data);
   Py_CLEAR(errors->extraction_policy);
   Py_CLEAR(errors->incomplete_extraction);
+  Py_CLEAR(errors->source_removal);
   Py_CLEAR(errors->cancelled);
   Py_CLEAR(errors->trailing_data_warning);
   return 0;

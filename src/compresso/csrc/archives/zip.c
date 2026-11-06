@@ -524,9 +524,11 @@ static int zip_read_link_target(ZipReader *reader, zip_int64_t idx,
     return -1;
   }
 
+  // The CRC is only checked by a read that reaches the end
   char target[FS_PATH_MAX];
+  char past_end;
   zip_int64_t n = zip_fread(zf, target, entry->size);
-  if (n < 0) {
+  if (n < 0 || zip_fread(zf, &past_end, 1) < 0) {
     set_zip_error(reader->errors, zip_file_get_error(zf),
                   "Error reading from archive", reader->input_path, 1, 0);
     zip_fclose(zf);

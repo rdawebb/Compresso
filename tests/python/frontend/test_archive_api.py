@@ -36,9 +36,32 @@ class TestPlanArchive:
         """Test creating ArchiveOptions with defaults."""
         opts = ArchiveOptions()
 
-        assert opts.format == "tar.zst"
+        assert opts.format is None
         assert opts.compression_level is None
         assert opts.overwrite is OverwriteMode.RENAME
+
+    @pytest.mark.parametrize(
+        ("name", "fmt", "expected"),
+        [
+            ("out.tar.zst", None, "tar.zst"),
+            ("out.bin", None, "zip"),
+            ("out.tar.zst", "tar", "tar"),
+        ],
+        ids=["suffix", "unrecognised-suffix", "explicit-wins"],
+    )
+    def test_format_comes_from_the_output_name(
+        self,
+        small_file: Path,
+        tmp_path: Path,
+        name: str,
+        fmt: str | None,
+        expected: str,
+    ) -> None:
+        """Test that an unset format is read from the output's suffix, else zip."""
+        plan = plan_archive([small_file], tmp_path / name, ArchiveOptions(format=fmt))
+
+        assert plan.can_run, plan.reason_if_unavailable
+        assert plan.options.format == expected
 
     def test_plan_archive_valid(self, sample_text_file: Path, tmp_path: Path) -> None:
         """Test that a plan over existing sources can run and sums input size."""
@@ -239,6 +262,23 @@ class TestExtractJob:
 
         assert plan.output_dir == tmp_path.resolve()
 
+    def test_files_select_the_planned_entries(self, tmp_path: Path) -> None:
+        """Test that the plan holds only what `files` selects, as the extractor
+        matches it: an entry, or a directory and everything below it."""
+        archive = tmp_path / "a.tar"
+        make_tar(
+            archive,
+            dir_entry("d/"),
+            file_entry("d/x"),
+            file_entry("dx"),
+            file_entry("y"),
+            file_entry("z"),
+        )
+
+        plan = ExtractJob.from_archive(archive, files=["d/", "y", "nope"]).plan
+
+        assert [e.path for e in plan.entries] == ["d/", "d/x", "y"]
+
 
 class TestArchiveRoundTrip:
     """Test end-to-end archive -> extract round-trip."""
@@ -257,7 +297,6 @@ class TestArchiveRoundTrip:
         assert result.ok, result.error
 
         extract_job = ExtractJob.from_archive(archive_path, tmp_path / "sortie")
-        assert all(isinstance(e, ArchiveEntry) for e in extract_job.list_contents())
         result = extract_job.run()
         assert result.ok, result.error
 

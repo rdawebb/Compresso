@@ -1,258 +1,254 @@
-"""The `extract` command, which also answers to `decompress`."""
+"""The `extract` command, unpacking archives and compressed files."""
 
 from __future__ import annotations
 
-import time
+import re
+import sys
 from pathlib import Path
 from typing import Annotated
 
-from .._core import BackendError, Error, HeaderError
 from ..frontend.api import DecompressionJob
 from ..frontend.archive_api import (
-    ArchiveEntry,
     ExtractJob,
     ExtractOptions,
     OverwriteMode,
     SymlinkMode,
 )
+from ..frontend.dispatch import ExtractRequest, plan_extract
 from ._app import app
-from ._dispatch import looks_like_archive, resolve_single_output
-from ._render import (
-    BAR_THRESHOLD,
-    EXIT_USAGE,
-    cancelled,
-    exit_for_result,
-    fail,
-    format_size,
-    format_time,
-    progress_bar,
-    succeed,
+from ._render import EXIT_USAGE, fail, handles_errors, report_warning
+from ._render.jobs import (
+    decompress_plan,
+    decompress_result,
+    extract_plan,
+    extract_result,
+    skipped,
+    summary,
+)
+from ._run import (
+    InputFailed,
+    conflict_mode,
+    remove_source,
+    require_files,
+    run_all,
+    run_job,
 )
 
+_SIZE = re.compile(r"(\d+)(?:([kmgt])(?:i?b)?|b)?", re.IGNORECASE)
+_UNITS = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
 
-def list_entries(entries: list[ArchiveEntry]) -> None:
-    """Print one line per entry: its size, then its path.
 
-    Directories and symlinks leave the size blank, a symlink is followed by
-    its target, and each entry is indented once for every directory above it
-    that was already listed.
+def parse_size(value: str) -> int:
+    """Parse a byte count with an optional binary suffix, e.g. `500M` or `1KB`.
 
     Args:
-        entries: The archive's entries, in archive order.
+        value: The text given.
+
+    Returns:
+        The count in bytes.
+
+    Raises:
+        ValueError: If `value` isn't a size, which the parser reports as a
+            usage error.
     """
-    listed_dirs: set[str] = set()
+    match = _SIZE.fullmatch(value.strip())
+    if not match:
+        raise ValueError(value)
 
-    for entry in entries:
-        parts = entry.path.rstrip("/").split("/")
-        depth = sum("/".join(parts[:i]) in listed_dirs for i in range(1, len(parts)))
+    count, unit = match.groups()
 
-        if entry.is_dir:
-            listed_dirs.add("/".join(parts))
-
-        # A symlink's stored size is the length of its target; hardlink's have no data
-        size = (
-            ""
-            if entry.is_dir or entry.is_symlink or entry.is_hardlink
-            else format_size(size_bytes=entry.size)
-        )
-        target = f" -> {entry.link_target}" if entry.is_symlink else ""
-
-        # "1023.99 KB" is the widest format_size gives
-        print(f"{size:>10}  {'  ' * depth}{entry.path}{target}")
+    return int(count) * _UNITS[(unit or "").lower()]
 
 
-def _extract_archive(
-    source: Path,
-    output_dir: Path | None,
-    list_only: bool,
-    options: ExtractOptions,
-    quiet: bool,
-) -> None:
+def _extract_archive(job: ExtractJob, quiet: bool, verbose: bool, remove: bool) -> None:
     """Unpack one archive.
 
     Args:
-        source: The path to the archive to extract.
-        output_dir: The directory to extract to.
-        list_only: Whether to list entries only.
-        options: The extract options.
-        quiet: Whether to suppress output.
+        job: The planned job.
+        quiet: Whether to suppress all output.
+        verbose: Whether to print the plan and stats blocks.
+        remove: Whether to delete the archive once it is extracted.
     """
-    job = ExtractJob.from_archive(
-        archive=source, output_dir=output_dir, options=options
-    )
     plan = job.plan
 
     if not plan.can_run:
-        fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
+        raise InputFailed(f"{plan.archive}: {plan.reason_if_unavailable}")
 
-    if list_only:
-        list_entries(job.list_contents())
-        return
-
-    if not quiet:
-        print(
-            f"Extracting: {plan.archive}\n"
-            f"Output dir: {plan.output_dir}\n"
-            f"Entries:    {len(plan.entries)}\n"
-        )
-
-    start_time: float = time.time()
+    if verbose:
+        extract_plan(plan)
 
     # Progress covers the bytes written out; a compressed archive also reports
     # the pass that decompresses it, so the job's own total wins
-    extracted_size: int = sum(entry.size for entry in plan.entries)
-
-    with progress_bar(
+    total: int = sum(entry.size for entry in plan.entries)
+    before = plan.archive.stat()
+    elapsed, _ = run_job(
+        job,
+        plan.archive,
         "Extracting",
-        extracted_size,
-        enabled=not quiet and extracted_size > BAR_THRESHOLD,
-    ) as on_progress:
-        result = job.run(progress=on_progress)
+        total,
+        quiet=quiet,
+        what="Extraction",
+        verbose=verbose,
+    )
 
-    elapsed: float = time.time() - start_time
+    # Names and includes the filter dropped still count as found
+    if plan.options.exclude and not plan.entries and not quiet:
+        report_warning(f"{plan.archive}: nothing left to extract")
 
-    exit_for_result(result, "Extraction")
+    if verbose:
+        extract_result(plan, elapsed)
 
-    if not quiet:
-        print()
-        succeed("Extraction successful!")
-        print(
-            f"  Entries: {len(plan.entries)}\n"
-            f"  Time:    {format_time(seconds=elapsed)}\n"
-        )
+    elif not quiet:
+        summary(plan.archive, before.st_size, total, elapsed, None, ratio=False)
+
+    if remove:
+        remove_source(plan.archive, before)
 
 
 def _decompress_one_file(
-    source: Path,
-    output: Path | None,
-    list_only: bool,
-    overwrite: OverwriteMode,
-    threads: int,
-    restore_name: bool,
-    quiet: bool,
+    job: DecompressionJob, quiet: bool, verbose: bool, remove: bool
 ) -> None:
     """Unpack one single-file container: a `.comp` or a standalone codec.
 
     Args:
-        source: The path to the single-file container.
-        output: The output path.
-        list_only: Whether to list entries only.
-        overwrite: What to do when the destination file already exists.
-        threads: Worker threads for xz, or 0 for one per core.
-        restore_name: Whether to name and date a gzip file's output as its
-            header does.
-        quiet: Whether to suppress output.
+        job: The planned job.
+        quiet: Whether to suppress all output.
+        verbose: Whether to print the plan and stats blocks.
+        remove: Whether to delete the input once the output is written.
     """
-    if list_only:
-        fail(
-            f"Error: {source.name} holds a single file, so there is nothing to list",
-            EXIT_USAGE,
-        )
-
-    job = DecompressionJob.from_file(
-        src=source,
-        dest=None,
-        overwrite=overwrite,
-        threads=threads,
-        restore_name=restore_name,
-    )
-    dest: Path = resolve_single_output(output, job.plan.dest)
-    if dest != job.plan.dest:
-        job = DecompressionJob.from_file(
-            src=source,
-            dest=dest,
-            overwrite=overwrite,
-            threads=threads,
-            restore_name=restore_name,
-        )
-
     plan = job.plan
 
     if not plan.can_run:
-        fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
+        raise InputFailed(f"{plan.src}: {plan.reason_if_unavailable}")
 
-    insp = plan.inspection
-
-    if not quiet:
-        lines: list[str] = [
-            f"Decompressing: {plan.src}",
-            f"Output:        {plan.dest}",
-            f"Format:        {plan.format or insp.algo_name}",
-        ]
-        if insp.orig_size:
-            lines.append(f"Original size: {format_size(size_bytes=insp.orig_size)}")
-        print("\n".join(lines) + "\n")
-
-    start_time: float = time.time()
+    if verbose:
+        decompress_plan(plan)
 
     # Progress counts the compressed bytes read, so the source's size is the
     # denominator rather than the size it expands to
-    compressed_size: int = plan.src.stat().st_size
+    before = plan.src.stat()
+    compressed_size: int = before.st_size
+    skips: bool = plan.overwrite is OverwriteMode.SKIP and plan.dest.exists()
 
-    with progress_bar(
+    elapsed, _ = run_job(
+        job,
+        plan.src,
         "Decompressing",
         compressed_size,
-        enabled=not quiet and compressed_size > BAR_THRESHOLD,
-    ) as on_progress:
-        result = job.run(progress=on_progress)
-
-    elapsed: float = time.time() - start_time
-
-    exit_for_result(result, "Decompression")
-
-    # RENAME may have written somewhere other than `dest`; job.plan is updated
-    # in place on success to reflect the path actually written
-    actual_dest: Path = job.plan.dest
-    decompressed_size: int = actual_dest.stat().st_size
-    speed_mbs: int | float = (
-        (decompressed_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+        quiet=quiet,
+        what="Decompression",
+        verbose=verbose,
     )
 
-    if not quiet:
-        succeed("Decompression successful!\n")
-        if actual_dest != dest:
-            print(f"  Renamed to:        {actual_dest}")
-        print(
-            f"  Compressed size:   {format_size(size_bytes=compressed_size)}\n"
-            f"  Decompressed size: {format_size(size_bytes=decompressed_size)}\n"
-            f"  Time:              {format_time(seconds=elapsed)}\n"
-            f"  Speed:             {speed_mbs:.2f} MB/s\n"
+    # RENAME may have written somewhere other than `plan.dest`; job.plan is
+    # replaced on success with the path actually written
+    written: Path = job.plan.dest
+    if verbose:
+        decompress_result(plan, written, compressed_size, elapsed)
+
+    elif skips and not quiet:
+        skipped(plan.dest)
+
+    elif not quiet:
+        renamed: Path | None = written if written != plan.dest else None
+        summary(
+            plan.src,
+            compressed_size,
+            written.stat().st_size,
+            elapsed,
+            renamed,
+            ratio=False,
         )
 
+    if remove:
+        remove_source(plan.src, before)
 
+
+@handles_errors("Extraction")
 def extract(
-    inputs: Annotated[list[Path], app.Argument(help="Archives or compressed files")],
+    inputs: Annotated[
+        list[Path],
+        app.Argument(help="Archives or compressed files", readable=False),
+    ],
+    directory: Annotated[
+        Path | None,
+        app.Option(
+            "--directory",
+            "-C",
+            help="Directory to write into (default: beside each input)",
+        ),
+    ] = None,
     output: Annotated[
         Path | None,
         app.Option(
-            "--output-dir",
             "--output",
             "-o",
-            help="Where to write (default: beside the input)",
+            help="File to write, for one compressed file that isn't an archive",
         ),
     ] = None,
-    list_only: Annotated[
-        bool, app.Option("--list", help="List archive contents without extracting")
+    entry: Annotated[
+        list[str] | None,
+        app.Option(
+            "--entry",
+            "-e",
+            help="Extract only this entry, or the directory and all below it; "
+            "repeatable",
+        ),
+    ] = None,
+    include: Annotated[
+        list[str] | None,
+        app.Option(
+            "--include",
+            help="Extract entries matching this glob, as well as any --entry; "
+            "repeatable",
+        ),
+    ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        app.Option(
+            "--exclude",
+            help="Skip entries matching this glob, overriding --entry and "
+            "--include; repeatable",
+        ),
+    ] = None,
+    on_conflict: Annotated[
+        OverwriteMode | None,
+        app.Option(
+            "--on-conflict",
+            case_sensitive=False,
+            help="What to do when a file exists",
+            show_default="rename",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        app.Option("--force", "-f", help="Replace files that already exist"),
     ] = False,
-    overwrite: Annotated[
-        bool, app.Option("--overwrite", help="Replace files that already exist")
-    ] = False,
-    skip_existing: Annotated[
-        bool, app.Option("--skip-existing", help="Leave files that already exist")
-    ] = False,
-    error_on_conflict: Annotated[
+    remove: Annotated[
         bool,
         app.Option(
-            "--error-on-conflict", help="Fail instead of renaming a clashing file"
+            "--rm/--keep",
+            " /-k",
+            help="Delete the input once it is fully extracted, or keep it",
         ),
     ] = False,
-    max_total_size: Annotated[
+    max_size: Annotated[
         int | None,
         app.Option(
-            "--max-total-size",
-            help="Refuse archives extracting to more than this many bytes",
+            "--max-size",
+            metavar="SIZE",
+            parser=parse_size,
+            help="Refuse archives extracting to more than this, e.g. 500M or 10G",
         ),
     ] = None,
+    max_depth: Annotated[
+        int,
+        app.Option(
+            "--max-depth",
+            min=0,
+            help="Refuse entries nested deeper than this, or 0 for no limit",
+        ),
+    ] = 32,
     same_permissions: Annotated[
         bool,
         app.Option(
@@ -261,14 +257,28 @@ def extract(
             help="Restore modes exactly, keeping setuid/setgid/sticky and ignoring the umask",
         ),
     ] = False,
+    no_same_permissions: Annotated[
+        bool,
+        app.Option("--no-same-permissions", help="Don't restore modes"),
+    ] = False,
+    touch: Annotated[
+        bool,
+        app.Option("--touch", "-m", help="Don't restore modification times"),
+    ] = False,
+    overwrite_dir: Annotated[
+        bool,
+        app.Option(
+            "--overwrite-dir",
+            help="Also restore the mode and time of directories that already exist",
+        ),
+    ] = False,
     symlinks: Annotated[
         SymlinkMode | None,
         app.Option(
             "--symlinks",
             case_sensitive=False,
-            help="Refuse symlinks, create those staying inside the output, "
-            "or write each as a file holding its target "
-            "(default: file for zip, deny otherwise)",
+            help="Refuse, create (non-escaping), or write as a file",
+            show_default="file for zip, deny otherwise",
         ),
     ] = None,
     threads: Annotated[
@@ -288,6 +298,14 @@ def extract(
             help="Name and date a .gz file's output as its header does",
         ),
     ] = False,
+    verbose: Annotated[
+        bool,
+        app.Option(
+            "--verbose",
+            "-v",
+            help="Show the plan and full stats",
+        ),
+    ] = False,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
@@ -300,78 +318,105 @@ def extract(
     Compresso `.comp`, or a standalone `.gz`/`.bz2`/`.xz`/`.zst`/`.lz4`/`.sz`,
     is decompressed to one file.
 
-    The result is written beside its input unless `-o` is provided.
+    The result is written beside its input unless `-C` or `-o` is provided.
 
     By default, a clashing name gets a platform-native numbered sibling
-    (`name 2.ext` on macOS, `name (2).ext` elsewhere); use `--overwrite`,
-    `--skip-existing`, or `--error-on-conflict` to change that.
+    (`name 2.ext` on macOS, `name (2).ext` elsewhere); use `--on-conflict` or
+    `-f` to change that.
+
+    Each input gets one summary line; `-v` shows the plan and full stats
+    instead, and `-q` nothing at all.
 
     Args:
         inputs: The archives or compressed files to unpack.
-        output: Where to write (default: beside the input); a directory for
-            archives, and for one file either a directory to put it in or the
-            path to write.
-        list_only: If True, list archive contents without extracting.
-        overwrite: If True, replace files that already exist.
-        skip_existing: If True, leave files that already exist untouched.
-        error_on_conflict: If True, fail instead of renaming a clashing file.
-        max_total_size: Cap on total extracted bytes (default: no cap).
+        directory: The directory to write into (default: beside each input).
+        output: The file to write, for a single input that isn't an archive.
+        entry: Entry paths to extract from each archive (default: all); a
+            path matching no entry fails that archive after the rest is
+            extracted.
+        include: Globs selecting entries as well as any `entry` names; one
+            matching no entry fails that archive likewise.
+        exclude: Globs dropping entries, overriding `entry` and `include`; a
+            run left with nothing to extract warns, but still succeeds.
+        on_conflict: What to do when a file exists (default: rename).
+        force: If True, replace files that already exist.
+        remove: If True, delete each input once it is fully written out.
+        max_size: Cap on total extracted bytes (default: no cap).
+        max_depth: Cap on an entry path's depth, or 0 for none.
         same_permissions: If True, restore archive entries' modes exactly;
             single-file outputs are unaffected.
+        no_same_permissions: If True, don't restore archive entries' modes.
+        touch: If True, don't restore archive entries' modification times.
+        overwrite_dir: If True, directories that already exist also get the
+            archive's mode and modification time.
         symlinks: What to do with a symlink entry (default: write a zip's as
             files, refuse any other archive's).
         threads: Worker threads for xz (default: one per core).
         name: If True, name a gzip file's output after the name its header
             stores, and give it the stored modification time, if any.
+        verbose: If True, show the plan and full stats.
         quiet: If True, suppress all output.
     """
-    if sum([overwrite, skip_existing, error_on_conflict]) > 1:
-        fail(
-            "Error: --overwrite, --skip-existing and --error-on-conflict "
-            "are mutually exclusive",
-            EXIT_USAGE,
-        )
+    mode = conflict_mode(on_conflict, force, remove)
+
+    # Whatever these leave out would go with the archive
+    if remove and (entry or include or exclude):
+        fail("Error: --rm contradicts --entry, --include and --exclude", EXIT_USAGE)
+
+    if verbose and quiet:
+        fail("Error: -v contradicts -q", EXIT_USAGE)
 
     if not inputs:
         fail("Error: No input files given", EXIT_USAGE)
 
-    if overwrite:
-        mode = OverwriteMode.OVERWRITE
-    elif skip_existing:
-        mode = OverwriteMode.SKIP
-    elif error_on_conflict:
-        mode = OverwriteMode.ERROR
-    else:
-        mode = OverwriteMode.RENAME
+    if output and directory:
+        fail("Error: -o contradicts -C", EXIT_USAGE)
+
+    if output and len(inputs) > 1:
+        fail("Error: -o names one file; use -C for several inputs", EXIT_USAGE)
+
+    if same_permissions and no_same_permissions:
+        fail("Error: -p contradicts --no-same-permissions", EXIT_USAGE)
+
+    require_files(inputs)
 
     options = ExtractOptions(
         overwrite=mode,
-        max_total_size=max_total_size or 0,
+        max_total_size=max_size or 0,
+        max_depth=max_depth,
+        preserve_permissions=not no_same_permissions,
         exact_permissions=same_permissions,
+        preserve_timestamps=not touch,
+        overwrite_dir_metadata=overwrite_dir,
         symlinks=symlinks,
         threads=threads,
+        include=include or (),
+        exclude=exclude or (),
     )
 
-    try:
-        for source in inputs:
-            if looks_like_archive(source):
-                _extract_archive(source, output, list_only, options, quiet)
+    request = ExtractRequest(
+        inputs=inputs,
+        directory=directory,
+        output=output,
+        files=entry,
+        options=options,
+        restore_name=name,
+    )
 
-            else:
-                _decompress_one_file(
-                    source, output, list_only, mode, threads, name, quiet
-                )
+    def run_one(job: ExtractJob | DecompressionJob) -> None:
+        if isinstance(job, ExtractJob):
+            _extract_archive(job, quiet, verbose, remove)
 
-    except KeyboardInterrupt:
-        cancelled("Extraction")
+        else:
+            # An archive creates a missing `-C` itself; a single file needs it made
+            if directory:
+                directory.mkdir(parents=True, exist_ok=True)
 
-    except (Error, HeaderError, BackendError) as e:
-        fail(f"Extraction error: {e}")
+            _decompress_one_file(job, quiet, verbose, remove)
 
-    except Exception as e:
-        fail(f"Unexpected error: {e}")
+    sys.exit(run_all(plan_extract(request), run_one, "Extraction"))
 
 
 def register() -> None:
     """Attach this command to the app."""
-    app.command(aliases=["x", "ex", "decompress", "d", "decomp"])(extract)
+    app.command(aliases=["x"])(extract)

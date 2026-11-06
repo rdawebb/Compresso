@@ -14,6 +14,8 @@
 // so prefix comparisons must test both
 #if defined(_WIN32) || defined(_WIN64)
 #define FS_IS_SEP(c) ((c) == '/' || (c) == '\\')
+#define FS_SEP '\\'
+#define FS_NULL_DEVICE "NUL"
 
 #include <wchar.h>
 
@@ -22,6 +24,8 @@
 int fs_widen(const char *utf8, wchar_t *out, int out_count);
 #else
 #define FS_IS_SEP(c) ((c) == '/')
+#define FS_SEP '/'
+#define FS_NULL_DEVICE "/dev/null"
 #endif
 
 typedef enum {
@@ -42,8 +46,8 @@ typedef struct {
   uint32_t special;
   uint64_t rdev;
 
-  // Identity, for fs_same_file; on Windows only filled for regular files (the
-  // volume serial and file index), and 0 wherever it is unknown
+  // Identity, for fs_same_file; on Windows only filled for regular files and
+  // directories (volume serial and file index), and 0 wherever it is unknown
   uint64_t dev, ino;
   uint32_t nlink; // Its names' count; filled wherever the identity is
 } fs_stat;
@@ -72,6 +76,9 @@ int fs_join(char *out, size_t out_size, const char *dir, const char *name);
 // Stat `path` itself, without following symlinks (lstat(2)), so a symlink or
 // Windows reparse point reports FS_TYPE_SYMLINK rather than its target's type
 int fs_stat_path(const char *path, fs_stat *out);
+
+// Stat what `path` leads to, following symlinks; -1 if the link is dangling
+int fs_stat_target(const char *path, fs_stat *out);
 
 // Stat an open file, so a path reached through a symlink reports its target;
 // the identity is left 0 on Windows
@@ -152,8 +159,8 @@ int fs_commit_temp(const char *temp, const char *dst, int overwrite_existing,
 
 // A file output, written to a temp beside `path` and committed on success
 typedef struct {
-  const char *path;
-  int overwrite; // The 0-3 scheme above
+  const char *path; // NULL discards the output, leaving only its failures
+  int overwrite;    // The 0-3 scheme above
   char *actual;  // Optional; receives the path written, or skipped
   size_t actual_size;
   int owner_only; // 0600, for an intermediate that holds a whole archive
@@ -182,8 +189,8 @@ int fs_rename(const char *from, const char *to, int replace);
 int fs_link(const char *existing, const char *new_path);
 
 // Symlink `link_path` to `target`, stored unresolved; -1 with errno set
-// (EEXIST if `link_path` exists, EPERM on Windows without Developer Mode/admin
-// rights); on Windows, a target that is a directory gets a directory link
+// (EEXIST if `link_path` exists, EPERM if this user or filesystem can't create
+// symlinks; on Windows, a target that is a directory gets a directory link
 int fs_symlink(const char *target, const char *link_path);
 
 // Whether this process can create a node of `type` (fs_stat.special's values):
@@ -197,6 +204,9 @@ int fs_mknod(const char *path, uint32_t type, uint32_t mode, uint64_t rdev);
 // Current read/write offset in an open stream, as a 64-bit value on every
 // platform (plain ftell() is 32-bit on Windows); returns -1 on failure
 int64_t fs_ftell(FILE *stream);
+
+// fseek() with a 64-bit offset on every platform; returns 0 on success
+int fs_fseek(FILE *stream, int64_t offset, int whence);
 
 // Size of an open stream in bytes, leaving the offset where it found it;
 // returns -1 on failure

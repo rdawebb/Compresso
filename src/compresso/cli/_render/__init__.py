@@ -1,14 +1,21 @@
-"""Shared rendering for the CLI: formatting, progress and exit codes."""
+"""Everything the CLI prints.
+
+The package root holds formatting, progress and exit codes; `jobs` and `info` hold
+each command's reports.
+"""
 
 from __future__ import annotations
 
+import functools
 import sys
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import NoReturn
+from pathlib import Path
+from typing import NoReturn, ParamSpec
 
-from ..frontend._job import JobResult, ProgressCallback
-from ._app import app
+from ..._core import Error
+from ...frontend._job import ProgressCallback
+from .._app import app
 
 # Exit codes
 EXIT_OK = 0
@@ -60,6 +67,28 @@ def format_time(seconds: float) -> str:
         return f"{mins}m {secs:.1f}s"
 
 
+def report_error(message: str) -> None:
+    """Print an error to stderr.
+
+    Args:
+        message: Text to show, without the leading marker.
+    """
+    # A piped stdout is block-buffered, so without this an error could
+    # land before the outputs ahead of it
+    sys.stdout.flush()
+    app.echo(message=app.style(text=f"✗ {message}", fg="red"), err=True)
+
+
+def report_warning(message: str) -> None:
+    """Print a warning to stderr.
+
+    Args:
+        message: Text to show, without the leading marker.
+    """
+    sys.stdout.flush()
+    app.echo(message=app.style(text=f"! {message}", fg="yellow"), err=True)
+
+
 def fail(message: str, code: int = EXIT_FAILED) -> NoReturn:
     """Print an error to stderr and exit.
 
@@ -67,7 +96,7 @@ def fail(message: str, code: int = EXIT_FAILED) -> NoReturn:
         message: Text to show, without the leading marker.
         code: Process exit code; see the EXIT_* constants.
     """
-    app.echo(message=app.style(text=f"✗ {message}", fg="red"), err=True)
+    report_error(message)
     sys.exit(code)
 
 
@@ -80,6 +109,19 @@ def succeed(message: str) -> None:
     app.echo(message=app.style(text=f"✓ {message}", fg="green"))
 
 
+def input_header(path: Path, *, first: bool) -> None:
+    """Print the `==> name <==` line that head puts before each of several inputs.
+
+    Args:
+        path: The input, as given.
+        first: False puts a blank line above, to separate it from the last.
+    """
+    if not first:
+        print()
+
+    print(f"==> {path} <==")
+
+
 def cancelled(what: str) -> NoReturn:
     """Report an interrupted operation and exit with the SIGINT code.
 
@@ -90,21 +132,37 @@ def cancelled(what: str) -> NoReturn:
     sys.exit(EXIT_CANCELLED)
 
 
-def exit_for_result(result: JobResult, what: str) -> None:
-    """Exit with the right code if `result` did not succeed.
+P = ParamSpec("P")
 
-    A cancelled job is not a failure, so it gets the conventional SIGINT
-    code rather than the generic failure one.
+
+def handles_errors(what: str) -> Callable[[Callable[P, None]], Callable[P, None]]:
+    """Give a command the standard Ctrl-C and error exits.
 
     Args:
-        result: The outcome of a frontend job.
-        what: Operation name for the message, e.g. "Compression".
-    """
-    if result.cancelled:
-        cancelled(what)
+        what: Operation name for the messages, e.g. "Compression".
 
-    if not result.ok:
-        fail(f"\n{what} failed: {result.error}")
+    Returns:
+        A decorator wrapping the command.
+    """
+
+    def decorate(fn: Callable[P, None]) -> Callable[P, None]:
+        @functools.wraps(fn)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> None:
+            try:
+                fn(*args, **kwargs)
+
+            except KeyboardInterrupt:
+                cancelled(what)
+
+            except Error as e:
+                fail(f"{what} error: {e}")
+
+            except Exception as e:
+                fail(f"Unexpected error: {e}")
+
+        return wrapper
+
+    return decorate
 
 
 @contextmanager

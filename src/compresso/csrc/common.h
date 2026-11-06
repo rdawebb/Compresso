@@ -149,6 +149,7 @@ struct CompErrors {
   PyObject *corrupt_data;
   PyObject *extraction_policy;
   PyObject *incomplete_extraction;
+  PyObject *source_removal;
   PyObject *cancelled;
   PyObject *trailing_data_warning;
 };
@@ -189,5 +190,10 @@ int compress_file(const char *src_path, const char *dst_path, AlgoID algo,
 int decompress_file(const char *src_path, const char *dst_path, AlgoID algo,
                     int overwrite_existing, char *out_actual_path,
                     size_t out_actual_path_size, CoreContext *ctx);
+
+// Decode all of an archive or compressed file, writing nothing, so only what
+// the format checks can fail it: a plain tar's data is proved to be there, but
+// not to be right; returns 0, -1 with an exception set, or COMP_CANCELLED
+int verify_file(const char *path, CoreContext *ctx);
 
 #endif // COMMON_H

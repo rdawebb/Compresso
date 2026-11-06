@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from compresso.frontend._job import ThreadedJob
-from compresso.frontend.api import CompressionJob, DecompressionJob
+from compresso.frontend.api import CompressionJob, DecompressionJob, VerificationJob
 from compresso.frontend.archive_api import ArchiveJob, ExtractJob
 
 # Crosses the 1 MiB report floor (`CTX_MIN_INTERVAL`) several times over
@@ -43,6 +43,17 @@ def renamed(name: str, n: int = 2) -> str:
     stem, dot, extension = name.partition(".")
 
     return f"{stem}{_CONFLICT_SUFFIX.format(n)}{dot}{extension}"
+
+
+def flip_middle_byte(path: Path) -> None:
+    """Damage a file while leaving its headers alone.
+
+    Args:
+        path: The file to damage.
+    """
+    data = bytearray(path.read_bytes())
+    data[len(data) // 2] ^= 0xFF
+    path.write_bytes(data)
 
 
 class Recorder:
@@ -118,6 +129,9 @@ JOBS = {
     "extract": JobFactory(
         "source_tar",
         lambda src, out: ExtractJob.from_archive(archive=src, output_dir=out),
+    ),
+    "verify": JobFactory(
+        "compressed_file", lambda src, _: VerificationJob.from_file(src=src)
     ),
 }
 

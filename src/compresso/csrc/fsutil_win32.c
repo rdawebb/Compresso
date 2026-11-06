@@ -51,6 +51,8 @@ int fs_widen(const char *utf8, wchar_t *out, int out_count) {
   return 0;
 }
 
+static void set_errno_from_win32(int fallback);
+
 static int fs_narrow(const wchar_t *wide, char *out, int out_size) {
   if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, out,
                           out_size, NULL, NULL) == 0) {
@@ -72,6 +74,66 @@ static HANDLE fs_open_for_metadata(const wchar_t *wpath) {
                      NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
 }
 
+static int fs_stat_wide(const wchar_t *wpath, fs_stat *out) {
+  struct __stat64 st;
+  if (_wstat64(wpath, &st) != 0)
+    return -1;
+
+  out->size = (uint64_t)st.st_size;
+  out->mtime = (int64_t)st.st_mtime;
+  out->mode = (uint32_t)(st.st_mode & 0777);
+  out->special = 0;
+  out->rdev = 0;
+  out->dev = 0;
+  out->ino = 0;
+  out->nlink = 0;
+
+  if (st.st_mode & _S_IFDIR)
+    out->type = FS_TYPE_DIR;
+  else if (st.st_mode & _S_IFREG)
+    out->type = FS_TYPE_FILE;
+  else
+    out->type = FS_TYPE_OTHER;
+
+  // _wstat64 describes a symlink itself, and leaves st_ino 0; the handle
+  // follows links and supplies the rest; failing to open means dangling link
+  if (out->type == FS_TYPE_FILE || out->type == FS_TYPE_DIR) {
+    HANDLE h = fs_open_for_metadata(wpath);
+    if (h == INVALID_HANDLE_VALUE) {
+      set_errno_from_win32(ENOENT);
+      return -1;
+    }
+    BY_HANDLE_FILE_INFORMATION info;
+    BOOL ok = GetFileInformationByHandle(h, &info);
+    CloseHandle(h);
+    if (!ok) {
+      set_errno_from_win32(EIO);
+      return -1;
+    }
+
+    int is_dir = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    out->type = is_dir ? FS_TYPE_DIR : FS_TYPE_FILE;
+    out->size =
+        is_dir ? 0 : ((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow;
+    // FILETIME counts 100ns intervals since 1601-01-01
+    ULONGLONG ticks = ((ULONGLONG)info.ftLastWriteTime.dwHighDateTime << 32) |
+                      info.ftLastWriteTime.dwLowDateTime;
+    out->mtime = (int64_t)(ticks / 10000000ULL) - 11644473600LL;
+    out->dev = info.dwVolumeSerialNumber;
+    out->ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow;
+    out->nlink = info.nNumberOfLinks;
+  }
+
+  return 0;
+}
+
+int fs_stat_target(const char *path, fs_stat *out) {
+  wchar_t wpath[FS_PATH_MAX];
+  if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
+    return -1;
+  return fs_stat_wide(wpath, out);
+}
+
 int fs_stat_path(const char *path, fs_stat *out) {
   wchar_t wpath[FS_PATH_MAX];
   if (fs_widen(path, wpath, FS_PATH_MAX) != 0)
@@ -83,47 +145,18 @@ int fs_stat_path(const char *path, fs_stat *out) {
   int is_reparse = attrs != INVALID_FILE_ATTRIBUTES &&
                    (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 
-  struct __stat64 st;
-  if (_wstat64(wpath, &st) != 0) {
+  if (fs_stat_wide(wpath, out) != 0) {
     // A link is still a real entry when its target is missing
     if (!is_reparse)
       return -1;
     memset(out, 0, sizeof(*out));
-    out->type = FS_TYPE_SYMLINK;
-    return 0;
   }
 
-  out->size = (uint64_t)st.st_size;
-  out->mtime = (int64_t)st.st_mtime;
-  out->mode = (uint32_t)(st.st_mode & 0777);
-  out->special = 0;
-  out->rdev = 0;
-  out->dev = 0;
-  out->ino = 0;
-  out->nlink = 0;
-
-  if (is_reparse)
+  if (is_reparse) {
     out->type = FS_TYPE_SYMLINK;
-  else if (st.st_mode & _S_IFDIR)
-    out->type = FS_TYPE_DIR;
-  else if (st.st_mode & _S_IFREG)
-    out->type = FS_TYPE_FILE;
-  else
-    out->type = FS_TYPE_OTHER;
-
-  // _wstat64 leaves st_ino 0, so the identity needs a handle; only regular
-  // files get one, as nothing compares directories
-  if (out->type == FS_TYPE_FILE) {
-    HANDLE h = fs_open_for_metadata(wpath);
-    BY_HANDLE_FILE_INFORMATION info;
-    if (h != INVALID_HANDLE_VALUE) {
-      if (GetFileInformationByHandle(h, &info)) {
-        out->dev = info.dwVolumeSerialNumber;
-        out->ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow;
-        out->nlink = info.nNumberOfLinks;
-      }
-      CloseHandle(h);
-    }
+    out->dev = 0;
+    out->ino = 0;
+    out->nlink = 0;
   }
 
   return 0;
@@ -436,6 +469,11 @@ static void set_errno_from_win32(int fallback) {
   case ERROR_ACCESS_DENIED:
     errno = EACCES;
     break;
+  case ERROR_PRIVILEGE_NOT_HELD:
+  case ERROR_NOT_SUPPORTED:
+  case ERROR_INVALID_FUNCTION: // e.g. a FAT volume
+    errno = EPERM;
+    break;
   default:
     errno = fallback;
     break;
@@ -554,7 +592,8 @@ int fs_symlink(const char *target, const char *link_path) {
   if (ok)
     return 0;
 
-  set_errno_from_win32(EPERM); // e.g. ERROR_PRIVILEGE_NOT_HELD
+  // Not EPERM for anything else, e.g. a full disk, which must fail extraction
+  set_errno_from_win32(EIO);
   return -1;
 }
 

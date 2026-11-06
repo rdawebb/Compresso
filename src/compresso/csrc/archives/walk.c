@@ -2,6 +2,7 @@
 #include <Python.h>
 #include "walk.h"
 #include "../common.h"
+#include "select.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -50,10 +51,8 @@ static int push(WalkList *list, char *path, size_t prefix_len) {
 
 static int is_skipped(const WalkItem *item, const OwnFiles *own,
                       int keep_specials, CoreContext *ctx) {
-  if (item->st.type == FS_TYPE_OTHER &&
-      !(keep_specials && item->st.special)) {
-    ctx_log(ctx, CTX_LOG_WARNING, "Skipped %s: %s are not archived",
-            item->path,
+  if (item->st.type == FS_TYPE_OTHER && !(keep_specials && item->st.special)) {
+    ctx_log(ctx, CTX_LOG_WARNING, "Skipped %s: %s are not archived", item->path,
             keep_specials ? "sockets" : "FIFOs, sockets and devices");
     return 1;
   }
@@ -68,8 +67,36 @@ static int is_skipped(const WalkItem *item, const OwnFiles *own,
   return 0;
 }
 
-// Pushes the children of `dir` so they pop in the order readdir gave them
-static int push_children(WalkList *pending, const WalkItem *dir) {
+static void follow_link(WalkItem *item, const WalkList *walked) {
+  fs_stat target;
+  if (fs_stat_target(item->path, &target) != 0)
+    return;
+
+  for (size_t i = item->parent; i > 0; i = walked->items[i - 1].parent)
+    if (fs_same_file(&target, &walked->items[i - 1].st))
+      return;
+
+  item->st = target;
+  item->followed = 1;
+}
+
+// Only where the link was meant to give data: left in a tree it's a faithful
+// copy, and such links are routine
+static void warn_if_dangling(const WalkItem *item, int follow_links,
+                             CoreContext *ctx) {
+  fs_stat target;
+  if (item->st.type != FS_TYPE_SYMLINK || !(follow_links || item->parent == 0))
+    return;
+
+  if (fs_stat_target(item->path, &target) != 0)
+    ctx_log(ctx, CTX_LOG_WARNING,
+            "Stored %s as a link: its target can't be reached", item->path);
+}
+
+// Pushes the children of `dir`, whose index is `parent`, so they pop in the
+// order readdir gave them
+static int push_children(WalkList *pending, const WalkItem *dir,
+                         size_t parent) {
   fs_dir *d = fs_opendir(dir->path);
   if (!d) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, dir->path);
@@ -90,6 +117,9 @@ static int push_children(WalkList *pending, const WalkItem *dir) {
       ret = -1;
       break;
     }
+    pending->items[pending->count - 1].parent = parent;
+    pending->items[pending->count - 1].via_link =
+        dir->followed || dir->via_link;
   }
 
   // A conversion failure also ends fs_readdir; unchecked, files would silently
@@ -141,8 +171,7 @@ static int find_hardlinks(WalkList *list) {
   for (size_t i = 1; i < n; i++) {
     if (!fs_same_file(&linked[i]->st, &linked[i - 1]->st))
       continue;
-    linked[i]->link =
-        linked[i - 1]->link ? linked[i - 1]->link : linked[i - 1];
+    linked[i]->link = linked[i - 1]->link ? linked[i - 1]->link : linked[i - 1];
     if (linked[i]->st.type == FS_TYPE_FILE)
       list->file_bytes -= linked[i]->st.size;
   }
@@ -150,8 +179,67 @@ static int find_hardlinks(WalkList *list) {
   return 0;
 }
 
+char *walk_entry_name(const char *path, size_t prefix_len) {
+  const char *rel_path = path + prefix_len;
+  while (FS_IS_SEP(*rel_path))
+    rel_path++;
+
+  char *name = strdup(rel_path);
+  if (!name) {
+    PyErr_NoMemory();
+    return NULL;
+  }
+
+  // Normalise to '/', collapsing runs and dropping a trailing one; writers add
+  // the trailing separator a directory needs
+  char *w = name;
+  for (const char *r = name; *r; r++) {
+    if (FS_IS_SEP(*r)) {
+      // Keep a leading separator so the absolute name is still rejected
+      if (w > name && w[-1] == '/')
+        continue;
+      *w++ = '/';
+    } else {
+      *w++ = *r;
+    }
+  }
+  while (w > name + 1 && w[-1] == '/')
+    w--;
+  *w = '\0';
+  return name;
+}
+
+// Whether `path` is below the directory `dir`, as fs_join builds child paths
+static int is_below(const char *path, const char *dir) {
+  size_t n = strlen(dir);
+  return strncmp(path, dir, n) == 0 &&
+         (FS_IS_SEP(path[n]) || (n > 0 && FS_IS_SEP(dir[n - 1])));
+}
+
+// Drops each provisional directory with nothing kept below it; depth-first, so
+// the nearest kept item after a directory is below it if anything is
+static void prune_provisional(WalkList *list) {
+  const char *next_kept = NULL;
+  for (size_t i = list->count; i-- > 0;) {
+    WalkItem *item = &list->items[i];
+    if (item->provisional && !(next_kept && is_below(next_kept, item->path))) {
+      free(item->path);
+      item->path = NULL;
+    } else {
+      next_kept = item->path;
+    }
+  }
+
+  size_t kept = 0;
+  for (size_t i = 0; i < list->count; i++)
+    if (list->items[i].path)
+      list->items[kept++] = list->items[i];
+  list->count = kept;
+}
+
 int walk_sources(const char **input_paths, size_t num_paths,
-                 const OwnFiles *own, int keep_specials, int link_hardlinks,
+                 const PathFilter *filter, const OwnFiles *own,
+                 int keep_specials, int link_hardlinks, int follow_links,
                  CoreContext *ctx, WalkList *out) {
   // Depth-first like the archive's order, on a heap stack rather than the C one
   WalkList pending = {0};
@@ -172,29 +260,57 @@ int walk_sources(const char **input_paths, size_t num_paths,
     }
 
     WalkItem item = pending.items[--pending.count];
+
+    // Matched before the stat, so an excluded tree costs nothing to skip
+    int included = 1;
+    if (filter->num_include > 0 || filter->num_exclude > 0) {
+      char *name = walk_entry_name(item.path, item.prefix_len);
+      if (!name) {
+        free(item.path);
+        ret = -1;
+        break;
+      }
+      int excluded =
+          path_matches_any(name, filter->exclude, filter->num_exclude);
+      included = filter->num_include == 0 ||
+                 path_matches_any(name, filter->include, filter->num_include);
+      free(name);
+      if (excluded) {
+        free(item.path);
+        continue;
+      }
+    }
+
     if (fs_stat_path(item.path, &item.st) != 0) {
       PyErr_SetFromErrnoWithFilename(PyExc_OSError, item.path);
       free(item.path);
       ret = -1;
       break;
     }
-    if (is_skipped(&item, own, keep_specials, ctx)) {
+    if (follow_links && item.st.type == FS_TYPE_SYMLINK)
+      follow_link(&item, out);
+    if ((!included && item.st.type != FS_TYPE_DIR) ||
+        is_skipped(&item, own, keep_specials, ctx)) {
       free(item.path);
       continue;
     }
+    warn_if_dangling(&item, follow_links, ctx);
 
     ret = push(out, item.path, item.prefix_len);
     if (ret != 0)
       break;
-    out->items[out->count - 1].st = item.st;
+    item.provisional = !included;
+    out->items[out->count - 1] = item;
 
     if (item.st.type == FS_TYPE_DIR)
-      ret = push_children(&pending, &item);
+      ret = push_children(&pending, &item, out->count);
     else if (item.st.type == FS_TYPE_FILE)
       out->file_bytes += item.st.size;
   }
 
   walk_list_free(&pending);
+  if (ret == 0)
+    prune_provisional(out);
   if (ret == 0 && link_hardlinks)
     ret = find_hardlinks(out);
   return ret;

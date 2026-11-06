@@ -9,6 +9,7 @@ from ._core import (
     ExtractionPolicyError,
     HeaderError,
     IncompleteExtractionError,
+    SourceRemovalError,
     TrailingDataWarning,
     compress_file,
     decompress_file,
@@ -20,8 +21,12 @@ from .frontend.api import (
     CompressionPlan,
     DecompressionJob,
     DecompressionPlan,
+    Strategy,
+    VerificationJob,
+    VerificationPlan,
     plan_compression,
     plan_decompression,
+    plan_verification,
 )
 from .frontend.archive_api import (
     ArchiveEntry,
@@ -36,7 +41,7 @@ from .frontend.archive_api import (
     plan_archive,
     plan_extraction,
 )
-from .introspect.benchmark import benchmark_file, print_results
+from .introspect.benchmark import benchmark_file
 from .introspect.capabilities import list_capabilities
 from .introspect.file_inspect import InspectResult, inspect
 from .introspect.speeds import get_estimated_speeds
@@ -67,8 +72,12 @@ __all__: list[str] = [
     "JobResult",
     "OverwriteMode",
     "ProgressCallback",
+    "SourceRemovalError",
+    "Strategy",
     "SymlinkMode",
     "TrailingDataWarning",
+    "VerificationJob",
+    "VerificationPlan",
     "benchmark_file",
     "compress_file",
     "decompress_file",
@@ -79,5 +88,5 @@ __all__: list[str] = [
     "plan_compression",
     "plan_decompression",
     "plan_extraction",
-    "print_results",
+    "plan_verification",
 ]

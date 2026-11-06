@@ -20,6 +20,8 @@ from compresso import (
     BackendError,
     CorruptDataError,
     ExtractionPolicyError,
+    ExtractJob,
+    ExtractOptions,
     IncompleteExtractionError,
     _core,
 )
@@ -132,6 +134,34 @@ class TestSelectByPrefix:
         extracted = [p.relative_to(out).as_posix() for p in out.rglob("*")]
         assert sorted(p for p in extracted if (out / p).is_file()) == expected
 
+    @pytest.mark.parametrize(
+        ("files", "include", "exclude", "expected"),
+        [
+            ([], ["*.txt"], ["sub"], ["d/x.txt", "dx.txt", "e.txt"]),
+            (["d"], [], ["y.txt"], ["d/x.txt"]),
+            (["d"], ["e.txt"], ["y.txt"], ["d/x.txt", "e.txt"]),
+        ],
+        ids=["include-and-exclude", "with-files", "files-or-include"],
+    )
+    def test_filter_shapes_the_selection(
+        self,
+        archive: Path,
+        tmp_path: Path,
+        files: list[str],
+        include: list[str],
+        exclude: list[str],
+        expected: list[str],
+    ) -> None:
+        """Test that includes add to `files`, as in bsdtar, and excludes override both."""
+        out = tmp_path / "out"
+
+        _core.extract_archive(
+            str(archive), str(out), files, include=include, exclude=exclude
+        )
+
+        extracted = [p.relative_to(out).as_posix() for p in out.rglob("*")]
+        assert sorted(p for p in extracted if (out / p).is_file()) == expected
+
     def test_unmatched_names_are_reported_after_the_rest(
         self, archive: Path, tmp_path: Path
     ) -> None:
@@ -144,6 +174,78 @@ class TestSelectByPrefix:
             _core.extract_archive(str(archive), str(out), ["nope", "e.txt", "d/x"])
 
         assert [p.name for p in out.iterdir()] == ["e.txt"]
+
+    def test_unmatched_includes_are_reported_after_the_rest(
+        self, archive: Path, tmp_path: Path
+    ) -> None:
+        """Test that an include matching nothing raises, as bsdtar's does."""
+        out = tmp_path / "out"
+
+        with pytest.raises(
+            IncompleteExtractionError, match=r"Not found in archive: nope, zzz\*$"
+        ):
+            _core.extract_archive(
+                str(archive), str(out), [], include=["e.txt", "nope", "zzz*"]
+            )
+
+        assert [p.name for p in out.iterdir()] == ["e.txt"]
+
+    @pytest.mark.parametrize(
+        ("files", "include", "exclude"),
+        [
+            (["e.txt"], [], ["*"]),
+            ([], ["e.txt"], ["*"]),
+        ],
+        ids=["excluded-name", "excluded-include"],
+    )
+    def test_filtered_out_matches_are_not_reported(
+        self,
+        archive: Path,
+        tmp_path: Path,
+        files: list[str],
+        include: list[str],
+        exclude: list[str],
+    ) -> None:
+        """Test that what the filter drops still counts as found, as in tar."""
+        out = tmp_path / "out"
+
+        _core.extract_archive(
+            str(archive), str(out), files, include=include, exclude=exclude
+        )
+
+        assert not [p for p in out.rglob("*") if p.is_file()]
+
+    @pytest.mark.parametrize(
+        ("files", "include", "exclude"),
+        [
+            ([], [], ["sub"]),
+            ([], ["*.txt"], ["d/x.txt"]),
+            (["d/sub"], ["e.txt"], []),
+            (["d"], ["e.txt"], ["*x.txt"]),
+            (["d/x.txt"], [], ["*"]),
+        ],
+    )
+    def test_plan_lists_what_is_extracted(
+        self,
+        archive: Path,
+        tmp_path: Path,
+        files: list[str],
+        include: list[str],
+        exclude: list[str],
+    ) -> None:
+        """Test that the plan's entries, and so the bar's total, match the run."""
+        out = tmp_path / "out"
+        options = ExtractOptions(include=include, exclude=exclude)
+        job = ExtractJob.from_archive(archive, out, files, options)
+
+        result = job.run()
+
+        assert result.ok, result.error
+        written = sorted(
+            p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()
+        )
+        planned = sorted(e.path for e in job.plan.entries if not e.is_dir)
+        assert planned == written
 
 
 class TestRecognisedButUnsupportedArchive:
@@ -472,19 +574,32 @@ class TestSpecialExtraction:
     @pytest.mark.skipif(
         sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX, not root"
     )
-    def test_device_is_skipped_without_root(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Test that a device is skipped with a warning, the rest still extracted."""
+    def test_device_is_reported_without_root(self, tmp_path: Path) -> None:
+        """Test that a device fails the extraction, the rest still extracted."""
         archive = tmp_path / "nodes.tar"
         make_tar(archive, file_entry("a"), node_entry("char", tarfile.CHRTYPE))
         out = tmp_path / "out"
 
-        with caplog.at_level(logging.WARNING, logger="compresso"):
+        with pytest.raises(
+            IncompleteExtractionError,
+            match=r"^Skipped, the rest was extracted: char \(devices are only created by root",
+        ):
             _core.extract_archive(str(archive), str(out), [])
 
         assert os.listdir(out) == ["a"]
-        assert "Skipped char: devices are only created by root" in caplog.text
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX, not root"
+    )
+    def test_excluded_device_is_not_reported(self, tmp_path: Path) -> None:
+        """Test that a device left out on purpose doesn't fail the extraction."""
+        archive = tmp_path / "nodes.tar"
+        make_tar(archive, file_entry("a"), node_entry("char", tarfile.CHRTYPE))
+        out = tmp_path / "out"
+
+        _core.extract_archive(str(archive), str(out), [], exclude=["char"])
+
+        assert os.listdir(out) == ["a"]
 
     @pytest.mark.skipif(
         sys.platform == "win32" or os.geteuid() != 0, reason="needs root"
@@ -501,19 +616,19 @@ class TestSpecialExtraction:
         assert st.st_rdev == os.makedev(1, 3)
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only")
-    def test_windows_skips_a_fifo(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Test that a FIFO is skipped with a warning, the rest still extracted."""
+    def test_windows_reports_a_fifo(self, tmp_path: Path) -> None:
+        """Test that a FIFO fails the extraction, the rest still extracted."""
         archive = tmp_path / "nodes.tar"
         make_tar(archive, file_entry("a"), node_entry("fifo", tarfile.FIFOTYPE))
         out = tmp_path / "out"
 
-        with caplog.at_level(logging.WARNING, logger="compresso"):
+        with pytest.raises(
+            IncompleteExtractionError,
+            match=r"^Skipped, the rest was extracted: fifo \(FIFOs can't be created on this platform\)$",
+        ):
             _core.extract_archive(str(archive), str(out), [])
 
         assert os.listdir(out) == ["a"]
-        assert "Skipped fifo: FIFOs can't be created on this platform" in caplog.text
 
 
 class TestDirectoryMetadata:
@@ -793,6 +908,27 @@ class TestSymlinksAsFiles:
 
 class TestSymlinkExtraction:
     """Test allow_symlinks=1, which creates links whose targets stay inside."""
+
+    def test_uncreatable_link_is_reported(self, tmp_path: Path) -> None:
+        """Test that a link this process can't make keeps the rest extracted."""
+        try:
+            (tmp_path / "symlink-probe").symlink_to("x")
+        except OSError:
+            pass
+        else:
+            pytest.skip("symlinks are permitted here")
+
+        archive = tmp_path / "links.tar"
+        make_tar(archive, file_entry("a"), link_entry("b", "a", kind=tarfile.SYMTYPE))
+        out = tmp_path / "out"
+
+        with pytest.raises(
+            IncompleteExtractionError,
+            match=r"^Skipped, the rest was extracted: b \(this user or filesystem",
+        ):
+            _core.extract_archive(str(archive), str(out), [], allow_symlinks=1)
+
+        assert os.listdir(out) == ["a"]
 
     @pytest.mark.usefixtures("needs_symlinks")
     def test_link_is_created_as_stored(self, tmp_path: Path) -> None:

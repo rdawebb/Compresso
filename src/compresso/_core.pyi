@@ -27,6 +27,19 @@ class IncompleteExtractionError(Error):
     Raises on completion, anything extracted is kept.
     """
 
+class SourceRemovalError(Error):
+    """An archive was written, but some of its sources could not be deleted.
+
+    The archive is complete, and every other source is deleted.
+
+    Attributes:
+        output: The path the archive was written to.
+        failures: Each path left behind, with the reason.
+    """
+
+    output: str
+    failures: list[tuple[str, str]]
+
 class CorruptDataError(Error):
     """The input is corrupt, truncated, or not the format it claims to be."""
 
@@ -153,14 +166,27 @@ def create_archive(
     threads: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
+    include: Sequence[str] = ...,
+    exclude: Sequence[str] = ...,
+    remove_sources: bool = ...,
+    dereference: bool = ...,
 ) -> str:
     """Create an archive from the given input paths in the given format.
 
     `overwrite` is 0 = error (default), 1 = skip, 2 = overwrite, 3 = rename;
-    applied to the single destination archive.
+    applied to the single destination archive; `remove_sources` with skip
+    raises ValueError.
 
     Returns the path actually written, which RENAME may have changed from
     `output_path`; SKIP returns `output_path` unchanged and writes nothing.
+
+    `include` and `exclude` are globs matched against entry names; an exclude
+    wins and isn't descended into, and with any includes, only matching entries
+    and the directories holding them are stored.
+
+    `dereference` stores what symlinks lead to; one that's dangling, or that
+    leads to a directory above it, stays a link; `remove_sources` then deletes
+    the links, and not their targets.
     """
 
 def extract_archive(
@@ -179,6 +205,8 @@ def extract_archive(
     threads: int = ...,
     progress: ProgressFn | None = ...,
     cancel: CancelToken | None = ...,
+    include: Sequence[str] = ...,
+    exclude: Sequence[str] = ...,
 ) -> None:
     """Extract an archive to output_dir; an empty `files` extracts every entry.
 
@@ -187,12 +215,31 @@ def extract_archive(
 
     `overwrite` is 0 = error, 1 = skip, 2 = overwrite, 3 = rename;
     `allow_symlinks` is 0 = deny, 1 = allow if the target stays inside
-    output_dir, 2 = rewrite to regular files, -1 = the format's default (2 for zip, 0 otherwise);
-    `max_total_size` and `max_depth` treat 0 as unlimited;
+    output_dir, 2 = rewrite to regular files, -1 = the format's default (2 for zip,
+    0 otherwise); `max_total_size` and `max_depth` treat 0 as unlimited;
     `overwrite_dir_metadata` also restores the mode and mtime of a directory
     that already exists, as GNU tar does, except when `overwrite` is 1 (skip);
     `exact_permissions` restores modes verbatim, where by default
     setuid/setgid/sticky are dropped and the umask applies.
+
+    `include` and `exclude` are matched as for `create_archive`: as in bsdtar,
+    an entry is extracted if `files` names it or an include matches it, and an
+    exclude overrides both; a directory entry is kept only if it matches
+    itself; an include that no entry matches raises `IncompleteExtractionError`,
+    as a name in `files` does, after the rest is extracted.
+    """
+
+def verify_file(
+    path: StrOrBytesPath,
+    *,
+    threads: int = ...,
+    progress: ProgressFn | None = ...,
+    cancel: CancelToken | None = ...,
+) -> None:
+    """Decode all of an archive or compressed file, writing nothing.
+
+    Raises what extracting it would for damaged data, so it proves only what
+    the format checks: a plain tar's file data carries no checksum.
     """
 
 def detect_format(file_path: StrOrBytesPath) -> str:
@@ -204,8 +251,21 @@ def gzip_stored_name(file_path: StrOrBytesPath) -> bytes | None:
     Always None for a non-gzip file.
     """
 
+def stored_content_size(file_path: StrOrBytesPath) -> int | None:
+    """Return the uncompressed size an xz, zstd, lz4 or snappy file states, or None.
+
+    Reads no compressed data, so a damaged file can still state a size; None for
+    any other format, a zstd or lz4 frame written from a stream, or trailing data.
+    """
+
 def format_is_archive(format: str) -> bool:
     """Return whether a format's container can hold more than one entry."""
+
+def format_stores_hardlinks(format: str) -> bool:
+    """Return whether an archive format stores a file's later names as links."""
+
+def path_matches(path: str, patterns: Sequence[str]) -> bool:
+    """Return whether any glob matches an entry path, as `include` and `exclude` do."""
 
 class _StandaloneFormatDict(TypedDict):
     """One single file container format, as defined by `standalone_formats`."""

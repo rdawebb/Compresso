@@ -1,208 +1,136 @@
-"""The `compress` command, which also answers to `archive`."""
+"""The `compress` command, packing files into archives and compressed files."""
 
 from __future__ import annotations
 
-import time
+import sys
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
-from .._core import BackendError, Error, HeaderError
-from ..frontend.api import CompressionJob, CompressionOptions
-from ..frontend.archive_api import ArchiveJob, ArchiveOptions, OverwriteMode
+from .._core import SourceRemovalError
+from ..frontend.api import CompressionJob, Strategy
+from ..frontend.archive_api import ArchiveJob, OverwriteMode
+from ..frontend.dispatch import CompressRequest, plan_compress
+from ..introspect.capabilities import list_capabilities
 from ._app import app
-from ._dispatch import (
-    DEFAULT_ARCHIVE_FORMAT,
-    default_archive_output,
-    format_is_single_file,
-    infer_format,
-    is_archive_format,
-    resolve_single_output,
+from ._render import EXIT_USAGE, fail, handles_errors
+from ._render.jobs import (
+    archive_plan,
+    archive_result,
+    compress_plan,
+    compress_result,
+    skipped,
+    summary,
 )
-from ._render import (
-    BAR_THRESHOLD,
-    EXIT_USAGE,
-    cancelled,
-    exit_for_result,
-    fail,
-    format_size,
-    format_time,
-    progress_bar,
-    succeed,
-)
+from ._run import NotRemoved, conflict_mode, remove_source, run_all, run_job
+
+# Built from the core so `--help` lists only what this build compiled in
+Algo = StrEnum("Algo", ["auto"] + [c.name for c in list_capabilities()])
 
 
 def _compress_one_file(
-    source: Path,
-    output: Path | None,
-    fmt: str | None,
-    algo: str | None,
-    strategy: str,
-    level: int | None,
-    overwrite: OverwriteMode,
-    threads: int,
-    quiet: bool,
+    job: CompressionJob, quiet: bool, verbose: bool, remove: bool
 ) -> None:
     """Compress a single file into a one-file container.
 
     Args:
-        source: The path to the file to compress.
-        output: The path to the output file or directory.
-        fmt: The format to use for compression.
-        algo: The algorithm to use for compression.
-        strategy: The strategy to use for compression.
-        level: The compression level to use.
-        overwrite: What to do when the destination file already exists.
-        threads: Worker threads, or 0 for one per core.
-        quiet: Whether to suppress progress output.
+        job: The planned job.
+        quiet: Whether to suppress all output.
+        verbose: Whether to print the plan and stats blocks.
+        remove: Whether to delete the input once the output is written.
     """
-    algo_lower: str | None = algo.lower() if algo else None
-    options = CompressionOptions(
-        algo=None if algo_lower == "auto" else algo_lower,
-        strategy=strategy.lower(),
-        level=level,
-        format=fmt,
-        overwrite=overwrite,
-        threads=threads,
-    )
-
-    job = CompressionJob.from_file(src=source, dest=None, options=options)
-    # Planned once to learn the default name, then repointed if `-o` moves it
-    dest: Path = resolve_single_output(output, job.plan.dest)
-    if dest != job.plan.dest:
-        job = CompressionJob.from_file(src=source, dest=dest, options=options)
-
     plan = job.plan
 
     if not plan.can_compress:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
-    if not quiet:
-        lines: list[str] = [
-            f"Compressing: {plan.src}",
-            f"Output:      {plan.dest}",
-            f"Algorithm:   {plan.backend_name}",
-        ]
-        if not fmt:
-            lines.append(f"Strategy:    {strategy}")
-        if level is not None:
-            lines.append(f"Level:       {level}")
-        print("\n".join(lines) + "\n")
+    if verbose:
+        compress_plan(plan)
 
-    start_time: float = time.time()
+    skips: bool = plan.options.overwrite is OverwriteMode.SKIP and plan.dest.exists()
+    before = plan.src.stat()
 
-    with progress_bar(
+    elapsed, _ = run_job(
+        job,
+        plan.src,
         "Compressing",
         plan.input_size,
-        enabled=not quiet and plan.input_size > BAR_THRESHOLD,
-    ) as on_progress:
-        result = job.run(progress=on_progress)
-
-    elapsed: float = time.time() - start_time
-
-    exit_for_result(result, "Compression")
-
-    # RENAME may have written somewhere other than `dest`; job.plan is updated
-    # in place on success to reflect the path actually written
-    actual_dest: Path = job.plan.dest
-    compressed_size: int = actual_dest.stat().st_size
-    ratio: int | float = (
-        (compressed_size / plan.input_size) * 100 if plan.input_size > 0 else 0
-    )
-    speed_mbs: int | float = (
-        (plan.input_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+        quiet=quiet,
+        what="Compression",
+        verbose=verbose,
     )
 
-    if not quiet:
-        print()
-        succeed("Compression successful!\n")
-        if actual_dest != dest:
-            print(f"  Renamed to:      {actual_dest}")
-        print(
-            f"  Original size:   {format_size(size_bytes=plan.input_size)}\n"
-            f"  Compressed size: {format_size(size_bytes=compressed_size)}\n"
-            f"  Ratio:           {ratio:.1f}% of original\n"
-            f"  Time:            {format_time(seconds=elapsed)}\n"
-            f"  Speed:           {speed_mbs:.2f} MB/s\n"
-            f"  Saved:           {format_size(size_bytes=plan.input_size - compressed_size)}\n"
-        )
+    # RENAME may have written somewhere other than `plan.dest`; job.plan is
+    # replaced on success with the path actually written
+    written: Path = job.plan.dest
+    if verbose:
+        compress_result(plan, written, elapsed)
+
+    elif skips and not quiet:
+        skipped(plan.dest)
+
+    elif not quiet:
+        renamed: Path | None = written if written != plan.dest else None
+        summary(plan.dest, plan.input_size, written.stat().st_size, elapsed, renamed)
+
+    if remove:
+        remove_source(plan.src, before)
 
 
-def _archive_many(
-    sources: list[Path],
-    output: Path | None,
-    fmt: str,
-    level: int | None,
-    overwrite: OverwriteMode,
-    threads: int,
-    quiet: bool,
-) -> None:
+def _archive_many(job: ArchiveJob, quiet: bool, verbose: bool) -> None:
     """Pack several paths, or a directory, into one archive.
 
     Args:
-        sources: The paths to the files or directories to archive.
-        output: The path to the output file or directory.
-        fmt: The format to use for compression.
-        level: The compression level to use.
-        overwrite: What to do when the destination archive already exists.
-        threads: Worker threads, or 0 for one per core.
-        quiet: Whether to suppress progress output.
+        job: The planned job.
+        quiet: Whether to suppress all output.
+        verbose: Whether to print the plan and stats blocks.
     """
-    destination: Path = (
-        output if output is not None else default_archive_output(sources[0], fmt)
-    )
-
-    options = ArchiveOptions(
-        format=fmt.lower(),
-        compression_level=level,
-        overwrite=overwrite,
-        threads=threads,
-    )
-    job = ArchiveJob.from_paths(sources=sources, output=destination, options=options)
     plan = job.plan
 
     if not plan.can_run:
         fail(f"Error: {plan.reason_if_unavailable}", EXIT_USAGE)
 
-    if not quiet:
-        print(
-            f"Archiving:   {plan.entry_count} source(s)\n"
-            f"Output:      {plan.output}\n"
-            f"Format:      {plan.options.format}\n"
-            f"Input size:  {format_size(size_bytes=plan.total_input_size)}\n"
-        )
+    if verbose:
+        archive_plan(plan)
 
-    start_time: float = time.time()
+    skips: bool = plan.options.overwrite is OverwriteMode.SKIP and plan.output.exists()
 
     # A format with a codec stage reads the data twice, so the job reports a
     # larger total than this once it starts; the bar follows it
-    with progress_bar(
+    elapsed, result = run_job(
+        job,
+        plan.output,
         "Archiving",
         plan.total_input_size,
-        enabled=not quiet and plan.total_input_size > BAR_THRESHOLD,
-    ) as on_progress:
-        result = job.run(progress=on_progress)
+        quiet=quiet,
+        what="Archive",
+        verbose=verbose,
+    )
 
-    elapsed: float = time.time() - start_time
+    # RENAME may have written somewhere other than `plan.output`; job.plan is
+    # replaced with the path actually written once the archive is committed
+    written: Path = job.plan.output
+    if verbose:
+        archive_result(plan, written, elapsed)
 
-    exit_for_result(result, "Archive")
+    elif skips and not quiet:
+        skipped(plan.output)
 
-    # RENAME may have written somewhere other than `destination`; job.plan is
-    # updated in place on success to reflect the path actually written
-    actual_output: Path = job.plan.output
-    archive_size: int = actual_output.stat().st_size
-
-    if not quiet:
-        print()
-        succeed("Archive created!")
-        if actual_output != destination:
-            print(f"  Renamed to:   {actual_output}")
-        print(
-            f"  Input size:   {format_size(size_bytes=plan.total_input_size)}\n"
-            f"  Archive size: {format_size(size_bytes=archive_size)}\n"
-            f"  Time:         {format_time(seconds=elapsed)}\n"
+    elif not quiet:
+        renamed: Path | None = written if written != plan.output else None
+        summary(
+            plan.output,
+            plan.total_input_size,
+            written.stat().st_size,
+            elapsed,
+            renamed,
         )
 
+    if isinstance(result.error, SourceRemovalError):
+        raise NotRemoved(*result.error.failures)
 
+
+@handles_errors("Compression")
 def compress(
     inputs: Annotated[
         list[Path], app.Argument(help="Files and directories to compress")
@@ -210,33 +138,38 @@ def compress(
     output: Annotated[
         Path | None,
         app.Option(
-            "--output", "-o", help="Output path (default: named after the input)"
+            "--output", "-o", help="Output path", show_default="named after the input"
         ),
     ] = None,
     format: Annotated[
         str | None,
         app.Option(
             "--format",
-            "-f",
+            "-F",
             case_sensitive=False,
-            help="Container to write, e.g. gz, zst, tar.zst, zip",
+            help="Container to write, e.g. comp, gz, zst, tar.zst, zip",
         ),
     ] = None,
     algo: Annotated[
-        str | None,
+        Algo,
         app.Option(
-            "--algo", "-a", case_sensitive=False, help="Compression algorithm to use"
+            "--algo",
+            "-a",
+            case_sensitive=False,
+            help="Compression algorithm to use",
+            show_default=False,
         ),
-    ] = "auto",
+    ] = Algo.auto,
     strategy: Annotated[
-        str,
+        Strategy | None,
         app.Option(
             "--strategy",
             "-s",
             case_sensitive=False,
-            help="Compression strategy to use (fast/balanced/max_ratio)",
+            help="Compression strategy to use",
+            show_default="balanced",
         ),
-    ] = "balanced",
+    ] = None,
     level: Annotated[
         int | None,
         app.Option(
@@ -245,23 +178,48 @@ def compress(
             help="Compression level; each algorithm's range is shown by `list`",
         ),
     ] = None,
-    overwrite: Annotated[
+    include: Annotated[
+        list[str] | None,
+        app.Option(
+            "--include",
+            help="Archive only what matches this, and the dirs holding it; repeatable",
+        ),
+    ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        app.Option(
+            "--exclude",
+            help="Leave out what matches this glob and all below it, overriding "
+            "--include; repeatable",
+        ),
+    ] = None,
+    on_conflict: Annotated[
+        OverwriteMode | None,
+        app.Option(
+            "--on-conflict",
+            case_sensitive=False,
+            help="What to do when the output exists",
+            show_default="rename",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        app.Option("--force", "-f", help="Replace an existing output"),
+    ] = False,
+    remove: Annotated[
         bool,
         app.Option(
-            "--overwrite", help="Replace an archive that already exists at the output"
+            "--rm/--keep",
+            " /-k",
+            help="Delete the input once the output is written, or keep it",
         ),
     ] = False,
-    skip_existing: Annotated[
+    dereference: Annotated[
         bool,
         app.Option(
-            "--skip-existing", help="Leave an existing output archive untouched"
-        ),
-    ] = False,
-    error_on_conflict: Annotated[
-        bool,
-        app.Option(
-            "--error-on-conflict",
-            help="Fail instead of renaming a clashing output archive",
+            "--dereference",
+            "-h",
+            help="Archive what symlinks lead to, rather than the links",
         ),
     ] = False,
     threads: Annotated[
@@ -273,6 +231,10 @@ def compress(
             help="Worker threads for zstd and xz, or 0 for one per core",
         ),
     ] = 0,
+    verbose: Annotated[
+        bool,
+        app.Option("--verbose", "-v", help="Show the plan and full stats"),
+    ] = False,
     quiet: Annotated[
         bool, app.Option("--quiet", "-q", help="Suppress all output")
     ] = False,
@@ -281,93 +243,87 @@ def compress(
     \f
 
     One file becomes a single-file container: a Compresso `.comp` by default,
-    or `-f gz`/`zst`/`xz`/`bz2`/`lz4` for a standalone one; a directory, or
+    or `-F gz`/`zst`/`xz`/`bz2`/`lz4` for a standalone one; a directory, or
     more than one input, becomes an archive (`zip` unless told otherwise);
-    a recognisable extension on `-o` picks the format on its own, and `-f`
+    a recognisable extension on `-o` picks the format on its own, and `-F`
     overrides it.
 
     A clashing output name by default gets a platform-native numbered sibling
     (`name 2.ext` on macOS, `name (2).ext` elsewhere), for an archive and a
-    single-file container alike; use `--overwrite`, `--skip-existing`, or
-    `--error-on-conflict` to change that.
+    single-file container alike; use `--on-conflict` or `-f` to change that.
+
+    Each output gets one summary line; `-v` shows the plan and full stats
+    instead, and `-q` nothing at all.
 
     Args:
         inputs: The files and directories to compress.
         output: Where to write (default: named after the first input).
         format: Container to write (default: inferred, else .comp or zip).
-        algo: Algorithm for the Compresso container (default: auto).
-        strategy: Strategy for the Compresso container (default: balanced).
+        algo: Algorithm for the Compresso container (default: auto); any
+            other format refuses it.
+        strategy: Strategy for the Compresso container (default: balanced);
+            any other format refuses it, as does `-a`.
         level: Compression level (default: the format's own).
-        overwrite: If True, replace an existing output.
-        skip_existing: If True, leave an existing output untouched.
-        error_on_conflict: If True, fail instead of renaming a clashing output.
+        include: Globs an archive's entries must match (default: all);
+            a single-file output refuses it.
+        exclude: Globs an archive's entries must not match; a single-file
+            output refuses it.
+        on_conflict: What to do when the output exists (default: rename).
+        force: If True, replace an existing output.
+        remove: If True, delete the input once the output is written; an
+            archive deletes only what it stored, leaving anything else and
+            the directories holding it.
+        dereference: If True, an archive stores symlink targets, and `remove`
+            deletes the links, not targets; a dangling link, or one leading to
+            a directory above it, stays a link; single-file output always reads
+            through a link.
         threads: Worker threads for zstd and xz (default: one per core).
+        verbose: If True, show the plan and full stats.
         quiet: If True, suppress all output.
     """
-    if sum([overwrite, skip_existing, error_on_conflict]) > 1:
-        fail(
-            "Error: --overwrite, --skip-existing and --error-on-conflict "
-            "are mutually exclusive",
-            EXIT_USAGE,
-        )
+    overwrite_mode = conflict_mode(on_conflict, force, remove)
+    if verbose and quiet:
+        fail("Error: -v contradicts -q", EXIT_USAGE)
 
-    if overwrite:
-        overwrite_mode = OverwriteMode.OVERWRITE
-    elif skip_existing:
-        overwrite_mode = OverwriteMode.SKIP
-    elif error_on_conflict:
-        overwrite_mode = OverwriteMode.ERROR
-    else:
-        overwrite_mode = OverwriteMode.RENAME
+    if not inputs:
+        fail("Error: No input paths given", EXIT_USAGE)
+
+    algo_name: str | None = None if algo == "auto" else algo
+
+    # -a names the algorithm that -s would otherwise pick
+    if algo_name and strategy:
+        fail("Error: -a contradicts -s", EXIT_USAGE)
+
+    request = CompressRequest(
+        inputs=inputs,
+        output=output,
+        format=format,
+        algo=algo_name,
+        strategy=strategy,
+        level=level,
+        overwrite=overwrite_mode,
+        threads=threads,
+        include=include or (),
+        exclude=exclude or (),
+        remove_sources=remove,
+        dereference=dereference,
+    )
 
     try:
-        if not inputs:
-            fail("Error: No input paths given", EXIT_USAGE)
+        job = plan_compress(request)
 
-        chosen: str | None = format or infer_format(output)
-        many: bool = len(inputs) > 1 or any(p.is_dir() for p in inputs)
+    except ValueError as e:
+        fail(f"Error: {e}", EXIT_USAGE)
 
-        if format_is_single_file(chosen) and many:
-            fail(
-                f"Error: {chosen} holds a single file; "
-                f"use an archive format such as tar.{chosen} for several",
-                EXIT_USAGE,
-            )
-
-        if is_archive_format(chosen) or (many and chosen is None):
-            _archive_many(
-                sources=inputs,
-                output=output,
-                fmt=chosen or DEFAULT_ARCHIVE_FORMAT,
-                level=level,
-                overwrite=overwrite_mode,
-                threads=threads,
-                quiet=quiet,
-            )
-
+    def run_one(job: CompressionJob | ArchiveJob) -> None:
+        if isinstance(job, ArchiveJob):
+            _archive_many(job, quiet, verbose)
         else:
-            _compress_one_file(
-                source=inputs[0],
-                output=output,
-                fmt=chosen,
-                algo=algo,
-                strategy=strategy,
-                level=level,
-                overwrite=overwrite_mode,
-                threads=threads,
-                quiet=quiet,
-            )
+            _compress_one_file(job, quiet, verbose, remove)
 
-    except KeyboardInterrupt:
-        cancelled("Compression")
-
-    except (Error, HeaderError, BackendError) as e:
-        fail(f"Compression error: {e}")
-
-    except Exception as e:
-        fail(f"Unexpected error: {e}")
+    sys.exit(run_all([job], run_one, "Compression"))
 
 
 def register() -> None:
     """Attach this command to the app."""
-    app.command(aliases=["c", "comp", "archive", "a", "ar"])(compress)
+    app.command(aliases=["c"])(compress)

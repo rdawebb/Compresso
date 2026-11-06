@@ -1,6 +1,7 @@
 """Tests for creating archives."""
 
 import contextlib
+import errno
 import logging
 import os
 import socket
@@ -14,7 +15,13 @@ from pathlib import Path
 import orjson
 import pytest
 
-from compresso import BackendError, _core
+from compresso import (
+    ArchiveJob,
+    ArchiveOptions,
+    BackendError,
+    SourceRemovalError,
+    _core,
+)
 
 from .helpers import ARCHIVE_AND_LIST, run_child
 
@@ -264,6 +271,430 @@ class TestArchiveWalk:
                 assert listed[i + 1 : i + 1 + len(inside)] == inside, listed
 
 
+class TestArchiveFilter:
+    """Test that `include` and `exclude` narrow the walk."""
+
+    @pytest.fixture
+    def tree(self, tmp_path: Path) -> Path:
+        """A tree with text, logs, a node_modules and an empty directory."""
+        for rel in ("t/a/keep.txt", "t/a/drop.log", "t/a/node_modules/m.txt", "t/b/n"):
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_text(rel)
+        (tmp_path / "t/empty").mkdir()
+        return tmp_path / "t"
+
+    @pytest.mark.parametrize(
+        ("include", "exclude", "expected"),
+        [
+            (
+                [],
+                ["node_modules", "*.log"],
+                ["t/", "t/a/", "t/a/keep.txt", "t/b/", "t/b/n", "t/empty/"],
+            ),
+            (
+                ["*.txt"],
+                [],
+                [
+                    "t/",
+                    "t/a/",
+                    "t/a/keep.txt",
+                    "t/a/node_modules/",
+                    "t/a/node_modules/m.txt",
+                ],
+            ),
+            (["*.txt"], ["node_modules"], ["t/", "t/a/", "t/a/keep.txt"]),
+        ],
+        ids=["exclude", "include-keeps-holding-dirs", "exclude-wins"],
+    )
+    def test_entries_kept(
+        self,
+        tree: Path,
+        tmp_path: Path,
+        include: list[str],
+        exclude: list[str],
+        expected: list[str],
+    ) -> None:
+        """Test which entries a filter stores."""
+        output = tmp_path / "out.tar"
+
+        _core.create_archive(
+            str(output), "tar", [str(tree)], include=include, exclude=exclude
+        )
+
+        listed = [e["path"] for e in _core.list_archive_contents(str(output))]
+        assert sorted(listed) == expected
+
+    def test_bare_string_is_refused(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a str isn't taken as a sequence of one-character patterns."""
+        with pytest.raises(TypeError, match="sequence of str, not str"):
+            _core.create_archive(
+                str(tmp_path / "out.tar"), "tar", [str(tree)], include="*.txt"
+            )
+
+    @pytest.mark.parametrize(
+        ("include", "exclude"),
+        [([], ["node_modules", "*.log"]), (["*.txt"], []), (["t/a"], ["*.log"])],
+    )
+    def test_plan_totals_what_the_filter_keeps(
+        self, tree: Path, tmp_path: Path, include: list[str], exclude: list[str]
+    ) -> None:
+        """Test that the plan's total matches the bytes the walk stores."""
+        options = ArchiveOptions(format="tar", include=include, exclude=exclude)
+        job = ArchiveJob.from_paths([tree], tmp_path / "out.tar", options)
+
+        result = job.run()
+
+        assert result.ok, result.error
+        stored = _core.list_archive_contents(str(job.plan.output))
+        assert job.plan.total_input_size == sum(e["size"] for e in stored)
+
+    def test_plan_does_not_walk_an_excluded_tree(
+        self, tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that the plan prunes excluded directories, as the C walk does."""
+        scanned: list[str] = []
+        real_scandir = os.scandir
+
+        def spy(path):
+            scanned.append(os.fspath(path))
+            return real_scandir(path)
+
+        monkeypatch.setattr(os, "scandir", spy)
+
+        ArchiveJob.from_paths(
+            [tree],
+            tmp_path / "out.tar",
+            ArchiveOptions(format="tar", exclude=["node_modules"]),
+        )
+
+        assert str(tree / "a") in scanned
+        assert not any("node_modules" in path for path in scanned)
+
+    def test_plan_counts_only_a_kept_source(self, tree: Path, tmp_path: Path) -> None:
+        """Test that an excluded source adds nothing to the plan's total."""
+        keep = tree / "a" / "keep.txt"
+        options = ArchiveOptions(format="tar", exclude=["drop.log", "b"])
+
+        job = ArchiveJob.from_paths(
+            [keep, tree / "a" / "drop.log", tree / "b"], tmp_path / "out.tar", options
+        )
+
+        assert job.plan.total_input_size == keep.stat().st_size
+
+    @pytest.mark.usefixtures("needs_symlinks")
+    def test_plan_counts_a_symlink_as_a_link(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a link adds no bytes, wherever it is, like the walk."""
+        target = tree / "a" / "keep.txt"
+        (tree / "b" / "link").symlink_to(target)
+        source_link = tmp_path / "source-link"
+        source_link.symlink_to(tree)
+
+        def total(*sources: Path) -> int:
+            options = ArchiveOptions(format="tar")
+            job = ArchiveJob.from_paths(list(sources), tmp_path / "o.tar", options)
+            return job.plan.total_input_size
+
+        assert total(tree / "b") == (tree / "b" / "n").stat().st_size
+        assert total(source_link) == 0
+
+
+@pytest.mark.usefixtures("needs_symlinks")
+class TestDereference:
+    """Test that `dereference` stores what symlinks lead to, as bsdtar `-h`."""
+
+    @pytest.fixture
+    def tree(self, tmp_path: Path) -> Path:
+        """A tree with links to a file, and to a directory outside it."""
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / "f.txt").write_text("other")
+
+        root = tmp_path / "tree"
+        root.mkdir()
+        (root / "a.txt").write_text("hello")
+        (root / "flink").symlink_to("a.txt")
+        (root / "dlink").symlink_to(other, target_is_directory=True)
+
+        return root
+
+    @staticmethod
+    def entries(output: Path) -> dict[str, "_core.ArchiveEntryDict"]:
+        return {e["path"].rstrip("/"): e for e in _core.list_archive_contents(output)}
+
+    @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
+    def test_links_become_their_targets(
+        self, tree: Path, tmp_path: Path, fmt: str
+    ) -> None:
+        """Test that a link to a file or a directory holds what it leads to."""
+        output = tmp_path / f"out.{fmt}"
+
+        _core.create_archive(str(output), fmt, [str(tree)], dereference=True)
+
+        entries = self.entries(output)
+        assert entries["tree/flink"]["type"] == "file"
+        assert entries["tree/flink"]["size"] == 5
+        assert entries["tree/dlink"]["type"] == "dir"
+        assert entries["tree/dlink/f.txt"]["size"] == 5
+
+    def test_links_stay_links_by_default(self, tree: Path, tmp_path: Path) -> None:
+        """Test that nothing is followed unless asked."""
+        output = tmp_path / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(tree)])
+
+        entries = self.entries(output)
+        assert entries["tree/dlink"]["type"] == "symlink"
+        assert "tree/dlink/f.txt" not in entries
+
+    def test_source_link_is_followed(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a link given as a source is stored under its own name."""
+        link = tmp_path / "top"
+        link.symlink_to(tree, target_is_directory=True)
+        output = tmp_path / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(link)], dereference=True)
+
+        entries = self.entries(output)
+        assert entries["top"]["type"] == "dir"
+        assert entries["top/a.txt"]["size"] == 5
+
+    def test_dangling_link_stays_a_link(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a link leading nowhere, or to itself, is stored as a link."""
+        (tree / "dangling").symlink_to("missing")
+        (tree / "self").symlink_to("self")
+        output = tmp_path / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(tree)], dereference=True)
+
+        entries = self.entries(output)
+        assert entries["tree/dangling"]["type"] == "symlink"
+        assert entries["tree/dangling"]["link_target"] == "missing"
+        assert entries["tree/self"]["type"] == "symlink"
+
+    @pytest.mark.parametrize(
+        ("as_source", "dereference", "warns"),
+        [
+            (True, False, True),
+            (True, True, True),
+            (False, True, True),
+            (False, False, False),
+        ],
+    )
+    def test_dangling_link_warns_where_data_was_expected(
+        self,
+        tree: Path,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        as_source: bool,
+        dereference: bool,
+        warns: bool,
+    ) -> None:
+        """Test that only a named or followed dangling link is reported."""
+        link = tree / "dangling"
+        link.symlink_to("missing")
+        source = link if as_source else tree
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            _core.create_archive(
+                str(tmp_path / "out.tar"), "tar", [str(source)], dereference=dereference
+            )
+
+        expected = f"Stored {link} as a link: its target can't be reached"
+        assert (expected in caplog.text) is warns
+
+    def test_link_to_an_ancestor_stays_a_link(
+        self, tree: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that a loop, even through another directory, ends the walk quietly."""
+        (tree / "up").symlink_to(".", target_is_directory=True)
+        (tree / "sub").mkdir()
+        (tree / "sub" / "up").symlink_to("..", target_is_directory=True)
+        (tmp_path / "other" / "back").symlink_to(tree, target_is_directory=True)
+        output = tmp_path / "out.tar"
+
+        with caplog.at_level(logging.WARNING, logger="compresso"):
+            _core.create_archive(str(output), "tar", [str(tree)], dereference=True)
+
+        entries = self.entries(output)
+        for name in ("tree/up", "tree/sub/up", "tree/dlink/back"):
+            assert entries[name]["type"] == "symlink"
+        assert "as a link" not in caplog.text
+
+    def test_link_to_the_output_is_skipped(self, tree: Path, tmp_path: Path) -> None:
+        """Test that the archive being written isn't stored through a link."""
+        output = tmp_path / "out.tar"
+        output.write_text("old")
+        (tree / "own").symlink_to(output)
+
+        _core.create_archive(
+            str(output), "tar", [str(tree)], overwrite=2, dereference=True
+        )
+
+        assert "tree/own" not in self.entries(output)
+
+    def test_excluded_link_is_not_walked(self, tree: Path, tmp_path: Path) -> None:
+        """Test that an exclude still prunes what a link leads to."""
+        output = tmp_path / "out.tar"
+
+        _core.create_archive(
+            str(output), "tar", [str(tree)], exclude=["*/dlink"], dereference=True
+        )
+
+        assert not any(name.startswith("tree/dlink") for name in self.entries(output))
+
+    def test_rm_deletes_links_but_not_targets(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a link goes, source or not; its target stays, unlike GNU tar's."""
+        other = tmp_path / "other"
+        top = tmp_path / "top"
+        top.symlink_to(other, target_is_directory=True)
+
+        _core.create_archive(
+            str(tmp_path / "out.tar"),
+            "tar",
+            [str(tree), str(top)],
+            dereference=True,
+            remove_sources=True,
+        )
+
+        assert not os.path.lexists(tree)
+        assert not os.path.lexists(top)
+        assert (other / "f.txt").read_text() == "other"
+
+    def test_plan_counts_what_the_walk_stores(self, tree: Path, tmp_path: Path) -> None:
+        """Test that the planned total follows links, loops and dangling ones."""
+        (tree / "dangling").symlink_to("missing")
+        (tree / "up").symlink_to(".", target_is_directory=True)
+        (tmp_path / "other" / "back").symlink_to(tree, target_is_directory=True)
+
+        def total(dereference: bool) -> int:
+            options = ArchiveOptions(format="tar", dereference=dereference)
+            job = ArchiveJob.from_paths([tree], tmp_path / "o.tar", options)
+            assert job.plan.can_run
+            return job.plan.total_input_size
+
+        assert total(False) == 5
+        assert total(True) == 15
+
+    def test_plan_keeps_a_dangling_source(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a dangling link exists as a source, as it does to the walk."""
+        link = tree / "dangling"
+        link.symlink_to("missing")
+        output = tmp_path / "o.tar"
+
+        job = ArchiveJob.from_paths([link], output, ArchiveOptions(format="tar"))
+        assert job.run().ok
+
+        assert self.entries(output)["dangling"]["type"] == "symlink"
+
+
+class TestRemoveSources:
+    """Test that `remove_sources` deletes exactly what the archive stored."""
+
+    @pytest.fixture
+    def tree(self, tmp_path: Path) -> Path:
+        """A small tree with a nested directory."""
+        root = tmp_path / "tree"
+        (root / "sub").mkdir(parents=True)
+        (root / "a.txt").write_text("a")
+        (root / "sub" / "b.log").write_text("b")
+
+        return root
+
+    @pytest.mark.parametrize("fmt", ["tar", "tar.zst", "zip"])
+    def test_stored_tree_is_deleted(self, tree: Path, tmp_path: Path, fmt: str) -> None:
+        """Test that a stored tree goes, leaving a complete archive."""
+        output = tmp_path / f"out.{fmt}"
+
+        _core.create_archive(str(output), fmt, [str(tree)], remove_sources=True)
+
+        assert not tree.exists()
+        names = {e["path"].rstrip("/") for e in _core.list_archive_contents(output)}
+        assert names == {"tree", "tree/a.txt", "tree/sub", "tree/sub/b.log"}
+
+    def test_what_a_filter_left_out_stays(self, tree: Path, tmp_path: Path) -> None:
+        """Test that an excluded file keeps itself and the directory holding it."""
+        _core.create_archive(
+            str(tmp_path / "out.tar"),
+            "tar",
+            [str(tree)],
+            exclude=["b.log"],
+            remove_sources=True,
+        )
+
+        assert (tree / "sub" / "b.log").is_file()
+        assert not (tree / "a.txt").exists()
+
+    def test_output_inside_the_source_stays(self, tree: Path) -> None:
+        """Test that the walk skipping the archive saves it from the removal."""
+        output = tree / "out.tar"
+
+        _core.create_archive(str(output), "tar", [str(tree)], remove_sources=True)
+
+        assert [p.name for p in tree.iterdir()] == ["out.tar"]
+        assert len(_core.list_archive_contents(output)) == 4
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="needs a FIFO")
+    def test_unstored_special_file_stays(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a FIFO zip can't hold survives with its directory."""
+        os.mkfifo(tree / "pipe")
+
+        _core.create_archive(
+            str(tmp_path / "out.zip"), "zip", [str(tree)], remove_sources=True
+        )
+
+        assert [p.name for p in tree.iterdir()] == ["pipe"]
+
+    @pytest.mark.usefixtures("needs_symlinks")
+    def test_symlink_goes_but_not_its_target(self, tree: Path, tmp_path: Path) -> None:
+        """Test that a source symlink, stored as a link, is all that's deleted."""
+        link = tmp_path / "link"
+        link.symlink_to(tree, target_is_directory=True)
+
+        _core.create_archive(
+            str(tmp_path / "out.tar"), "tar", [str(link)], remove_sources=True
+        )
+
+        assert not link.is_symlink()
+        assert (tree / "a.txt").is_file()
+
+    def test_skip_is_refused(self, tree: Path, tmp_path: Path) -> None:
+        """Test that skip, which can drop a finished archive, can't delete sources."""
+        with pytest.raises(ValueError, match="remove_sources"):
+            _core.create_archive(
+                str(tmp_path / "out.tar"),
+                "tar",
+                [str(tree)],
+                overwrite=1,
+                remove_sources=True,
+            )
+
+        assert (tree / "a.txt").is_file()
+        assert not (tmp_path / "out.tar").exists()
+
+    def test_undeletable_sources_are_each_reported(
+        self, tree: Path, locked: Path, tmp_path: Path
+    ) -> None:
+        """Test that the rest still go, and the error covers all that stayed."""
+        (locked / "c.txt").write_text("c")
+        (locked / "d.txt").write_text("d")
+        locked.chmod(0o555)
+        output = tmp_path / "out.tar"
+
+        with pytest.raises(SourceRemovalError) as caught:
+            _core.create_archive(
+                str(output), "tar", [str(tree), str(locked)], remove_sources=True
+            )
+
+        reason = os.strerror(errno.EACCES)
+        assert caught.value.output == str(output)
+        assert sorted(caught.value.failures) == [
+            (str(locked / "c.txt"), reason),
+            (str(locked / "d.txt"), reason),
+        ]
+        assert not tree.exists()
+        assert len(_core.list_archive_contents(output)) == 7
+
+
 class TestSizeChange:
     """Test a file whose size changes between the walk and its copy."""
 
@@ -435,6 +866,38 @@ class TestHardlinkCreation:
 
         with zipfile.ZipFile(archive) as zf:
             assert zf.read("src/b") == b"x"
+
+    @pytest.mark.parametrize(
+        ("name", "expected"), [("a.tar.gz", 1), ("a.tar", 1), ("a.zip", 2)]
+    )
+    def test_plan_counts_a_file_as_the_format_stores_it(
+        self, tmp_path: Path, name: str, expected: int
+    ) -> None:
+        """Test that a link adds no bytes where it's stored as one, across sources."""
+        first = tmp_path / "x"
+        second = tmp_path / "y"
+        first.mkdir()
+        second.mkdir()
+        (first / "a").write_text("data")
+        os.link(first / "a", second / "b")
+
+        job = ArchiveJob.from_paths([first, second], tmp_path / name)
+
+        assert job.plan.total_input_size == 4 * expected
+
+    def test_plan_counts_a_link_whose_first_name_is_excluded(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that a name the filter drops doesn't hide the one it keeps."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.log").write_text("data")
+        os.link(src / "a.log", src / "b.txt")
+        options = ArchiveOptions(format="tar", exclude=["*.log"])
+
+        job = ArchiveJob.from_paths([src], tmp_path / "out.tar", options)
+
+        assert job.plan.total_input_size == 4
 
 
 class TestZipModesAndSymlinks:

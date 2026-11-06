@@ -11,6 +11,7 @@ from compresso.frontend.api import (
     CompressionJob,
     CompressionOptions,
     DecompressionJob,
+    Strategy,
     plan_compression,
     plan_decompression,
 )
@@ -160,8 +161,15 @@ class TestPlanCompressionLevels:
         "opts,match",
         [
             # No algo: the backend the strategy picks is the one checked
-            (CompressionOptions(strategy="fast", level=13), "lz4 compression level"),
-            (CompressionOptions(strategy="fsat"), "Unknown strategy: fsat"),
+            (
+                CompressionOptions(strategy=Strategy.FAST, level=13),
+                "lz4 compression level",
+            ),
+            (
+                CompressionOptions(strategy="fsat"),  # ty: ignore[invalid-argument-type] - the point of the test
+                "Unknown strategy: fsat",
+            ),
+            (CompressionOptions(algo="zsdt"), "Unknown compression algorithm: zsdt"),
         ],
     )
     def test_out_of_range_level_is_unrunnable(

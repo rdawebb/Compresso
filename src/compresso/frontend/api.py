@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
@@ -18,46 +19,37 @@ from .._core import (
     detect_format,
     format_is_archive,
     gzip_stored_name,
-    standalone_formats,
+    verify_file,
 )
 from .._core import get_default_backend_for_strategy as default_backend
 from .._levels import to_core_level
 from ..introspect.file_inspect import InspectResult
 from ..introspect.file_inspect import inspect as inspect_file
 from ..introspect.speeds import get_estimated_speeds
+from ._formats import (
+    STANDALONE_FORMATS,
+    STANDALONE_SUFFIXES,
+    canonical_standalone_format,
+    gzip_stored_mtime,
+)
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 from .archive_api import _OVERWRITE_CODES, OverwriteMode
 
 MB = 1024 * 1024
 
-_STANDALONE = standalone_formats()
 
-# Single-file container formats, as opposed to the Compresso container or an
-# archive, including aliases
-STANDALONE_FORMATS: dict[str, str] = {
-    alias: f["name"] for f in _STANDALONE for alias in (f["name"], *f["aliases"])
-}
+class Strategy(StrEnum):
+    """Which backend the Compresso container picks when no algorithm is given.
 
-# Suffix each standalone format conventionally uses, for naming an output the
-# caller did not name themselves
-STANDALONE_SUFFIXES: dict[str, str] = {
-    f["name"]: "." + f["exts"][0] for f in _STANDALONE
-}
-
-
-def canonical_standalone_format(name: str | None) -> str | None:
-    """Return the canonical name for a single-file format, or None.
-
-    Args:
-        name: A format as the user wrote it, e.g. "gz".
-
-    Returns:
-        The canonical name (e.g. "gzip"), or None if it is not a single-file
-        format — which includes None, archive formats and unknown names.
+    Attributes:
+        FAST: Favour speed.
+        BALANCED: Trade speed against ratio.
+        MAX_RATIO: Favour the smallest output.
     """
-    if not name:
-        return None
-    return STANDALONE_FORMATS.get(name.lower())
+
+    FAST = "fast"
+    BALANCED = "balanced"
+    MAX_RATIO = "max_ratio"
 
 
 @dataclass(frozen=True)
@@ -66,7 +58,7 @@ class CompressionOptions:
 
     Attributes:
         algo: Compression algorithm name, or None for auto.
-        strategy: Compression strategy - "fast", "balanced", or "max_ratio".
+        strategy: Compression strategy; ignored when `algo` is given.
         level: Compression level, or None for the backend's default; the
             range depends on the backend (see `BackendCapabilities`).
         format: Single-file container to write, e.g. "gz". None writes the
@@ -79,7 +71,7 @@ class CompressionOptions:
     """
 
     algo: str | None = None
-    strategy: str = "balanced"
+    strategy: Strategy = Strategy.BALANCED
     level: int | None = None
     format: str | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
@@ -143,6 +135,23 @@ class DecompressionPlan:
     overwrite: OverwriteMode = OverwriteMode.RENAME
     threads: int = 0
     mtime: int | None = None
+
+
+@dataclass(frozen=True)
+class VerificationPlan:
+    """Holds an integrity check of an archive or compressed file.
+
+    Attributes:
+        src: Source file path.
+        can_run: Whether the check can proceed.
+        reason_if_unavailable: Reason it cannot, if applicable.
+        threads: Worker threads for xz/lzma, or 0 for one per core.
+    """
+
+    src: Path
+    can_run: bool = True
+    reason_if_unavailable: str | None = None
+    threads: int = 0
 
 
 def plan_compression(
@@ -258,25 +267,26 @@ def plan_compression(
             reason_if_unavailable="No suitable backend found for the selected strategy",
         )
 
-    if options.level is not None:
-        try:
-            # The core's own check, so each backend's range lives in one place
-            if standalone:
-                check_level(options.level, format=standalone)
-            else:
-                check_level(options.level, algo=backend_name)
+    try:
+        # The core's own check, so each backend's range lives in one place;
+        # with no level it still refuses an unknown algorithm
+        level = to_core_level(options.level)
+        if standalone:
+            check_level(level, format=standalone)
+        else:
+            check_level(level, algo=backend_name)
 
-        except ValueError as e:
-            return CompressionPlan(
-                src=src_path,
-                dest=dest_path,
-                options=options,
-                input_size=input_size,
-                backend_name=backend_name,
-                estimated_seconds=None,
-                can_compress=False,
-                reason_if_unavailable=str(e),
-            )
+    except ValueError as e:
+        return CompressionPlan(
+            src=src_path,
+            dest=dest_path,
+            options=options,
+            input_size=input_size,
+            backend_name=backend_name,
+            estimated_seconds=None,
+            can_compress=False,
+            reason_if_unavailable=str(e),
+        )
 
     mb_s: int | float = get_estimated_speeds(algo=backend_name, operation="compress")
     estimated_seconds: int | float = (input_size / MB) / mb_s if input_size > 0 else 0.0
@@ -368,6 +378,10 @@ def plan_decompression(
     try:
         detected: str = detect_format(src_path)
 
+    # The caller names the file with the error
+    except OSError as e:
+        return plan(None, False, e.strerror or str(e))
+
     except Exception as e:  # noqa: BLE001 - surface as an unavailable plan
         return plan(None, False, f"Cannot read file: {e}")
 
@@ -383,11 +397,8 @@ def plan_decompression(
             if name not in ("", ".."):
                 dest_path = src_path.parent / name
 
-        mtime: int | None = None
-        if restore_name and detected == "gzip":
-            with src_path.open("rb") as f:
-                # MTIME, bytes 4-7; zero means none was stored
-                mtime = int.from_bytes(f.read(8)[4:], "little") or None
+        restores_mtime: bool = restore_name and detected == "gzip"
+        mtime: int | None = gzip_stored_mtime(src_path) if restores_mtime else None
 
         return replace(plan(detected, True), mtime=mtime)
 
@@ -414,6 +425,32 @@ def plan_decompression(
         )
 
     return plan(None, True)
+
+
+def plan_verification(src: str | Path, threads: int = 0) -> VerificationPlan:
+    """Plan an integrity check of an archive or compressed file.
+
+    Args:
+        src: Source file path.
+        threads: Worker threads for xz/lzma, or 0 for one per core.
+
+    Returns:
+        VerificationPlan: The resulting plan.
+    """
+    src_path = Path(src)
+
+    try:
+        recognised: bool = detect_format(src_path) != "unknown"
+
+    # The caller names the file with the error
+    except OSError as e:
+        return VerificationPlan(src_path, False, e.strerror or str(e), threads)
+
+    if not recognised:
+        reason = "not a recognised archive or compressed file"
+        return VerificationPlan(src_path, False, reason, threads)
+
+    return VerificationPlan(src_path, threads=threads)
 
 
 class CompressionJob(ThreadedJob[CompressionPlan]):
@@ -669,3 +706,70 @@ class DecompressionJob(ThreadedJob[DecompressionPlan]):
                 error=e,
                 plan=self.plan,
             )
+
+
+class VerificationJob(ThreadedJob[VerificationPlan]):
+    """Integrity check high-level wrapper."""
+
+    def __init__(self, plan: VerificationPlan) -> None:
+        """Initialise the verification job.
+
+        Args:
+            plan: The verification plan to execute.
+        """
+        self.plan: VerificationPlan = plan
+
+    @classmethod
+    def from_file(cls, src: str | Path, threads: int = 0) -> Self:
+        """Create a VerificationJob from a file path.
+
+        Args:
+            src: Source file path.
+            threads: Worker threads for xz/lzma, or 0 for one per core.
+
+        Returns:
+            VerificationJob: The created job.
+        """
+        return cls(plan=plan_verification(src, threads))
+
+    def run(
+        self,
+        progress: ProgressCallback | None = None,
+        cancel: CancelToken | None = None,
+    ) -> JobResult:
+        """Decode the whole file, writing nothing.
+
+        Args:
+            progress: Optional progress callback, invoked with
+                `(fraction, done_bytes, total_bytes)`; counts the bytes a plain
+                archive's entries hold, or else the compressed bytes consumed.
+            cancel: Optional `CancelToken`.
+
+        Returns:
+            JobResult: The result, whose `error` says what is damaged.
+        """
+        if not self.plan.can_run:
+            return JobResult(
+                ok=False,
+                error=RuntimeError(self.plan.reason_if_unavailable or "Cannot test"),
+                plan=self.plan,
+            )
+
+        try:
+            verify_file(
+                self.plan.src,
+                threads=self.plan.threads,
+                progress=to_core_progress(progress, 0),
+                cancel=cancel,
+            )
+
+            return JobResult(ok=True, error=None, plan=self.plan)
+
+        # Cancellation is a deliberate stop, not a failure; see
+        # `CompressionJob.run`.
+        except Cancelled:
+            return JobResult(ok=False, error=None, plan=self.plan, cancelled=True)
+
+        # `run` reports failure through JobResult rather than raising
+        except Exception as e:  # noqa: BLE001
+            return JobResult(ok=False, error=e, plan=self.plan)

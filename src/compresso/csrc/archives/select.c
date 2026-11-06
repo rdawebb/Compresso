@@ -11,14 +11,23 @@ static int selected_name_cmp(const void *a, const void *b) {
   return c ? c : (x->len > y->len) - (x->len < y->len);
 }
 
-int selection_init(Selection *sel, const char **files, size_t num_files) {
-  *sel = (Selection){0};
+int selection_init(Selection *sel, const char **files, size_t num_files,
+                   const PathFilter *filter) {
+  *sel = (Selection){.filter = *filter};
+  if (filter->num_include > 0) {
+    sel->include_found = safe_malloc(filter->num_include);
+    if (!sel->include_found)
+      return -1;
+    memset(sel->include_found, 0, filter->num_include);
+  }
   if (num_files == 0)
     return 0;
 
   sel->items = safe_malloc(num_files * sizeof(*sel->items));
-  if (!sel->items)
+  if (!sel->items) {
+    free(sel->include_found);
     return -1;
+  }
 
   for (size_t i = 0; i < num_files; i++) {
     size_t len = strlen(files[i]);
@@ -39,11 +48,9 @@ int selection_init(Selection *sel, const char **files, size_t num_files) {
 }
 
 int entry_is_selected(const ArchiveEntry *entry, Selection *sel) {
-  if (sel->count == 0)
-    return 1;
-
-  int selected = 0;
-  for (const char *p = entry->path;; p++) {
+  const PathFilter *filter = &sel->filter;
+  int selected = sel->count == 0 && filter->num_include == 0;
+  for (const char *p = entry->path; sel->count > 0; p++) {
     if ((*p == '/' || *p == '\0') && p > entry->path) {
       SelectedName key = {entry->path, (size_t)(p - entry->path), 0};
       SelectedName *hit = bsearch(&key, sel->items, sel->count,
@@ -54,8 +61,99 @@ int entry_is_selected(const ArchiveEntry *entry, Selection *sel) {
       }
     }
     if (*p == '\0')
-      return selected;
+      break;
   }
+
+  for (size_t i = 0; i < filter->num_include; i++)
+    if ((!selected || !sel->include_found[i]) &&
+        path_matches(entry->path, filter->include[i])) {
+      sel->include_found[i] = 1;
+      selected = 1;
+    }
+
+  // Excludes come last, so dropped entries still counts as found and aren't
+  // reported as missing from the archive
+  return selected &&
+         !path_matches_any(entry->path, filter->exclude, filter->num_exclude);
+}
+
+// The pattern after its first token if that token matches `c`, else NULL
+static const char *match_token(const char *pat, unsigned char c) {
+  if (*pat == '?')
+    return pat + 1;
+  if (*pat == '\\' && pat[1])
+    return (unsigned char)pat[1] == c ? pat + 2 : NULL;
+
+  if (*pat == '[') {
+    const char *p = pat + 1;
+    int negate = *p == '!' || *p == '^';
+    if (negate)
+      p++;
+    // A `]` straight after the opening is literal
+    int hit = 0;
+    do {
+      if (*p == '\0')
+        return c == '[' ? pat + 1 : NULL; // Unterminated, so `[` is literal
+      unsigned char lo = (unsigned char)*p, hi = lo;
+      if (p[1] == '-' && p[2] && p[2] != ']') {
+        hi = (unsigned char)p[2];
+        p += 2;
+      }
+      hit |= lo <= c && c <= hi;
+      p++;
+    } while (*p != ']');
+    return hit != negate ? p + 1 : NULL;
+  }
+
+  return (unsigned char)*pat == c ? pat + 1 : NULL;
+}
+
+// Whether `pat` matches `s` up to its end or a '/'; backtracks only to the
+// last `*`, so the time stays linear: O(len * strlen(pat))
+static int glob_match(const char *pat, const char *s, size_t len) {
+  const char *star = NULL;
+  size_t retry = 0, i = 0;
+  while (i < len) {
+    if (*pat == '\0' && i > 0 && s[i] == '/')
+      return 1;
+    if (*pat == '*') {
+      star = ++pat;
+      retry = i;
+      continue;
+    }
+    const char *next = match_token(pat, (unsigned char)s[i]);
+    if (next) {
+      pat = next;
+      i++;
+    } else if (star) {
+      pat = star;
+      i = ++retry;
+    } else {
+      return 0;
+    }
+  }
+  while (*pat == '*')
+    pat++;
+  return *pat == '\0';
+}
+
+int path_matches(const char *path, const char *pat) {
+  size_t len = strlen(path);
+  while (len > 0 && path[len - 1] == '/')
+    len--;
+
+  for (size_t start = 0; start < len; start++)
+    if ((start == 0 || path[start - 1] == '/') &&
+        glob_match(pat, path + start, len - start))
+      return 1;
+  return 0;
+}
+
+int path_matches_any(const char *path, const char **pats, size_t count) {
+  for (size_t i = 0; i < count; i++)
+    if (path_matches(path, pats[i]))
+      return 1;
+  return 0;
 }
 
 static PyObject *join_str(const char *sep, PyObject *items) {
@@ -79,7 +177,7 @@ static int append_part(PyObject *parts, const char *label, PyObject *items) {
 }
 
 int report_incomplete(const Selection *sel, PyObject *skipped_links,
-                      CoreContext *ctx) {
+                      PyObject *skipped_nodes, CoreContext *ctx) {
   PyObject *names = PyList_New(0);
   PyObject *parts = PyList_New(0);
   int ret = -1;
@@ -95,8 +193,18 @@ int report_incomplete(const Selection *sel, PyObject *skipped_links,
     if (rc != 0)
       goto done;
   }
+  for (size_t i = 0; i < sel->filter.num_include; i++) {
+    if (sel->include_found[i])
+      continue;
+    PyObject *pattern = PyUnicode_FromString(sel->filter.include[i]);
+    int rc = pattern ? PyList_Append(names, pattern) : -1;
+    Py_XDECREF(pattern);
+    if (rc != 0)
+      goto done;
+  }
   if (append_part(parts, "Not found in archive", names) != 0 ||
-      append_part(parts, "Hardlink target missing", skipped_links) != 0)
+      append_part(parts, "Hardlink target missing", skipped_links) != 0 ||
+      append_part(parts, "Skipped, the rest was extracted", skipped_nodes) != 0)
     goto done;
 
   if (PyList_GET_SIZE(parts) == 0) {

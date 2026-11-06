@@ -26,7 +26,8 @@ from pathlib import Path
 from tabulate import tabulate
 
 from compresso import _core
-from compresso.introspect.benchmark import BenchmarkResult, print_results
+from compresso.cli._render.benchmark import benchmark_results
+from compresso.introspect.benchmark import BenchmarkResult
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORK_DIR = REPO_ROOT / "build" / "bench"
@@ -326,7 +327,7 @@ def main() -> None:
     args = parser.parse_args()
 
     results = run(args.formats.split(","), args.size_mb, args.repeats, args.cool)
-    print_results(results)
+    benchmark_results(results)
 
     if args.compare:
         compare(results, args.compare)

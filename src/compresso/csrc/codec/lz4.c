@@ -6,7 +6,8 @@
 #include <string.h>
 
 // At the HC levels the output depends on how the input is split across
-// LZ4F_compressUpdate calls, so it is fed a fixed amount whatever CODEC_CHUNK is
+// LZ4F_compressUpdate calls, so it is fed a fixed amount whatever CODEC_CHUNK
+// is
 #define LZ4_FEED 65536
 
 // Room for every block one LZ4F_compressUpdate call can complete: with the
@@ -43,6 +44,12 @@ static int lz4_begin(void *state, const CodecParams *params, int decompress,
   // The standalone container embeds an xxHash content checksum
   if (params->checksum) {
     s->prefs.frameInfo.contentChecksumFlag = LZ4F_contentChecksumEnabled;
+  }
+
+  // Lets `info` read the size back; liblz4 omits a zero, and fails at the end
+  // if the input isn't this long
+  if (params->exact_size) {
+    s->prefs.frameInfo.contentSize = params->orig_size;
   }
 
   return 0;

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import os
+import stat
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -11,13 +13,17 @@ from typing import Self
 from .._core import (
     Cancelled,
     CancelToken,
+    SourceRemovalError,
     check_level,
     create_archive,
     extract_archive,
     format_is_archive,
+    format_stores_hardlinks,
     list_archive_contents,
+    path_matches,
 )
 from .._levels import to_core_level
+from ._formats import DEFAULT_ARCHIVE_FORMAT, infer_format
 from ._job import JobResult, ProgressCallback, ThreadedJob, to_core_progress
 
 
@@ -59,22 +65,22 @@ class OverwriteMode(StrEnum):
     """What archiving or extraction does when a destination already exists.
 
     Attributes:
-        ERROR: Fail the operation.
-        SKIP: Leave the existing file untouched.
-        OVERWRITE: Replace the existing file.
         RENAME: Write to a platform-native numbered sibling instead (e.g.
             "name 2.ext" on macOS, "name (2).ext" elsewhere), leaving the
             existing file untouched.
+        OVERWRITE: Replace the existing file.
+        SKIP: Leave the existing file untouched.
+        ERROR: Fail the operation.
     """
 
-    ERROR = "error"
-    SKIP = "skip"
-    OVERWRITE = "overwrite"
     RENAME = "rename"
+    OVERWRITE = "overwrite"
+    SKIP = "skip"
+    ERROR = "error"
 
 
-# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h. Archive
-# creation applies the same codes to its single destination file.
+# The C policy uses ints; see `ExtractionPolicy` in csrc/archives.h; archive
+# creation applies the same codes to its single destination file
 _OVERWRITE_CODES: dict[OverwriteMode, int] = {
     OverwriteMode.ERROR: 0,
     OverwriteMode.SKIP: 1,
@@ -88,13 +94,13 @@ class SymlinkMode(StrEnum):
 
     Attributes:
         DENY: Refuse the archive.
-        ALLOW: Create the link, if its target stays inside the output directory.
         FILE: Write a regular file holding the link's target.
+        ALLOW: Create the link, if its target stays inside the output directory.
     """
 
     DENY = "deny"
-    ALLOW = "allow"
     FILE = "file"
+    ALLOW = "allow"
 
 
 _SYMLINK_CODES: dict[SymlinkMode, int] = {
@@ -109,18 +115,33 @@ class ArchiveOptions:
     """Represents the options for an archive operation.
 
     Attributes:
-        format: The archive/compression format to write.
+        format: The archive/compression format to write, or None to take it
+            from the output's suffix, falling back to zip.
         compression_level: The compression level to use, or None for the
             format's default.
         overwrite: What to do when the destination archive already exists.
         threads: Worker threads for tar.zst and tar.xz, or 0 for one per core;
             the output is the same for any count.
+        include: Globs on entry names; with any, only what matches is stored,
+            plus the directories holding it.
+        exclude: Globs on entry names that aren't stored or descended into,
+            overriding `include`.
+        remove_sources: Whether to delete what was stored once the archive is
+            written; anything else stays, including parent directories; running
+            with `OverwriteMode.SKIP` fails, as a skipped archive holds nothing.
+        dereference: Whether to store what symlinks lead to; one that's
+            dangling, or that leads to a directory above it, stays a link;
+            `remove_sources` then deletes the links, not what they lead to.
     """
 
-    format: str = "tar.zst"  # Default to tar with zstd
+    format: str | None = None
     compression_level: int | None = None
     overwrite: OverwriteMode = OverwriteMode.RENAME
     threads: int = 0
+    include: Sequence[str] = ()
+    exclude: Sequence[str] = ()
+    remove_sources: bool = False
+    dereference: bool = False
 
 
 @dataclass(frozen=True)
@@ -166,6 +187,9 @@ class ExtractOptions:
         symlinks: What to do with a symlink entry; by default a zip's are
             written as files and any other archive's are refused.
         threads: Worker threads for tar.xz, or 0 for one per core.
+        include: Globs selecting entries as well as any named by `files`; one
+            that matches nothing fails the run as a missing name does.
+        exclude: Globs dropping entries, overriding `files` and `include`.
     """
 
     overwrite: OverwriteMode = OverwriteMode.RENAME
@@ -177,6 +201,8 @@ class ExtractOptions:
     overwrite_dir_metadata: bool = False
     symlinks: SymlinkMode | None = None
     threads: int = 0
+    include: Sequence[str] = ()
+    exclude: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -188,7 +214,8 @@ class ExtractPlan:
         output_dir: Directory to extract into.
         files: Optional subset of entry paths to extract (None = all).
         options: Extraction policy to apply.
-        entries: Entries discovered in the archive.
+        entries: The archive's entries that `files` and the options' globs
+            select.
         can_run: Whether the extract operation can proceed.
         reason_if_unavailable: Reason the operation cannot proceed, if any.
     """
@@ -224,6 +251,9 @@ def plan_archive(
     source_paths: list[Path] = [Path(s) for s in sources]
     output_path = Path(output)
 
+    fmt: str = options.format or infer_format(output_path) or DEFAULT_ARCHIVE_FORMAT
+    options = replace(options, format=fmt)
+
     try:
         # Plain strings still work at runtime
         options = replace(options, overwrite=OverwriteMode(options.overwrite))
@@ -253,7 +283,7 @@ def plan_archive(
             reason_if_unavailable="No source paths provided",
         )
 
-    missing: list[Path] = [p for p in source_paths if not p.exists()]
+    missing: list[Path] = [p for p in source_paths if not os.path.lexists(p)]
     if missing:
         return ArchivePlan(
             sources=source_paths,
@@ -265,7 +295,7 @@ def plan_archive(
             reason_if_unavailable=f"Source path does not exist: {missing[0]}",
         )
 
-    if not format_is_archive(options.format):
+    if not format_is_archive(fmt):
         return ArchivePlan(
             sources=source_paths,
             output=output_path,
@@ -273,13 +303,13 @@ def plan_archive(
             total_input_size=0,
             entry_count=len(source_paths),
             can_run=False,
-            reason_if_unavailable=f"Format does not support archives: {options.format}",
+            reason_if_unavailable=f"Format does not support archives: {fmt}",
         )
 
     if options.compression_level is not None:
         try:
             # The level belongs to the codec stage, or to the container itself
-            check_level(options.compression_level, format=options.format)
+            check_level(options.compression_level, format=fmt)
 
         except ValueError as e:
             return ArchivePlan(
@@ -292,9 +322,7 @@ def plan_archive(
                 reason_if_unavailable=str(e),
             )
 
-    total_input_size: int = sum(
-        f.stat().st_size for f in _iter_files(source_paths) if f.is_file()
-    )
+    total_input_size: int = _stored_size(source_paths, options)
 
     return ArchivePlan(
         sources=source_paths,
@@ -307,21 +335,118 @@ def plan_archive(
     )
 
 
-def _iter_files(paths: list[Path]):
-    """Yield every file under the given paths, recursing into directories.
+def _stored_size(sources: list[Path], options: ArchiveOptions) -> int:
+    """Return the bytes the C walk would store from the sources.
 
     Args:
-        paths: List of paths to iterate over.
+        sources: The source paths; hardlinks can span them.
+        options: Archive options, with the format set.
+
+    Returns:
+        The total size of the regular files kept, a hardlinked file counting
+        once if the format stores its later names as links.
+    """
+    links_once = format_stores_hardlinks(options.format or DEFAULT_ARCHIVE_FORMAT)
+    seen: set[tuple[int, int]] = set()
+    total = 0
+
+    for info in (i for s in sources for i in _stored_files(s, options)):
+        if links_once and info.st_nlink > 1 and info.st_ino:
+            identity = (info.st_dev, info.st_ino)
+            if identity in seen:
+                continue
+            seen.add(identity)
+
+        total += info.st_size
+
+    return total
+
+
+def _stored_files(source: Path, options: ArchiveOptions) -> Iterator[os.stat_result]:
+    """Yield the stat of each regular file the C walk keeps from a source.
+
+    Only `exclude` prunes: a directory no include matches can still hold files
+    that one does.
+
+    Args:
+        source: The source path; a symlink stays a link, not its target,
+            unless `options.dereference` is set.
+        options: Archive options.
 
     Yields:
-        Each file under the given paths.
+        Each kept regular file's stat.
     """
-    for p in paths:
-        if p.is_dir():
-            yield from (f for f in p.rglob("*"))
+    follow = options.dereference
+    name = source.relative_to(source.parent).as_posix()
 
-        else:
-            yield p
+    if not source.is_dir() or (source.is_symlink() and not follow):
+        candidates = [(source, name)]
+
+    elif path_matches(name, options.exclude):
+        return
+
+    else:
+        candidates = _walk_files(source, options)
+
+    for path, entry in candidates:
+        if path_matches(entry, options.exclude):
+            continue
+
+        if options.include and not path_matches(entry, options.include):
+            continue
+
+        # A dangling link stays a link, which holds no bytes
+        if follow and not os.path.exists(path):
+            continue
+
+        info = os.stat(path, follow_symlinks=follow)
+        if stat.S_ISREG(info.st_mode):
+            yield info
+
+
+def _leads_above(path: Path, source: Path) -> bool:
+    """Return whether a symlink leads to a directory between it and a source.
+
+    Args:
+        path: The path found below `source`.
+        source: The directory being walked.
+
+    Returns:
+        True if `path` is a link the C walk wouldn't follow.
+    """
+    if not path.is_symlink():
+        return False
+
+    above = path.parent
+    while not os.path.samefile(path, above):
+        if above == source:
+            return False
+        above = above.parent
+
+    return True
+
+
+def _walk_files(source: Path, options: ArchiveOptions) -> Iterator[tuple[str, str]]:
+    """Yield each non-directory under a source, pruning excluded directories.
+
+    Args:
+        source: The directory to walk.
+        options: Archive options.
+
+    Yields:
+        Each path on disk with its entry name.
+    """
+    follow = options.dereference
+    for top, dirs, files in os.walk(source, followlinks=follow):
+        rel = Path(top).relative_to(source.parent).as_posix()
+        dirs[:] = [
+            d
+            for d in dirs
+            if not path_matches(f"{rel}/{d}", options.exclude)
+            and not (follow and _leads_above(Path(top, d), source))
+        ]
+        for f in files:
+            yield os.path.join(top, f), f"{rel}/{f}"
 
 
 def plan_extraction(
@@ -411,6 +536,22 @@ def plan_extraction(
             reason_if_unavailable=f"Cannot read archive: {e}",
         )
 
+    # As the extractor matches: a name selects that entry and anything below it,
+    # an include adds to those, and an exclude overrides both
+    names: set[str] = {name.rstrip("/") for name in files or ()} - {""}
+
+    def selected(path: str) -> bool:
+        if path_matches(path, opts.exclude):
+            return False
+
+        return (
+            not (files or opts.include)
+            or any(path == n or path.startswith(f"{n}/") for n in names)
+            or path_matches(path, opts.include)
+        )
+
+    entries = [e for e in entries if selected(e.path)]
+
     return ExtractPlan(
         archive=archive_path,
         output_dir=out_dir,
@@ -481,6 +622,9 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
                 plan=self.plan,
             )
 
+        # plan_archive resolves an unset format before a plan can run
+        assert self.plan.options.format is not None
+
         total: int = self.plan.total_input_size
         try:
             actual_path = create_archive(
@@ -490,6 +634,10 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
                 to_core_level(self.plan.options.compression_level),
                 overwrite=_OVERWRITE_CODES[self.plan.options.overwrite],
                 threads=self.plan.options.threads,
+                include=self.plan.options.include,
+                exclude=self.plan.options.exclude,
+                remove_sources=self.plan.options.remove_sources,
+                dereference=self.plan.options.dereference,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )
@@ -499,6 +647,10 @@ class ArchiveJob(ThreadedJob[ArchivePlan]):
             # after a successful run
             self.plan = replace(self.plan, output=Path(actual_path))
             return JobResult(ok=True, error=None, plan=self.plan)
+
+        except SourceRemovalError as e:
+            self.plan = replace(self.plan, output=Path(e.output))
+            return JobResult(ok=False, error=e, plan=self.plan)
 
         # Cancellation is a deliberate stop, not a failure; see
         # `CompressionJob.run`.
@@ -542,14 +694,6 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
             ExtractJob instance.
         """
         return cls(plan=plan_extraction(archive, output_dir, files, options))
-
-    def list_contents(self) -> list[ArchiveEntry]:
-        """List archive entry paths without extracting.
-
-        Returns:
-            List of ArchiveEntry instances.
-        """
-        return list(self.plan.entries)
 
     def run(
         self,
@@ -595,6 +739,8 @@ class ExtractJob(ThreadedJob[ExtractPlan]):
                     -1 if options.symlinks is None else _SYMLINK_CODES[options.symlinks]
                 ),
                 threads=options.threads,
+                include=options.include,
+                exclude=options.exclude,
                 progress=to_core_progress(progress, total),
                 cancel=cancel,
             )

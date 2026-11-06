@@ -8,8 +8,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from tabulate import tabulate
-
 from .._core import compress_file, decompress_file
 from .._levels import to_core_level
 from .capabilities import get_by_name
@@ -223,17 +221,7 @@ def benchmark_file(
                             level=level,
                         )
                         comp_times.append(time.perf_counter() - start_time)
-
-                        if compressed_size is None:
-                            compressed_size: int = comp_path.stat().st_size
-
-                        else:
-                            sz: int = comp_path.stat().st_size
-                            if sz != compressed_size:
-                                print(
-                                    f"Warning: Compressed size changed between runs: {compressed_size} vs {sz}"
-                                )
-                                compressed_size: int = sz
+                        compressed_size = comp_path.stat().st_size
 
                         # Decompression
                         start_time: float = time.perf_counter()
@@ -242,15 +230,6 @@ def benchmark_file(
                             dest_path=str(object=decomp_path),
                         )
                         decomp_times.append(time.perf_counter() - start_time)
-
-                        # Verify
-                        if (
-                            not decomp_path.is_file()
-                            or decomp_path.stat().st_size != input_size
-                        ):
-                            print(
-                                f"Warning: Decompressed file size mismatch for {decomp_path}"
-                            )
 
                     finally:
                         _safe_unlink(path=comp_path)
@@ -275,41 +254,3 @@ def benchmark_file(
         update_from_benchmarks(results)
 
     return results
-
-
-def print_results(results: list[BenchmarkResult]) -> None:
-    """Print benchmark results in a tabular format
-
-    Args:
-        results: List of BenchmarkResult objects to print
-    """
-    if not results:
-        print("No results to display.")
-        return
-
-    headers: list[str] = [
-        "Algo",
-        "Strategy",
-        "Level",
-        "Comp Time (s)",
-        "Decomp Time (s)",
-        "MB/s (Comp)",
-        "MB/s (Decomp)",
-        "Ratio (comp/orig)",
-    ]
-
-    table_data: list[list[str | int]] = []
-    for r in results:
-        row: list[str | int] = [
-            r.algo,
-            r.strategy,
-            r.level if r.level is not None else "auto",
-            f"{r.compress_time:.4f}",
-            f"{r.decompress_time:.4f}",
-            f"{r.comp_mb_s:.2f}",
-            f"{r.decomp_mb_s:.2f}",
-            f"{r.ratio:.3f}",
-        ]
-        table_data.append(row)
-
-    print(tabulate(tabular_data=table_data, headers=headers, tablefmt="grid"))

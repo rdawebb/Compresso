@@ -23,4 +23,10 @@ int standalone_decompress(const FormatDesc *fmt, const char *input_path,
 // The original filename a gzip header stores, or NULL
 char *gzip_original_name(const char *compressed_path);
 
+// The uncompressed size an xz index, the zstd or lz4 frame headers, or the
+// snappy block headers of `f` state, without decoding; -1 if they don't state
+// one, a zstd or lz4 frame written from a stream, or a file those structures
+// don't fully describe
+int standalone_content_size(FILE *f, Format format, uint64_t *size);
+
 #endif // STANDALONE_H
